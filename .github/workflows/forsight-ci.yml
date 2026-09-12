@@ -128,13 +128,10 @@ jobs:
           registry-url: https://npm.pkg.github.com
           scope: "@marcfs31"
       # forsight/web depends on the published @marcfs31/forsight from GitHub
-      # Packages. The committed lockfile still records file:../.. (no local
-      # packages:read token to regenerate it), so delete it and resolve the
-      # caret pin from the registry. GITHUB_TOKEN + packages:read is enough
-      # for same-repo GitHub Packages.
-      - run: |
-          rm -f package-lock.json
-          npm install --no-fund --no-audit
+      # Packages; the lockfile resolves it from the registry (no file:../..
+      # link), so a plain npm ci reproduces the tree exactly. GITHUB_TOKEN +
+      # packages:read is enough for same-repo GitHub Packages.
+      - run: npm ci --no-fund --no-audit
         working-directory: forsight/web
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
