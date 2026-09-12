@@ -9,6 +9,18 @@ version: 2
 # is .github/workflows/dependabot-automerge.yml; anything that needs a real
 # migration to go green is picked up by the triage routine described in
 # CLAUDE.md.
+registries:
+  # @marcfs31/forsight (the design system this repo also publishes) lives on
+  # GitHub Packages, a private registry. Without credentials here Dependabot
+  # can't resolve it at all and silently proposes nothing — forsight/web's
+  # pin drifted a full major behind (^3.0.0 vs the published 4.0.1) before
+  # anyone noticed. token: needs its own Dependabot secret (Settings ->
+  # Secrets and variables -> Dependabot); GITHUB_TOKEN isn't usable here.
+  # Scope the PAT to read:packages only, nothing broader.
+  npm-packages-github:
+    type: npm-registry
+    url: https://npm.pkg.github.com
+    token: "${{secrets.DEPENDABOT_NPM_PACKAGES_TOKEN}}"
 updates:
   - package-ecosystem: "npm"
     directory: "/"
@@ -76,6 +88,8 @@ updates:
   # fails by design (see forsight-ci.yml).
   - package-ecosystem: "npm"
     directory: "/forsight/web"
+    registries:
+      - npm-packages-github
     schedule:
       interval: "daily"
     open-pull-requests-limit: 5
