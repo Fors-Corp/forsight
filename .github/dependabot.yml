@@ -81,6 +81,17 @@ updates:
       # to v2 (v2 requires CLI v3; see release.yml).
       - dependency-name: "@changesets/cli"
         update-types: ["version-update:semver-major"]
+      # A third peer blocker: @storybook/addon-vitest (10.6.0 and
+      # 11.0.0-alpha.0) peers `vitest` / `@vitest/browser` at `^3.0.0 ||
+      # ^4.0.0`, so the Vitest 5 group bump fails `npm ci` with ERESOLVE.
+      # Closing that group PR doesn't ignore it, and it was reopened four
+      # times (#45, #47, #68, #78). Vitest 4 minors and patches still flow.
+      # Only the root is affected; forsight/web has no Storybook. Remove
+      # when `npm view @storybook/addon-vitest peerDependencies` accepts ^5.
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitest/*"
+        update-types: ["version-update:semver-major"]
 
   # The agent's dashboard (private, embedded into the Go binary). A bump here
   # changes forsight/internal/api/webdist/ — `make build-web` must be re-run
