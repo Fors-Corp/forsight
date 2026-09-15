@@ -23,6 +23,29 @@ API key. Optional Grok narrative uses SpaceXAI (`XAI_API_KEY`).
 | `GET /api/v1/forseer/query?q=` | no | Phrase → FilterBar facets |
 | `GET /api/v1/forseer/models` | no | What each trained model reads, whether it is ready, how it scores |
 | `GET /api/v1/forseer/summary` | `XAI_API_KEY` | Grok paragraph; otherwise `{"enabled":false}` |
+| `GET /api/v1/forseer/classify?message=` | no | Classify one log line: the in-binary severity model if it's ready, else the substring fallback |
+| `GET /api/v1/mlaas/status` | no | Snapshot of the mlaas integration: model state, forecasts, recent predictions, jobs |
+| `POST /api/v1/mlaas/models/{name}/train` | no | Queue a training job for one of the four models `forsight` manages in mlaas |
+| `POST /api/v1/mlaas/models/{name}/tune` | no | Queue a tuning job for the same |
+| `POST /api/v1/mlaas/models/{name}/predict` | no | Proxy up to 10 rows to a managed mlaas model and return its predictions |
+
+The `mlaas` routes proxy a separate service (see
+[`forsight/README.md`](../forsight/README.md#mlaas-integration)) and never
+expose its API key to the caller. `status` always answers 200, even when
+mlaas isn't configured (`configured:false` and empty slices, so the Models
+page never has to special-case a missing route); `train`, `tune`, and
+`predict` are actions, so they 503 instead when there's nothing to act on.
+
+## Two kinds of model
+
+The dashboard's Models page shows both side by side on purpose. The models
+below train inside this module: online, on this deployment's own stream,
+gated on a named fallback, carrying no weights. The models `forsight` hands
+to mlaas train in a separate service instead, with a real held-out score and
+their own retrain loop. The severity classifier ships both ways — same job,
+same input, scored the same way — so the difference between "trained here"
+and "trained by mlaas" is something an operator can read off the page, not
+something they have to take on faith.
 
 ## Detectors that ship, and the component they drive
 

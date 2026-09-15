@@ -1,0 +1,10 @@
+{
+  "exclude": [
+    "forsight/internal/api/webdist/",
+    "storybook-static/",
+    "coverage/",
+    "dist/",
+    "graft/"
+  ],
+  "deprioritize": ["fixtures/", "scripts/"]
+}

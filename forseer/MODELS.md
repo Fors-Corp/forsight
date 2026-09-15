@@ -201,6 +201,55 @@ one-step skill — information, not a gate.
 **Component.** **ErrorBudget**, whose caption now carries the projection, so a
 dashboard that knows nothing about the new field still shows it.
 
+### Models page
+
+The cards were already served over the API; what shipped is a page for them.
+`#/models` in the dashboard puts every model on one screen: a **Table** of
+what trains inside this module, with **Progress** showing each measured
+accuracy against its named fallback where there is one, and the model's own
+detail line where there isn't yet a label to score against; alongside it,
+what `forsight` hands to a separate mlaas service — state, champion version,
+held-out and live score, drift, and the buttons to train or tune it — plus
+the forecast charts and the most recent severity predictions next to what
+this module's own classifier said about the same line. "The agent learned
+something" used to be a claim; on this page it's a number, next to the
+margin it is a margin of. See [`README.md`](README.md#two-kinds-of-model) for
+why the two sources sit side by side rather than merged into one table, and
+[`forsight/README.md`](../forsight/README.md#mlaas-integration) for the
+mlaas half.
+
+**Component.** **Table**, **Card**, and **Progress**, all already in the
+design system, plus **LineChart** for the mlaas forecasts.
+
+## Served by mlaas
+
+Four more models answer to the same contract as the ones above, but they
+don't live here: `forsight` trains and serves them through a separate
+service, mlaas, and only proxies the result onto the Models page
+(`forsight/internal/mlaas`; see
+[`forsight/README.md`](../forsight/README.md#mlaas-integration) for the
+flags and what happens when it's unreachable).
+
+| Model | Job | Reads | Fallback | Score |
+| --- | --- | --- | --- | --- |
+| `cpu-forecast` | Say where host CPU is heading over the next hour. | `host.cpu.percent`, one-minute means | none — there is no existing forecast for it to beat | mlaas's held-out RMSE, plus RMSE over the live window of predictions scored since |
+| `memory-forecast` | Say where host memory is heading over the next hour. | `host.memory.percent`, one-minute means | none | same |
+| `disk-forecast` | Say where disk usage is heading, and so when it fills. | `host.disk.percent`, one-minute means | none | same |
+| `log-severity` | Give a log line the level this deployment would have given it. | log lines whose source declared a level (never an inferred one) | this module's own log-severity model, above | mlaas's held-out accuracy, plus accuracy over the live window of predictions scored since |
+
+The contract at the top of this file still holds for all four: a declared
+input list, a named fallback or none, and a measured score rather than a
+claimed one. What differs is where they run — a real held-out split, their
+own retrain schedule, a training corpus that keeps growing — none of which
+this module could do without breaking the rules it was built around.
+
+That boundary is deliberate and it doesn't move: no model weights and no API
+keys land in this repo, `forseer` stays a stdlib-only Go module, and
+`forseer` never imports or calls mlaas. The integration is entirely
+`forsight`'s own package; this module has no idea mlaas exists. `log-severity`
+is the one row where the two meet — same job, same input, scored against
+each other in the open on the Models page, not merged into one answer.
+
 ## Next
 
 Ordered by what each one is worth against what it costs. Every row keeps the
@@ -246,16 +295,6 @@ shape changed discards an old snapshot rather than misreading it; and the
 data directory belongs to the operator, never to this repo.
 
 *Applies to every model.*
-
-### 4. A models view in the dashboard
-
-The cards are already served. A view that shows what each model does, whether
-it is ready, and what it is scoring — on **Table**, with **ErrorBudget**'s
-meter for the accuracy — turns "the agent learned something" from a claim
-into something an operator can audit, with the margin against the fallback
-the number that actually justifies the model.
-
-*Component: **Table** + **Card**, both already in the design system.*
 
 ## Rules
 

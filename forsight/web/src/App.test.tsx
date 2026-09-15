@@ -258,3 +258,101 @@ describe("Ask Forseer query box", () => {
     expect(screen.queryByRole("button", { name: /^Remove /i })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Hash routing (route.ts + the App shell). The dashboard is served from an
+ * embedded filesystem at whatever path the agent mounts it on, so the page
+ * is chosen from `location.hash` and nothing else — a stale or unknown hash
+ * must land on the overview, never on a blank main.
+ */
+describe("App routing", () => {
+  const endpointsWithModels: FetchResponses = {
+    ...emptyEndpoints,
+    "/api/v1/forseer/models": [],
+    "/api/v1/mlaas/status": {
+      configured: false,
+      reachable: false,
+      models: [],
+      forecasts: [],
+      predictions: [],
+      jobs: [],
+    },
+  };
+
+  afterEach(() => {
+    window.location.hash = "";
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the overview at #/ with the Overview link current", async () => {
+    window.location.hash = "#/";
+    mockFetch(endpointsWithModels);
+    render(<App />);
+
+    expect(await screen.findByText("Host CPU over time")).toBeInTheDocument();
+    expect(screen.queryByText("mlaas is not configured")).not.toBeInTheDocument();
+    const overviewLinks = screen.getAllByRole("link", { name: "Overview" });
+    expect(overviewLinks.length).toBeGreaterThan(0);
+    for (const link of overviewLinks) expect(link).toHaveAttribute("aria-current", "page");
+    for (const link of screen.getAllByRole("link", { name: "Models" })) {
+      expect(link).not.toHaveAttribute("aria-current", "page");
+    }
+  });
+
+  it("renders the Models page at #/models", async () => {
+    window.location.hash = "#/models";
+    mockFetch(endpointsWithModels);
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeInTheDocument();
+    expect(await screen.findByText("mlaas is not configured")).toBeInTheDocument();
+    expect(screen.queryByText("Host CPU over time")).not.toBeInTheDocument();
+    for (const link of screen.getAllByRole("link", { name: "Models" })) {
+      expect(link).toHaveAttribute("aria-current", "page");
+    }
+  });
+
+  it("switches pages when the hash changes after mount", async () => {
+    window.location.hash = "";
+    mockFetch(endpointsWithModels);
+    render(<App />);
+    expect(await screen.findByText("Host CPU over time")).toBeInTheDocument();
+
+    window.location.hash = "#/models";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeInTheDocument();
+    expect(screen.queryByText("Host CPU over time")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the overview for a hash it does not know", async () => {
+    window.location.hash = "#/nope";
+    mockFetch(endpointsWithModels);
+    render(<App />);
+
+    expect(await screen.findByText("Host CPU over time")).toBeInTheDocument();
+  });
+
+  // Fix 3 (MEDIUM): the mobile drawer used to stay open after tapping a nav
+  // link, since `<a href>` navigation only changes location.hash and never
+  // touched the sidebar's mobileOpen state. Any route change — a tap, a
+  // back/forward navigation, or (as exercised here, since jsdom has no real
+  // navigation) a hashchange dispatch — must close it.
+  it("closes the mobile nav drawer when the route changes", async () => {
+    window.location.hash = "#/";
+    mockFetch(endpointsWithModels);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    expect(await screen.findByRole("dialog", { name: "Main navigation" })).toBeInTheDocument();
+
+    window.location.hash = "#/models";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Main navigation" })).not.toBeInTheDocument()
+    );
+  });
+});

@@ -26,6 +26,7 @@ import (
 	proccollector "github.com/marcfs31/forsight/forsight/internal/collector/proc"
 	"github.com/marcfs31/forsight/forsight/internal/collector/promscrape"
 	"github.com/marcfs31/forsight/forsight/internal/collector/statsd"
+	"github.com/marcfs31/forsight/forsight/internal/mlaas"
 	"github.com/marcfs31/forsight/forsight/internal/model"
 	"github.com/marcfs31/forsight/forsight/internal/store"
 )
@@ -46,6 +47,10 @@ type runOptions struct {
 	errorSLO          float64
 	storeBackend      string
 	dataDir           string
+	mlaasURL          string
+	mlaasAPIKeyFile   string
+	mlaasSyncInterval time.Duration
+	mlaasPrefix       string
 }
 
 func newRunCmd() *cobra.Command {
@@ -85,6 +90,16 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.dataDir, "data-dir", "./forsight-data",
 		`directory for the Badger database when --store=badger (ignored otherwise); `+
 			"created if it doesn't exist")
+	cmd.Flags().StringVar(&opts.mlaasURL, "mlaas-url", "",
+		"base URL of an mlaas server (github.com/marcfs31/mlaas) that trains and serves models from this agent's own stream, "+
+			"e.g. http://127.0.0.1:8090; also read from MLAAS_URL when the flag is empty (off by default)")
+	cmd.Flags().StringVar(&opts.mlaasAPIKeyFile, "mlaas-api-key-file", "",
+		"file holding the mlaas API key (mlaas writes it to <data>/api_key); also read from MLAAS_API_KEY_FILE, "+
+			"or the key itself from MLAAS_API_KEY. There is deliberately no flag for the key, so it never shows up in ps")
+	cmd.Flags().DurationVar(&opts.mlaasSyncInterval, "mlaas-sync-interval", 5*time.Minute,
+		"how often the agent exports its datasets to mlaas and runs the feedback loops")
+	cmd.Flags().StringVar(&opts.mlaasPrefix, "mlaas-prefix", "forsight",
+		"prefix for every dataset and model this agent creates in mlaas, so several agents can share one server")
 
 	return cmd
 }
@@ -181,6 +196,22 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 	}
 
 	server := api.NewServer(st, otlpHandler, api.DashboardHandler(), logger).WithForseer(eng)
+
+	// mlaas is opt-in: with a URL, the agent exports its own stream there,
+	// trains the managed models, and proxies what it learned to the
+	// dashboard's Models page. The syncer reads the backing store directly
+	// (reads only), and the API key it carries never leaves this process.
+	if cfg, ok, err := resolveMlaas(opts); err != nil {
+		return err
+	} else if ok {
+		syncer, err := mlaas.New(cfg, backingStore, eng.ClassifySeverity, logger)
+		if err != nil {
+			return err
+		}
+		go syncer.Run(ctx)
+		server = server.WithMlaas(syncer)
+		logger.Info("mlaas integration on", "url", syncer.DisplayURL(), "prefix", cfg.Prefix, "sync-interval", cfg.SyncInterval)
+	}
 	authToken := resolveAuthToken(opts.authToken)
 	if authToken == "" && !isLoopbackListenAddr(opts.addr) {
 		logger.Warn("listening on a non-loopback address with no authentication configured; set --auth-token or FORSIGHT_AUTH_TOKEN")
@@ -311,6 +342,46 @@ func resolveErrorSLO(flagValue float64) float64 {
 		}
 	}
 	return 0
+}
+
+// resolveMlaas turns the --mlaas-* flags and their MLAAS_* environment
+// fallbacks into an mlaas.Config. ok is false when no URL was given anywhere,
+// which is the default: the integration is opt-in. The key comes from
+// MLAAS_API_KEY, else from the file named by --mlaas-api-key-file or
+// MLAAS_API_KEY_FILE. A URL with no key is an error up front rather than a
+// silent stream of 401s five minutes into the run.
+func resolveMlaas(opts *runOptions) (mlaas.Config, bool, error) {
+	base := opts.mlaasURL
+	if base == "" {
+		base = os.Getenv("MLAAS_URL")
+	}
+	if base == "" {
+		return mlaas.Config{}, false, nil
+	}
+	key := os.Getenv("MLAAS_API_KEY")
+	if key == "" {
+		path := opts.mlaasAPIKeyFile
+		if path == "" {
+			path = os.Getenv("MLAAS_API_KEY_FILE")
+		}
+		if path != "" {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return mlaas.Config{}, false, fmt.Errorf("reading the mlaas API key: %w", err)
+			}
+			key = strings.TrimSpace(string(raw))
+		}
+	}
+	if key == "" {
+		return mlaas.Config{}, false, errors.New("--mlaas-url is set but no API key was given: " +
+			"set MLAAS_API_KEY, or point --mlaas-api-key-file (MLAAS_API_KEY_FILE) at the file mlaas writes to <data>/api_key")
+	}
+	return mlaas.Config{
+		URL:          base,
+		APIKey:       key,
+		Prefix:       opts.mlaasPrefix,
+		SyncInterval: opts.mlaasSyncInterval,
+	}, true, nil
 }
 
 // isLoopbackListenAddr reports whether addr is explicitly bound to a loopback

@@ -119,6 +119,63 @@ func TestResolveErrorSLO(t *testing.T) {
 	}
 }
 
+func TestResolveMlaas(t *testing.T) {
+	t.Run("off by default", func(t *testing.T) {
+		t.Setenv("MLAAS_URL", "")
+		t.Setenv("MLAAS_API_KEY", "")
+		t.Setenv("MLAAS_API_KEY_FILE", "")
+		_, ok, err := resolveMlaas(&runOptions{})
+		if err != nil || ok {
+			t.Fatalf("resolveMlaas with nothing set = ok %v, err %v; want off and no error", ok, err)
+		}
+	})
+
+	t.Run("key file, trimmed", func(t *testing.T) {
+		t.Setenv("MLAAS_API_KEY", "")
+		path := filepath.Join(t.TempDir(), "api_key")
+		if err := os.WriteFile(path, []byte("  secret-token\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, ok, err := resolveMlaas(&runOptions{
+			mlaasURL: "http://127.0.0.1:8090", mlaasAPIKeyFile: path,
+			mlaasPrefix: "agent-a", mlaasSyncInterval: time.Minute,
+		})
+		if err != nil || !ok {
+			t.Fatalf("resolveMlaas = ok %v, err %v; want on", ok, err)
+		}
+		if cfg.APIKey != "secret-token" {
+			t.Errorf("APIKey = %q, want the file's contents trimmed", cfg.APIKey)
+		}
+		if cfg.URL != "http://127.0.0.1:8090" || cfg.Prefix != "agent-a" || cfg.SyncInterval != time.Minute {
+			t.Errorf("cfg = %+v, want the flags carried through", cfg)
+		}
+	})
+
+	t.Run("env wins over the file and fills in the URL", func(t *testing.T) {
+		t.Setenv("MLAAS_URL", "http://mlaas.internal:8090")
+		t.Setenv("MLAAS_API_KEY", "from-env")
+		cfg, ok, err := resolveMlaas(&runOptions{mlaasAPIKeyFile: filepath.Join(t.TempDir(), "missing")})
+		if err != nil || !ok {
+			t.Fatalf("resolveMlaas = ok %v, err %v; want on", ok, err)
+		}
+		if cfg.URL != "http://mlaas.internal:8090" || cfg.APIKey != "from-env" {
+			t.Errorf("cfg = %+v, want URL and key from the environment", cfg)
+		}
+	})
+
+	t.Run("a URL without a key is an error up front", func(t *testing.T) {
+		t.Setenv("MLAAS_API_KEY", "")
+		t.Setenv("MLAAS_API_KEY_FILE", "")
+		if _, _, err := resolveMlaas(&runOptions{mlaasURL: "http://127.0.0.1:8090"}); err == nil {
+			t.Fatal("resolveMlaas with a URL and no key: want an error, got nil")
+		}
+		missing := filepath.Join(t.TempDir(), "nope")
+		if _, _, err := resolveMlaas(&runOptions{mlaasURL: "http://127.0.0.1:8090", mlaasAPIKeyFile: missing}); err == nil {
+			t.Fatal("resolveMlaas with an unreadable key file: want an error, got nil")
+		}
+	})
+}
+
 func TestIsLoopbackListenAddr(t *testing.T) {
 	cases := []struct {
 		addr string
