@@ -278,6 +278,119 @@ func TestHandleForseerClusters_EmptyWithoutEngine(t *testing.T) {
 	}
 }
 
+func TestHandleForseerClassify_NilEngineFallsBackToTheRule(t *testing.T) {
+	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/forseer/classify?message=connection+refused+error", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["source"] != "rule" {
+		t.Errorf("source = %v, want rule with no engine attached", body["source"])
+	}
+	if body["ready"] != false {
+		t.Errorf("ready = %v, want false with no engine attached", body["ready"])
+	}
+	if body["severity"] == "" {
+		t.Error("severity is empty, want the fallback rule's answer")
+	}
+}
+
+func TestHandleForseerClassify_ColdEngineFallsBackToTheRule(t *testing.T) {
+	eng := forseer.NewEngine()
+	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil).WithForseer(eng)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/forseer/classify?message=something+went+wrong", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	// A freshly built engine has seen nothing, so it can't have an opinion
+	// yet — the handler must fall back rather than claim "model".
+	if body["source"] != "rule" {
+		t.Errorf("source = %v, want rule for a cold engine", body["source"])
+	}
+	if body["ready"] != false {
+		t.Errorf("ready = %v, want false for a cold engine", body["ready"])
+	}
+}
+
+func TestHandleForseerClassify_RejectsAnEmptyMessage(t *testing.T) {
+	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/forseer/classify?message=", nil))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleForseerClassify_RejectsAnOversizedMessage(t *testing.T) {
+	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/forseer/classify?message="+strings.Repeat("a", 4097), nil)
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleForseerClassify_AcceptsAMessageAtTheFourKilobyteBoundary(t *testing.T) {
+	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/forseer/classify?message="+strings.Repeat("a", 4096), nil)
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 at exactly the 4096-byte limit (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleForseerClassify_WarmEngineAnswersFromTheModel(t *testing.T) {
+	eng := forseer.NewEngine()
+	// Same shape as forseer/engine_test.go's warm-up: two declared levels,
+	// enough repetitions that the severity model is ready to answer.
+	for i := 0; i < 60; i++ {
+		eng.ObserveLogs([]forseer.LogLine{
+			{Message: "request completed cleanly", Severity: "info", Source: "api"},
+			{Message: "no errors reported during the sweep", Severity: "info", Source: "api"},
+			{Message: "panic nil map write in handler", Severity: "error", Source: "api"},
+			{Message: "could not reach the database cluster", Severity: "error", Source: "api"},
+		})
+	}
+	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil).WithForseer(eng)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/forseer/classify?message=panic+nil+map+write+in+the+checkout+handler", nil)
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["source"] != "model" {
+		t.Errorf("source = %v, want model for a warm engine", body["source"])
+	}
+	if body["ready"] != true {
+		t.Errorf("ready = %v, want true for a warm engine", body["ready"])
+	}
+	if body["severity"] != "error" {
+		t.Errorf("severity = %v, want error", body["severity"])
+	}
+}
+
 type otlpRegisterFunc func(mux *http.ServeMux)
 
 func (f otlpRegisterFunc) Register(mux *http.ServeMux) { f(mux) }

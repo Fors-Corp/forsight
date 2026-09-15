@@ -27,6 +27,11 @@ observability platform.
 - **Forseer** — AI/ML lives in the sibling [`forseer/`](../forseer/) folder.
   Statistical detectors (z-score, CUSUM, log templates, slow spans, process
   culprits) are always on. Optional Grok narrative when `XAI_API_KEY` is set.
+- **mlaas** — an optional bridge (`internal/mlaas/`) to a separate
+  ML-as-a-Service for the handful of models that want a real holdout and
+  their own retrain loop instead of Forseer's online, stdlib-only ones. Off
+  by default; set `--mlaas-url` to turn it on. See "mlaas integration"
+  below.
 - **Kubernetes** — the [DaemonSet manifest](deploy/k8s/daemonset.yaml) runs
   this exact binary on every node, reusing the same host/Docker collectors
   (see the manifest's own comments for how and why).
@@ -87,6 +92,15 @@ forsight run [flags]
                                  (--scrape node=http://localhost:9100/metrics)
     --statsd-addr string         StatsD/DogStatsD UDP listen address (default :8125)
     --log-file string            log file to tail into the store (repeatable)
+    --mlaas-url string           base URL of a running mlaas ML service; empty (the
+                                 default) disables the integration; also read from MLAAS_URL
+    --mlaas-api-key-file string  path to a file holding the mlaas API key;
+                                 also read from MLAAS_API_KEY_FILE, or the key itself from
+                                 MLAAS_API_KEY — never a flag value, so it doesn't show up in `ps`
+    --mlaas-sync-interval duration how often datasets are exported and
+                                 forecasts/feedback are refreshed (default 5m)
+    --mlaas-prefix string        names everything this agent creates in mlaas,
+                                 so several agents can share one server (default "forsight")
 
 forsight version
 ```
@@ -104,6 +118,86 @@ Badger's per-entry TTL the same way it governs MemoryStore's pruning.
 `internal/store/badger.go`'s doc comment covers the key encoding and why it's
 shaped the way it is.
 
+## mlaas integration
+
+`forsight` can hand a handful of models to
+[mlaas](https://github.com/marcfs31/mlaas) — Marc's separate ML-as-a-Service
+— instead of training everything in-binary. The split is deliberate:
+Forseer's detectors (see [`forseer/`](../forseer/)) are stdlib-only, train
+online on the ingest path, and carry no weights, so each one gates on a
+named fallback and reports a prequential score. A model handed to mlaas
+trades that for a real holdout, a champion/challenger loop, and its own
+retrain schedule, at the cost of running a second process. Both kinds show
+up together on the dashboard's Models page so an operator can compare them
+rather than have to know which is which.
+
+The integration is off by default: an empty `--mlaas-url` disables it
+entirely and nothing is exported.
+
+**What's trained.** `internal/mlaas` manages exactly four models, named
+`<prefix>-<suffix>` (prefix default `forsight`, so more than one agent can
+share one mlaas):
+
+| Model             | Reads                                                        | Job                                                                                                                   |
+| ------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `cpu-forecast`     | `host.cpu.percent`, one-minute means                          | Say where host CPU is heading over the next hour.                                                                       |
+| `memory-forecast`  | `host.memory.percent`, one-minute means                       | Say where host memory is heading over the next hour.                                                                    |
+| `disk-forecast`    | `host.disk.percent`, one-minute means                         | Say where disk usage is heading, and so when it fills.                                                                  |
+| `log-severity`     | log lines whose source declared a level (never an inferred one) | Give a log line the level this deployment would have given it — the same job as Forseer's in-binary model, served with a real holdout score. |
+
+The three forecasts run mlaas's `holtwinters` plugin; the severity model
+runs `bayes` — the same job Forseer's own log-severity model already does,
+which is why the Models page puts the two side by side rather than picking
+one.
+
+On a timer (`--mlaas-sync-interval`), the agent exports one-minute buckets
+of each host series and declared-severity log lines as CSV, uploads
+whichever changed, creates and trains any model mlaas doesn't have yet, and
+— once a model has a champion — asks it for the next hour's forecast, or
+feeds it a sample of freshly-declared log lines and posts the outcome back
+as feedback. That loop is what makes mlaas's live accuracy and retrain
+triggers measure real, continuing data instead of just the original
+training snapshot.
+
+**The Models page** (in the dashboard) shows both kinds of model: a card for
+what trains inside the agent, gated on its fallback, and a card for what
+mlaas serves — state, champion version, holdout and live score, new labels,
+drift, and Train/Tune buttons — plus the forecast charts and the most
+recent severity predictions next to what Forseer said about the same line.
+See [`forseer/MODELS.md`](../forseer/MODELS.md) for the Forseer half of the
+contract.
+
+**Flags:**
+
+- `--mlaas-url` (env `MLAAS_URL`) — base URL of a running mlaas, e.g.
+  `http://127.0.0.1:8090`. Empty, the default, disables the integration.
+- `--mlaas-api-key-file` (env `MLAAS_API_KEY_FILE`), or the key itself via
+  env `MLAAS_API_KEY` — never a flag value, so it doesn't show up in `ps`.
+  mlaas writes its own key to `<data>/api_key`.
+- `--mlaas-sync-interval` — how often datasets are exported and
+  forecasts/feedback are refreshed (default 5m).
+- `--mlaas-prefix` — names everything this agent creates in mlaas (default
+  `forsight`).
+
+**The key never reaches the browser.** The dashboard calls the agent's own
+`/api/v1/mlaas/*` routes (behind `--auth-token` when one is set); the agent
+is the only thing that holds the mlaas API key, and the only thing that
+calls mlaas directly. Run mlaas on loopback, or put it behind HTTPS if it
+has to be reached over a network the agent doesn't share with it — the key
+goes over the wire as a plain `X-API-Key` header.
+
+**Retention, for forecasts worth having.** The forecast exporter buckets up
+to 14 days of history; the default `--store memory --retention 1h` doesn't
+hold enough of a series for mlaas to learn a trend from. Run with
+`--store badger --retention 168h` (or more) when the forecasts matter.
+
+**When mlaas is down.** The sync pass probes `GET /healthz` first; if that
+fails, the pass records that mlaas is unreachable, along with the error,
+and skips the rest of the pass — nothing else about the agent is affected.
+The Models page keeps showing the last known state for each model (or
+`waiting-for-data`/`missing` before the first successful contact) and marks
+the mlaas card unreachable rather than hiding it.
+
 ## HTTP surface
 
 | Path                                    | Method | What                                                    |
@@ -118,7 +212,13 @@ shaped the way it is.
 | `/api/v1/forseer/budget`                     | GET | Error-log burn against a 1% SLO (ErrorBudget)             |
 | `/api/v1/forseer/timeline`                   | GET | Stitched incident events (Timeline)                       |
 | `/api/v1/forseer/query?q=`                   | GET | Phrase → FilterBar facets                                 |
+| `/api/v1/forseer/models`                     | GET | What each trained model reads, whether it is ready, how it scores |
 | `/api/v1/forseer/summary`                    | GET | Grok paragraph when `XAI_API_KEY` is set; else disabled   |
+| `/api/v1/forseer/classify?message=`          | GET | Classify one log line: the in-binary severity model if it's ready, else the substring fallback |
+| `/api/v1/mlaas/status`                       | GET | Snapshot of the mlaas integration: model state, forecasts, recent predictions, jobs |
+| `/api/v1/mlaas/models/{name}/train`          | POST | Queue a training job for one of the four models `forsight` manages in mlaas |
+| `/api/v1/mlaas/models/{name}/tune`           | POST | Queue a tuning job for the same                           |
+| `/api/v1/mlaas/models/{name}/predict`        | POST | Proxy up to 10 rows to a managed mlaas model and return its predictions |
 | `/v1/metrics`                            | POST   | OTLP/HTTP metrics ingest (protobuf or JSON body)          |
 | `/v1/traces`                             | POST   | OTLP/HTTP traces ingest (protobuf or JSON body)           |
 | `/v1/logs`                               | POST   | OTLP/HTTP logs ingest (protobuf or JSON body)             |

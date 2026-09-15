@@ -26,6 +26,7 @@ type Server struct {
 	dashboard http.Handler // nil is valid: falls back to a plain 404 at "/"
 	logger    *slog.Logger
 	forseer   *forseer.Engine // nil: /api/v1/forseer/* returns empty/disabled
+	mlaas     MlaasService    // nil: /api/v1/mlaas/* reports not-configured
 }
 
 // NewServer builds a Server. dashboard may be nil (see dashboard.go for the
@@ -58,6 +59,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/forseer/query", s.handleForseerQuery)
 	mux.HandleFunc("GET /api/v1/forseer/summary", s.handleForseerSummary)
 	mux.HandleFunc("GET /api/v1/forseer/models", s.handleForseerModels)
+	mux.HandleFunc("GET /api/v1/forseer/classify", s.handleForseerClassify)
+
+	mux.HandleFunc("GET /api/v1/mlaas/status", s.handleMlaasStatus)
+	mux.HandleFunc("POST /api/v1/mlaas/models/{name}/train", s.handleMlaasTrain)
+	mux.HandleFunc("POST /api/v1/mlaas/models/{name}/tune", s.handleMlaasTune)
+	mux.HandleFunc("POST /api/v1/mlaas/models/{name}/predict", s.handleMlaasPredict)
 
 	if s.otlp != nil {
 		s.otlp.Register(mux)
