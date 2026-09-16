@@ -14,7 +14,12 @@ func BenchmarkBurnForecast_ObserveWarmingUp(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N && i < forecastMinObservations; i++ {
+	// A fresh model every forecastMinObservations records keeps every
+	// iteration on the warming-up path, however large b.N grows.
+	for i := 0; i < b.N; i++ {
+		if i%forecastMinObservations == 0 {
+			f = newBurnForecast()
+		}
 		f.Observe(float64(i%100), at)
 		at = at.Add(10 * time.Second)
 	}
