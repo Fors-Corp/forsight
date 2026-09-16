@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcfs31/forsight/forseer"
+	"github.com/marcfs31/forsight/forsight/internal/logsafe"
 	"github.com/marcfs31/forsight/forsight/internal/store"
 )
 
@@ -82,7 +83,7 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
 		s.logger.Debug("http request",
-			"method", r.Method, "path", r.URL.Path, "status", rw.status, "duration", time.Since(start))
+			"method", logsafe.String(r.Method), "path", logsafe.String(r.URL.Path), "status", rw.status, "duration", time.Since(start))
 	})
 }
 
