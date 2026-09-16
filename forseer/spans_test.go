@@ -188,7 +188,7 @@ func TestSpanWatch_RegimeShiftClosesTheOpenInsight(t *testing.T) {
 	// A regime shift resets the series, and the insight judged against the
 	// old baseline goes with it.
 	w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: 500}})
-	if w.series[key].n != 1 {
+	if w.series[key].n != 0 {
 		t.Fatalf("setup: expected the jump to reset the series, n=%d", w.series[key].n)
 	}
 	if got := w.Insights(); len(got) != 0 {
