@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react";
 import { ComboChart } from "./ComboChart";
 import { formatDuration } from "../lib/chart";
+import { expectTooltipOppositeCursor } from "../test-utils/chart-cursor-side";
 
 const meta: Meta<typeof ComboChart> = {
   title: "Forsight/Data Viz/ComboChart",
@@ -60,4 +61,36 @@ export const WithGap: Story = {
       />
     </div>
   ),
+};
+
+/**
+ * Fixed LTR/RTL comparison for the keyboard-cursor tooltip. The plot's x-axis
+ * never mirrors under `dir="rtl"` (see `ChartFrame.tsx`), so the readout parks
+ * on the physical side opposite the cursor in both directions — verified by
+ * rendered position, not `toHaveClass`; see `expectTooltipOppositeCursor` and
+ * `Switch.stories.tsx`'s "RTL" story for why.
+ */
+export const RTL: Story = {
+  render: () => (
+    <div className="flex flex-col gap-8 p-8">
+      {(["ltr", "rtl"] as const).map((dir) => (
+        <div key={dir} dir={dir}>
+          <ComboChart
+            label={`Request volume and p99 latency, ${dir.toUpperCase()}`}
+            labels={labels}
+            valueFormat={(v) => v.toLocaleString()}
+            secondaryValueFormat={formatDuration}
+            series={[
+              { name: "Requests", type: "bar", values: [1200, 1800, 2100, 1650, 1400] },
+              { name: "p99 latency", type: "line", values: [180, 210, 340, 260, 190] },
+            ]}
+          />
+        </div>
+      ))}
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    // The line series' point at the cursor index is the only circle drawn.
+    await expectTooltipOppositeCursor(canvasElement, "svg circle");
+  },
 };
