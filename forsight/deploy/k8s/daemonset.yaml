@@ -20,6 +20,26 @@
 # dedicated ServiceAccount below exists only so the pod doesn't inherit
 # whatever permissions the namespace's "default" ServiceAccount happens to
 # carry, not because forsight itself needs any.
+#
+# TLS: this DaemonSet listens on a non-loopback address (every node's own
+# interface), which is exactly the case --tls-cert/--tls-key exist for — see
+# the README's "TLS" section. Nothing below turns it on, since that needs a
+# real certificate this file can't provide; the commented-out lines are the
+# shape of it with cert-manager (https://cert-manager.io) issuing one. Ask
+# cert-manager for a Secret named e.g. forsight-tls (a Certificate resource
+# with secretName: forsight-tls, in this namespace), then:
+#   - args: ["run", "--tls-cert=/etc/forsight/tls/tls.crt", "--tls-key=/etc/forsight/tls/tls.key"]
+#   - volumeMounts:
+#       - name: tls
+#         mountPath: /etc/forsight/tls
+#         readOnly: true
+#   - volumes:
+#       - name: tls
+#         secret:
+#           secretName: forsight-tls
+# Add --tls-client-ca (another mounted PEM, e.g. from a cert-manager-issued
+# CA bundle Secret) if you also want the dashboard's callers to present a
+# client certificate (mTLS), on top of or instead of --auth-token.
 apiVersion: v1
 kind: Namespace
 metadata:
