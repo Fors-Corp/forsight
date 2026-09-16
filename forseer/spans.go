@@ -172,6 +172,10 @@ func (w *spanWatch) observeOneLocked(sp SpanSample, now time.Time) {
 		s.n = 0
 		s.runLen = 0
 		s.cusum = 0
+		// The baseline the open insight was judged against is gone with the
+		// markers; an insight that outlives it would say "slow" about a shape
+		// nobody measures any more, until re-warming reaches minSamples.
+		delete(w.open, key)
 	}
 }
 

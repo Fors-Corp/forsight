@@ -168,6 +168,34 @@ func TestSpanWatch_CUSUMResetsEstimatorOnRegimeShift(t *testing.T) {
 // CUSUM test above: once the estimator resets and re-warms on the new
 // regime, spans at the new normal must stop opening insights — proving the
 // reset actually re-learned a baseline rather than just clearing counters.
+func TestSpanWatch_RegimeShiftClosesTheOpenInsight(t *testing.T) {
+	w := newSpanWatch()
+	warmSpanBaseline(t, w, "api", "GET /checkout")
+	key := "api|GET /checkout"
+	p99, ok := w.series[key].p99.value()
+	if !ok {
+		t.Fatal("setup: no p99 after warm-up")
+	}
+	// Just past p99, enough times in a row to open, but nowhere near a
+	// CUSUM reset.
+	for i := 0; i < spanExceedRun; i++ {
+		w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: p99 * 1.05}})
+	}
+	if got := w.Insights(); len(got) != 1 {
+		t.Fatalf("setup: expected one open slow_span, got %+v", got)
+	}
+
+	// A regime shift resets the series, and the insight judged against the
+	// old baseline goes with it.
+	w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: 500}})
+	if w.series[key].n != 1 {
+		t.Fatalf("setup: expected the jump to reset the series, n=%d", w.series[key].n)
+	}
+	if got := w.Insights(); len(got) != 0 {
+		t.Fatalf("expected the open insight closed by the reset, got %+v", got)
+	}
+}
+
 func TestSpanWatch_AdaptsToNewBaselineAfterReset(t *testing.T) {
 	w := newSpanWatch()
 	warmSpanBaseline(t, w, "api", "GET /checkout")
