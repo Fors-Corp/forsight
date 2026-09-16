@@ -30,6 +30,10 @@ type logMiner struct {
 	now      func() time.Time
 	total    int
 	errors   int
+	// paging, when set, decides a burst's severity once it is beating the
+	// volume rule, and scores every cluster for the dashboard. Nil keeps the
+	// volume rule alone.
+	paging *pagingModel
 }
 
 type liveCluster struct {
@@ -93,18 +97,18 @@ func (m *logMiner) observeOneLocked(line LogLine, now time.Time) {
 		c.times = append([]time.Time{}, c.times[i:]...)
 	}
 
-	recent, previous := 0, 0
-	split := c.LastSeen.Add(-burstWindow)
-	for _, ts := range c.times {
-		if !ts.Before(split) {
-			recent++
-		} else {
-			previous++
-		}
-	}
+	recent, previous := c.window(c.LastSeen)
 	if recent >= burstMinCount && (previous == 0 || recent >= previous*burstRatio) {
+		// The volume rule. It stays the answer until the paging model is
+		// beating it on this deployment's own bursts.
+		critical := c.ErrorCount > 0 || recent >= burstMinCount*2
+		if m.paging != nil {
+			if page, ok := m.paging.Burst(id, c.errorShare(), burstRatioOf(recent, previous), critical, now); ok {
+				critical = page
+			}
+		}
 		sev := SeverityWarning
-		if c.ErrorCount > 0 || recent >= burstMinCount*2 {
+		if critical {
 			sev = SeverityCritical
 		}
 		m.open[id] = Insight{
@@ -163,9 +167,17 @@ func (m *logMiner) counts() (errors, total int) {
 func (m *logMiner) Clusters() []Cluster {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := m.now()
 	out := make([]Cluster, 0, len(m.clusters))
 	for _, c := range m.clusters {
-		out = append(out, c.Cluster)
+		cluster := c.Cluster
+		if m.paging != nil {
+			recent, previous := c.window(now)
+			if score, ok := m.paging.Score(c.ID, c.errorShare(), burstRatioOf(recent, previous), now); ok {
+				cluster.PagingScore = &score
+			}
+		}
+		out = append(out, cluster)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count != out[j].Count {
@@ -174,6 +186,43 @@ func (m *logMiner) Clusters() []Cluster {
 		return out[i].Template < out[j].Template
 	})
 	return out
+}
+
+// window counts the cluster's lines in the burstWindow ending at `at` and
+// in the window before it.
+func (c *liveCluster) window(at time.Time) (recent, previous int) {
+	split := at.Add(-burstWindow)
+	floor := split.Add(-burstWindow)
+	for _, ts := range c.times {
+		switch {
+		case ts.After(at):
+		case !ts.Before(split):
+			recent++
+		case !ts.Before(floor):
+			previous++
+		}
+	}
+	return recent, previous
+}
+
+// errorShare is the cluster's error lines over all its lines: the paging
+// model's first declared input.
+func (c *liveCluster) errorShare() float64 {
+	if c.Count == 0 {
+		return 0
+	}
+	return float64(c.ErrorCount) / float64(c.Count)
+}
+
+// burstRatioOf is the paging model's second declared input, lines this
+// window over the window before. A quiet previous window reads as the
+// recent count itself, so a template that went from nothing to eight lines
+// is as bursty as one that went from one to eight.
+func burstRatioOf(recent, previous int) float64 {
+	if previous == 0 {
+		return float64(recent)
+	}
+	return float64(recent) / float64(previous)
 }
 
 func templateOf(msg string) string {

@@ -269,6 +269,10 @@ export interface ForseerCluster {
   errorCount: number;
   lastSeen: string;
   sample: string;
+  /** The paging model's probability that a burst of this template is worth
+   *  paging for. Present only while that model is ready; absent means rank
+   *  by count. */
+  pagingScore?: number;
 }
 
 export function useInsights(intervalMs: number): PollState<ForseerInsight[]> {

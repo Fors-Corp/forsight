@@ -142,7 +142,7 @@ later, separate change.
 
 ### 4. The dashboard's design-system pin catches up to 4.0.1, and Dependabot gets the credential to keep it there
 
-- **Area** design system · **Effort** S · **Score** not in the judged pool; placed by the verification pass · Marc supplies the secret · **Shipped** 2026-09-16 (pin `^4.0.1` and the embed in #86, the chart-path smoke check in #87); still open: the Dependabot secret (Marc)
+- **Area** design system · **Effort** S · **Score** not in the judged pool; placed by the verification pass · Marc supplies the secret · **Shipped** 2026-09-16 (pin `^4.0.1` and the embed in #86, the chart-path smoke check in #87); the Dependabot secret was set on 2026-09-16, so nothing is open
 
 **Why.** This is `CLAUDE.md`'s stated end state, and the first draft did not
 carry it. Root `package.json:3` is `4.0.1` and tags run to `v4.0.1`, but
@@ -286,7 +286,7 @@ re-run by dispatch (it reports only from `pull_request` analyses).
 
 ### 8. Is this log burst worth paging
 
-- **Area** forseer · **Effort** M · **Score** 4.00
+- **Area** forseer · **Effort** M · **Score** 4.00 · **Shipped** 2026-09-16, `pagingModel` in `forseer/paging.go`
 
 **Why.** `forseer/logs.go:105` opens `log_burst` on
 `recent >= burstMinCount && (previous == 0 || recent >= previous*burstRatio)`;

@@ -74,6 +74,8 @@ const QUERY_HINT =
 const QUERY_NOT_UNDERSTOOD =
   'Didn\'t recognize that phrase — try error/warn/debug/critical, optionally "from <source>"';
 
+const percentFormat = (value: number) => `${Math.round(value * 100)}%`;
+
 function formatPercent(v: number | undefined): string {
   return v === undefined ? "—" : `${v.toFixed(1)}`;
 }
@@ -288,13 +290,25 @@ export default function Overview() {
     }
     return opts;
   }, [logs]);
+  // Once Forseer's paging model is ready every cluster carries a score, and
+  // the bar becomes that score: what a burst of this template is worth,
+  // rather than how loud it is. Until then, the count.
+  const clustersScored = useMemo(
+    () => clusters.length > 0 && clusters.every((c) => c.pagingScore !== undefined),
+    [clusters]
+  );
   const clusterBars = useMemo(
     () =>
-      clusters.slice(0, 8).map((c) => ({
-        label: c.template || c.id,
-        value: c.count,
-      })),
-    [clusters]
+      (clustersScored
+        ? [...clusters].sort((a, b) => (b.pagingScore ?? 0) - (a.pagingScore ?? 0))
+        : clusters
+      )
+        .slice(0, 8)
+        .map((c) => ({
+          label: c.template || c.id,
+          value: clustersScored ? (c.pagingScore ?? 0) : c.count,
+        })),
+    [clusters, clustersScored]
   );
 
   // The summary poller runs six times slower and is left out on purpose: a
@@ -512,7 +526,7 @@ export default function Overview() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Log templates</CardTitle>
+          <CardTitle>Log templates{clustersScored ? " · worth paging" : " · by volume"}</CardTitle>
         </CardHeader>
         <CardContent>
           {clusterBars.length === 0 ? (
@@ -521,7 +535,11 @@ export default function Overview() {
               description="OTLP logs are clustered into Drain-style templates. Bursts become Forseer insights."
             />
           ) : (
-            <BarList items={clusterBars} />
+            <BarList
+              items={clusterBars}
+              max={clustersScored ? 1 : undefined}
+              valueFormat={clustersScored ? percentFormat : undefined}
+            />
           )}
         </CardContent>
       </Card>
