@@ -868,3 +868,5 @@ are the judges' composites.
 - **LineChart area fill respects dashedFrom** — a series with both `area` and
   `dashedFrom` now fills the projected run lighter and hatched instead of as
   a second solid measurement, 2026-09-16, #121.
+
+- **Deterministic incident grouping on the Timeline** — forseer-models-9's window-plus-shared-`Related` substitute for the label-less grouping model, folding insights within five minutes of each other into one incident event when they share a Related value or a Source, 2026-09-16, #118.
