@@ -619,6 +619,48 @@ describe("Overview memory and disk charts", () => {
   });
 });
 
+// Item #128: a per-target UptimeBar under a "Probes" Card, built from the
+// agent's probe.* metrics (forsight/internal/collector/probe). The card
+// must be invisible on a deployment that never passed --probe, so the
+// no-metrics case is asserted right alongside the populated one.
+describe("Overview probe strips", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const now = () => new Date().toISOString();
+  const probeMetrics = [
+    { name: "probe.http.up", value: 1, timestamp: now(), labels: { name: "checkout", url: "https://checkout.example.com" } },
+    { name: "probe.tls.days_remaining", value: 5, timestamp: now(), labels: { name: "checkout", url: "https://checkout.example.com" } },
+    { name: "probe.tls.valid", value: 1, timestamp: now(), labels: { name: "checkout", url: "https://checkout.example.com" } },
+  ];
+
+  it("shows a Probes card with an UptimeBar naming the target once probe metrics arrive", async () => {
+    mockFetch({ ...emptyEndpoints, "/api/v1/metrics": probeMetrics });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Probes" })).toBeInTheDocument();
+    // A single, almost-current sample holds the smallest range on offer
+    // (15m — see "Overview time range" above), not the 1h default.
+    expect(screen.getByText("checkout, last 15m")).toBeInTheDocument();
+  });
+
+  it("shows a warning-toned TLS expiry badge when the certificate is valid but expiring soon", async () => {
+    mockFetch({ ...emptyEndpoints, "/api/v1/metrics": probeMetrics });
+    render(<App />);
+
+    expect(await screen.findByText("TLS expires in 5 days")).toBeInTheDocument();
+  });
+
+  it("shows no Probes heading at all when the agent has no --probe target configured", async () => {
+    mockFetch(emptyEndpoints);
+    render(<App />);
+
+    await screen.findByText("Host CPU over time");
+    expect(screen.queryByRole("heading", { name: "Probes" })).not.toBeInTheDocument();
+  });
+});
+
 /**
  * Item 18: forsight/internal/api/auth.go rejects every route but the
  * dashboard's static shell with a 401 once --auth-token is set, so the page
