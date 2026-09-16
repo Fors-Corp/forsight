@@ -274,8 +274,8 @@ forsight/
   internal/
     model/                 shared data shapes: Metric, Span, LogEntry
     collector/              the Collector interface + a scheduling Registry
-      host/                 gopsutil — CPU/memory/disk/network/uptime
-      proc/                  per-process CPU and RSS
+      host/                 gopsutil — CPU/memory/disk/network/uptime/fds/conns
+      proc/                  per-process CPU, RSS, and fd count
       docker/                Docker API — per-container CPU/memory
       otlp/                  OTLP/HTTP receiver — metrics (all five types),
                              traces, and logs (protobuf or JSON)
