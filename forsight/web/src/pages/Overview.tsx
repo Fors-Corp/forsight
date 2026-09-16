@@ -37,6 +37,8 @@ import {
   type TraceSpan,
 } from "@marcfs31/forsight";
 import {
+  connectionState,
+  type ConnectionState,
   useMetrics,
   useLogs,
   useInsights,
@@ -222,22 +224,34 @@ function pickTrace(spans: Span[], insights: ForseerInsight[]): Span[] {
   return best;
 }
 
-function statusFromInsights(connected: boolean, insights: ForseerInsight[]): ServiceStatus {
-  if (!connected) return "unknown";
+function statusFromInsights(
+  connection: ConnectionState["state"],
+  insights: ForseerInsight[]
+): ServiceStatus {
+  if (connection === "waiting") return "unknown";
+  if (connection === "stale") return "outage";
   if (insights.some((ins) => ins.severity === "critical")) return "outage";
   if (insights.some((ins) => ins.severity === "warning")) return "degraded";
   return "operational";
 }
 
 export default function Overview() {
-  const metrics = useMetrics(5000);
-  const logs = useLogs(5000);
-  const traces = useTraces(5000);
-  const insights = useInsights(5000);
-  const clusters = useClusters(5000);
-  const summary = useSummary(30000);
-  const budget = useBudget(5000);
-  const story = useTimeline(5000);
+  const metricsPoll = useMetrics(5000);
+  const logsPoll = useLogs(5000);
+  const tracesPoll = useTraces(5000);
+  const insightsPoll = useInsights(5000);
+  const clustersPoll = useClusters(5000);
+  const summaryPoll = useSummary(30000);
+  const budgetPoll = useBudget(5000);
+  const storyPoll = useTimeline(5000);
+  const metrics = metricsPoll.data;
+  const logs = logsPoll.data;
+  const traces = tracesPoll.data;
+  const insights = insightsPoll.data;
+  const clusters = clustersPoll.data;
+  const summary = summaryPoll.data;
+  const budget = budgetPoll.data;
+  const story = storyPoll.data;
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<FilterBarFacet[]>([]);
   // null = neutral (show QUERY_HINT); a string = the last submitted phrase
@@ -283,14 +297,29 @@ export default function Overview() {
     [clusters]
   );
 
-  const connected = metrics.length > 0 || logs.length > 0;
-  const status = statusFromInsights(connected, insights);
+  // The summary poller runs six times slower and is left out on purpose: a
+  // success from it could only make a dead agent look alive for longer.
+  const connection = connectionState(
+    [metricsPoll, logsPoll, tracesPoll, insightsPoll, clustersPoll, budgetPoll, storyPoll],
+    5000
+  );
+  const status = statusFromInsights(connection.state, insights);
+  const connectionLabel =
+    connection.state === "waiting"
+      ? "Waiting for data…"
+      : connection.state === "stale"
+        ? `No data for ${Math.round((connection.silentForMs ?? 0) / 1000)}s — agent unreachable`
+        : status === "outage"
+          ? "Forseer: critical"
+          : status === "degraded"
+            ? "Forseer: warning"
+            : "Receiving data";
   const sloLabel = formatSLO(budget.slo);
   const budgetLabel = sloLabel ? `${budget.label || "Error-log budget"} · ${sloLabel}` : budget.label || "Error-log budget";
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <Heading as="h1" size="xl">
             forsight
@@ -300,18 +329,12 @@ export default function Overview() {
             watches the stream
           </Text>
         </div>
-        <StatusDot
-          status={status}
-          label={
-            !connected
-              ? "Waiting for data…"
-              : status === "outage"
-                ? "Forseer: critical"
-                : status === "degraded"
-                  ? "Forseer: warning"
-                  : "Receiving data"
-          }
-        />
+        {/* Its own live region, so a flip to stale is read out. AlertList's
+            region only announces additions to its list, so a status change
+            is announced once, here. */}
+        <div role="status" aria-live="polite" aria-label="Agent connection" className="shrink-0">
+          <StatusDot status={status} label={connectionLabel} pulse={connection.state === "live"} />
+        </div>
       </header>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -460,7 +483,8 @@ export default function Overview() {
               description="No Docker daemon was reachable when forsight started, or nothing is running."
             />
           ) : (
-            <Table>
+            <div className="w-full overflow-x-auto">
+<Table>
               <caption className="sr-only">Running containers with CPU and memory usage</caption>
               <TableHeader>
                 <TableRow>
@@ -481,6 +505,7 @@ export default function Overview() {
                 ))}
               </TableBody>
             </Table>
+</div>
           )}
         </CardContent>
       </Card>

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 import type { ForseerQueryFacet } from "./api";
@@ -169,7 +169,10 @@ describe("Ask Forseer query box", () => {
   it("merges a recognized query's facets into existing filters instead of replacing them", async () => {
     const fetchMock = installFetchMock((q) => {
       if (q === "logs from checkout-api") {
-        return { facets: [{ key: "source", label: "Source", value: "checkout-api" }], matched: true };
+        return {
+          facets: [{ key: "source", label: "Source", value: "checkout-api" }],
+          matched: true,
+        };
       }
       if (q === "critical") {
         return { facets: [{ key: "status", label: "Status", value: "error" }], matched: true };
@@ -189,13 +192,17 @@ describe("Ask Forseer query box", () => {
     await screen.findByRole("button", { name: "Remove Status: error filter" });
     // ...without wiping out the first submit's chip. A wholesale replace
     // (the pre-fix behavior) would have dropped this.
-    expect(screen.getByRole("button", { name: "Remove Source: checkout-api filter" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove Source: checkout-api filter" })
+    ).toBeInTheDocument();
   });
 
   it("overrides only the keys a query's facets touch, replacing a same-key chip rather than duplicating it", async () => {
     const fetchMock = installFetchMock((q) => {
-      if (q === "warn") return { facets: [{ key: "status", label: "Status", value: "warn" }], matched: true };
-      if (q === "critical") return { facets: [{ key: "status", label: "Status", value: "error" }], matched: true };
+      if (q === "warn")
+        return { facets: [{ key: "status", label: "Status", value: "warn" }], matched: true };
+      if (q === "critical")
+        return { facets: [{ key: "status", label: "Status", value: "error" }], matched: true };
       return { facets: [], matched: false };
     });
     const user = userEvent.setup();
@@ -210,13 +217,18 @@ describe("Ask Forseer query box", () => {
     await screen.findByRole("button", { name: "Remove Status: error filter" });
     // Only one "Status" chip at a time — FilterBar's AND semantics can
     // never satisfy two conflicting status facets simultaneously.
-    expect(screen.queryByRole("button", { name: "Remove Status: warn filter" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Remove Status: warn filter" })
+    ).not.toBeInTheDocument();
   });
 
   it("leaves existing filters untouched and shows feedback for an unrecognized query", async () => {
     const fetchMock = installFetchMock((q) => {
       if (q === "logs from checkout-api") {
-        return { facets: [{ key: "source", label: "Source", value: "checkout-api" }], matched: true };
+        return {
+          facets: [{ key: "source", label: "Source", value: "checkout-api" }],
+          matched: true,
+        };
       }
       return { facets: [], matched: false };
     });
@@ -230,10 +242,15 @@ describe("Ask Forseer query box", () => {
     await askForseer(user, "banana banana banana");
 
     // The pre-existing chip survives an unrecognized submit...
-    expect(screen.getByRole("button", { name: "Remove Source: checkout-api filter" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove Source: checkout-api filter" })
+    ).toBeInTheDocument();
     // ...and the box says so instead of silently doing nothing.
     expect(await screen.findByText(/didn.t recognize that phrase/i)).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Ask Forseer" })).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("textbox", { name: "Ask Forseer" })).toHaveAttribute(
+      "aria-invalid",
+      "true"
+    );
   });
 
   it("shows the supported-vocabulary hint by default, before any query is submitted", async () => {
@@ -242,11 +259,17 @@ describe("Ask Forseer query box", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
 
     expect(screen.getByText(/critical\/severe/i)).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Ask Forseer" })).not.toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("textbox", { name: "Ask Forseer" })).not.toHaveAttribute(
+      "aria-invalid",
+      "true"
+    );
   });
 
   it("does not call the query endpoint or touch filters when submitted empty", async () => {
-    const fetchMock = installFetchMock(() => ({ facets: [{ key: "status", label: "Status", value: "error" }], matched: true }));
+    const fetchMock = installFetchMock(() => ({
+      facets: [{ key: "status", label: "Status", value: "error" }],
+      matched: true,
+    }));
     const user = userEvent.setup();
     render(<App />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
@@ -354,5 +377,68 @@ describe("App routing", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Main navigation" })).not.toBeInTheDocument()
     );
+  });
+});
+
+describe("Overview connection", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const cpuSample = [
+    { name: "host.cpu.percent", value: 12.5, timestamp: new Date().toISOString() },
+  ];
+
+  it("announces the connection from one status region, once", async () => {
+    mockFetch({ ...emptyEndpoints, "/api/v1/metrics": cpuSample });
+    render(<App />);
+
+    const region = await screen.findByRole("status", { name: "Agent connection" });
+    await within(region).findByText("Receiving data");
+    // AlertList carries its own live region; the connection must not be
+    // announced from there as well.
+    expect(screen.getAllByText("Receiving data")).toHaveLength(1);
+  });
+
+  it("reports the agent unreachable after three missed polls, keeping the last snapshot on screen", async () => {
+    vi.useFakeTimers();
+    try {
+      let down = false;
+      const responses: FetchResponses = { ...emptyEndpoints, "/api/v1/metrics": cpuSample };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          if (down) throw new TypeError("connection refused");
+          const path = String(input).split("?")[0];
+          if (path in responses) {
+            return new Response(JSON.stringify(responses[path]), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          return new Response("", { status: 404 });
+        })
+      );
+      render(<App />);
+      await act(async () => {
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      });
+      const region = screen.getByRole("status", { name: "Agent connection" });
+      expect(within(region).getByText("Receiving data")).toBeInTheDocument();
+      expect(screen.getByText("12.5")).toBeInTheDocument();
+
+      down = true;
+      // Three missed 5s polls is still live; the fourth tick is past the
+      // three-interval window.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+      expect(
+        within(region).getByText(/^No data for \d+s — agent unreachable$/)
+      ).toBeInTheDocument();
+      expect(screen.getByText("12.5")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
