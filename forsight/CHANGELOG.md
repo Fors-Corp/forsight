@@ -8,10 +8,10 @@ line from `@marcfs31/forsight`'s own `vX.Y.Z` tags for the design system;
 see `forsight/README.md`'s Releasing section for how the two relate and how
 this file fits into cutting a release.
 
-## [1.1.0] - Unreleased
+## [1.1.0] - 2026-09-16
 
-No `forsight-v1.1.0` tag exists yet — this section covers everything on
-`main` since `forsight-v1.0.0` (2026-09-11), as of 2026-09-16.
+The first release cut end to end by `.github/workflows/forsight-release.yml`:
+archives, `sha256sums.txt` and the `ghcr.io/marcfs31/forsight` image.
 
 ### Added
 
@@ -64,6 +64,10 @@ No `forsight-v1.1.0` tag exists yet — this section covers everything on
 
 ### Fixed
 
+- The release workflow's image build no longer copies a `forseer/go.sum` that
+  does not exist, and a tag with a suffix (`-rc1`) is created as a
+  pre-release so it is never marked Latest, which is what `install.sh`
+  installs by default (#116)
 - `build-web` now sources its own `npm.pkg.github.com` credential from
   `NODE_AUTH_TOKEN` or `gh auth token` instead of needing a manual `file:`
   link workaround (#106)
