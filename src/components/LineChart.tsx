@@ -10,7 +10,6 @@ import {
   project,
   seriesFill,
   seriesStroke,
-  splitAtGaps,
   splitAtProjection,
   type ChartAnnotation,
 } from "../lib/chart";
@@ -81,7 +80,9 @@ const PAD_BOTTOM = 22;
  * past that point switches to dashed instead of a second color, so the
  * distinction survives grayscale printing and colorblind vision. Both runs
  * share one y-axis and domain — a projection is drawn as more of the same
- * series, not a second one.
+ * series, not a second one. With `area`, the fill under that same run drops
+ * to half opacity and is overlaid with a diagonal hatch, so a projected area
+ * never reads as a second solid measurement.
  */
 export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
   (
@@ -101,6 +102,11 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
   ) => {
     const cursor = useChartCursor(labels.length);
     const plotRef = React.useRef<HTMLDivElement>(null);
+    // One hatch pattern per chart, shared by every series' projected area —
+    // the shape is the signal, not the color, so it need not be re-declared
+    // per series. Only rendered when something will actually reference it.
+    const projectionHatchId = React.useId();
+    const hasProjectedArea = area && series.some((s) => s.dashedFrom !== undefined);
 
     // Extent of the actual data — a line chart reads change, so it is not
     // pinned to a zero baseline the way a bar chart must be.
@@ -186,6 +192,34 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
 
               return (
                 <>
+                  {hasProjectedArea ? (
+                    <defs>
+                      {/*
+                        Diagonal hatch, not a second color: a projected area
+                        fill under a dashedFrom point must stay
+                        distinguishable in grayscale and to colorblind
+                        viewers (CONTRIBUTING.md's data-viz rule), same as
+                        the dashed stroke it sits under.
+                      */}
+                      <pattern
+                        id={projectionHatchId}
+                        width={6}
+                        height={6}
+                        patternUnits="userSpaceOnUse"
+                        patternTransform="rotate(45)"
+                      >
+                        <line
+                          x1={0}
+                          y1={0}
+                          x2={0}
+                          y2={6}
+                          className="stroke-fg-muted"
+                          strokeWidth={1.5}
+                        />
+                      </pattern>
+                    </defs>
+                  ) : null}
+
                   {scale.ticks.map((tick) => (
                     <g key={tick}>
                       <line
@@ -230,15 +264,36 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
                     const { solid, dashed } = splitAtProjection(s.values, s.dashedFrom, toPoint);
                     return (
                       <g key={s.name}>
-                        {area
-                          ? splitAtGaps(s.values, toPoint).map((segment, i) => (
+                        {area ? (
+                          <>
+                            {solid.map((segment, i) => (
                               <path
-                                key={`area-${i}`}
+                                key={`area-solid-${i}`}
                                 d={areaPath(segment, baselineY)}
                                 className={cn(seriesFill(seriesIndex), "opacity-20")}
                               />
-                            ))
-                          : null}
+                            ))}
+                            {dashed.map((segment, i) => (
+                              <React.Fragment key={`area-projected-${i}`}>
+                                {/*
+                                  Lighter fill (half the observed run's
+                                  opacity) plus the shared hatch pattern on
+                                  top — a run past dashedFrom must read as
+                                  projected, not as more of the same
+                                  measured area.
+                                */}
+                                <path
+                                  d={areaPath(segment, baselineY)}
+                                  className={cn(seriesFill(seriesIndex), "opacity-10")}
+                                />
+                                <path
+                                  d={areaPath(segment, baselineY)}
+                                  fill={`url(#${projectionHatchId})`}
+                                />
+                              </React.Fragment>
+                            ))}
+                          </>
+                        ) : null}
                         {solid.map((segment, i) => (
                           <path
                             key={`line-solid-${i}`}
