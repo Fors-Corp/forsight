@@ -268,7 +268,8 @@ the mlaas card unreachable rather than hiding it.
 | Path                                    | Method | What                                                    |
 | ---------------------------------------- | ------ | -------------------------------------------------------- |
 | `/`                                      | GET    | The dashboard                                             |
-| `/healthz`                               | GET    | `{"status":"ok"}`                                          |
+| `/healthz`                               | GET    | `{"status":"ok"}` unconditionally — for a liveness probe    |
+| `/readyz`                                | GET    | Pings the store and reports each collector's last error; 503 only if the store ping fails — for a readiness probe |
 | `/api/v1/metrics?name=&since=&label.<k>=<v>` | GET | Query stored metrics (all filters optional)             |
 | `/api/v1/traces?service=&traceId=&since=`    | GET | Query stored spans                                        |
 | `/api/v1/logs?since=&source=&severity=`       | GET | Query stored log entries                                  |
@@ -314,17 +315,29 @@ forsight/
     api/                    HTTP server: query API, OTLP mount, embedded dashboard
   web/                      the dashboard — a small React app on the design system
   deploy/k8s/               DaemonSet manifest for cluster-wide deployment
+  Dockerfile                 static-binary image the DaemonSet runs
   install.sh                 curl|sh installer
   Makefile                   build-web, build-go, build, release, dev, test, lint
 ```
 
 **The "one host collector, four environments" trick**: rather than writing a
 Kubernetes-specific collector, the [DaemonSet manifest](deploy/k8s/daemonset.yaml)
-mounts the host's `/proc`/`/sys` into the pod and sets `HOST_PROC`/`HOST_SYS`
-— the exact convention `node_exporter` itself uses — so the *same* host
-collector code gets real node-level metrics with zero forsight-specific
-Kubernetes code. See that manifest's comments for the Docker-socket caveat on
-non-Docker-runtime clusters.
+mounts the host's `/proc`/`/sys`/`/etc` into the pod and sets
+`HOST_PROC`/`HOST_SYS`/`HOST_ETC` — the exact convention `node_exporter`
+itself uses — so the *same* host collector code gets real node-level metrics
+with zero forsight-specific Kubernetes code. See that manifest's comments for
+the Docker-socket caveat on non-Docker-runtime clusters.
+
+**Running in Kubernetes.** Build the image from the repo root —
+`docker build -f forsight/Dockerfile -t forsight .` (see the
+[Dockerfile](Dockerfile)'s own comment for why the root, not `forsight/`, is
+the build context) — push it wherever the manifest's `image:` points, then
+`kubectl apply -f forsight/deploy/k8s/daemonset.yaml`. The container's
+`livenessProbe` hits `/healthz` (unconditional, so it can never crash-loop a
+pod over something a restart won't fix); its `readinessProbe` hits `/readyz`,
+which pings the store and reports each collector's last error but only fails
+the probe if the store itself is unreachable — a missing Docker socket is
+reported, not a reason to pull the pod from service.
 
 ## Building from source
 

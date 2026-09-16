@@ -1,10 +1,22 @@
 # Runs forsight on every node in the cluster, reusing the SAME host and Docker
 # collectors as a bare-metal install — no Kubernetes-specific collector code
 # exists (see internal/collector/host's package doc). The trick: gopsutil
-# honors HOST_PROC/HOST_SYS overrides (the same convention node_exporter
-# uses), so mounting the host's /proc and /sys into the pod and pointing
-# those env vars at the mount is all it takes to get real node-level metrics
-# from this binary unmodified.
+# honors HOST_PROC/HOST_SYS/HOST_ETC overrides (the same convention
+# node_exporter uses), so mounting the host's /proc, /sys, and /etc into the
+# pod and pointing those env vars at the mounts is all it takes to get real
+# node-level metrics from this binary unmodified.
+#
+# Image: built from the repo's forsight/Dockerfile (a static binary, no
+# shell, on scratch) and published to ghcr.io on the forsight-vX.Y.Z tag —
+# see that Dockerfile's own comment for the local build command.
+#
+# Probes: livenessProbe hits /healthz, which is deliberately unconditional
+# (see internal/api/handlers.go) — a missing Docker socket or an unhealthy
+# store must never crash-loop a pod that otherwise has no problem the
+# container runtime can fix by restarting it. readinessProbe hits /readyz
+# instead, which pings the store and reports (without ever failing on) each
+# collector's last error — see handleReadyz's own doc comment for why that
+# split exists.
 #
 # Docker-socket mount: only meaningful on nodes whose container runtime is
 # Docker. Most current clusters run containerd or CRI-O directly, which don't
@@ -77,17 +89,43 @@ spec:
               value: /host/proc
             - name: HOST_SYS
               value: /host/sys
+            - name: HOST_ETC
+              value: /host/etc
             - name: DOCKER_HOST
               value: unix:///host/docker.sock
           ports:
             - name: http
               containerPort: 8080
+          # livenessProbe: cheap and unconditional, on purpose (see the
+          # header comment) — no failureThreshold tuning here because
+          # /healthz can't fail short of the process being wedged.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          # readinessProbe: pings the store and reports collector health, so
+          # a node whose store can't be reached is taken out of rotation
+          # (traffic-wise; this agent isn't behind a Service today, but a
+          # Service in front of it would honor this the same way) without
+          # ever being restarted over it — see /readyz's own doc comment.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
           volumeMounts:
             - name: proc
               mountPath: /host/proc
               readOnly: true
             - name: sys
               mountPath: /host/sys
+              readOnly: true
+            - name: etc
+              mountPath: /host/etc
               readOnly: true
             - name: docker-sock
               mountPath: /host/docker.sock
@@ -106,6 +144,9 @@ spec:
         - name: sys
           hostPath:
             path: /sys
+        - name: etc
+          hostPath:
+            path: /etc
         - name: docker-sock
           hostPath:
             path: /var/run/docker.sock

@@ -724,7 +724,7 @@ then `forsight/web/src/pages/Models.tsx`.
 
 ### 24. A DaemonSet that can actually run: image, probes, `/readyz`
 
-- **Area** ops · **Effort** M · **Score** 3.52 · merges agent-collection-9
+- **Area** ops · **Effort** M · **Score** 3.52 · merges agent-collection-9 · **Shipped** 2026-09-16, `handleReadyz` in `forsight/internal/api/handlers.go`
 
 **Why.** `forsight/deploy/k8s/daemonset.yaml:53` pins
 `ghcr.io/marcfs31/forsight:latest`; there is no Dockerfile in the repo and no
