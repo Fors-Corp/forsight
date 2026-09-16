@@ -21,6 +21,11 @@ observability platform.
   default probe of well-known local exporters (`node_exporter` :9100,
   Prometheus :9090, windows_exporter :9182, process-exporter :9273). A miss
   is silence. `--disable-autoscrape` turns the probe off.
+- **HTTP and TLS-expiry probes** — `--probe <url>` (repeatable) GETs a URL on
+  `--collect-interval`, reporting `probe.http.up`/`.status`/`.duration_ms`
+  and, for `https://` targets, `probe.tls.days_remaining` and `.valid` from
+  the leaf certificate — read independently, so a certificate nearing (or
+  past) expiry never makes an otherwise-reachable site look down.
 - **StatsD / DogStatsD** — listens on `:8125` by default so a bare install
   receives them. `--disable-statsd` turns it off; a bind failure is a
   warning, not a crash.
@@ -116,6 +121,9 @@ forsight run [flags]
     --scrape string              Prometheus exposition endpoint to scrape, repeatable;
                                  optionally prefixed with a job name
                                  (--scrape node=http://localhost:9100/metrics)
+    --probe string                HTTP(S) URL to GET on --collect-interval, repeatable;
+                                 optionally prefixed with a name
+                                 (--probe checkout=https://example.com/healthz)
     --statsd-addr string         StatsD/DogStatsD UDP listen address (default :8125)
     --log-file string            log file to tail into the store (repeatable)
     --auth-token string          require Authorization: Bearer <token> on every route except
