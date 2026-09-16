@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
 import { Toaster, toast } from "./Toast";
+import { axe } from "../test-utils/axe";
 
 describe("Toast", () => {
   it("renders a toast enqueued via toast()", async () => {
@@ -29,5 +30,16 @@ describe("Toast", () => {
     const closeButton = container.querySelector('button[aria-label="Dismiss"]');
     expect(closeButton).toHaveClass("min-h-9");
     expect(closeButton).toHaveClass("min-w-9");
+  });
+
+  // The viewport renders in the tree, not a portal, so this covers the
+  // enqueued toast itself: its role, its accessible name, its close button.
+  it("has no axe violations with a toast enqueued", async () => {
+    const { container } = render(<Toaster />);
+    act(() => {
+      toast({ title: "Rollback complete", description: "v13 is live again." });
+    });
+    await waitFor(() => expect(screen.getByText("Rollback complete")).toBeInTheDocument());
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

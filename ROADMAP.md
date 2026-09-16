@@ -220,7 +220,7 @@ refreshed `webdist/`.
 
 ### 6. Make CONTRIBUTING.md and the agent's own docs agree with the tree
 
-- **Area** quality · **Effort** S · **Score** 4.07 · merges design-system-7, design-system-9
+- **Area** quality · **Effort** S · **Score** 4.07 · merges design-system-7, design-system-9 · **Shipped** 2026-09-16 (the route table had already caught up in #83; Toast passed `axe()` in about a second, so it got the test, not an exemption)
 
 **Why.** `CONTRIBUTING.md`'s sections — Setup, Before opening a PR, Testing
 policy, Regression policy, Adding a component, Versioning — are all design

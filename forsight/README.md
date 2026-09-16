@@ -24,6 +24,10 @@ observability platform.
 - **StatsD / DogStatsD** — listens on `:8125` by default so a bare install
   receives them. `--disable-statsd` turns it off; a bind failure is a
   warning, not a crash.
+- **Log-file tailing** — `--log-file <path>` (repeatable) follows a file on
+  disk into the same log store OTLP log records land in, each line's
+  severity classified the way `/api/v1/forseer/classify` classifies it. A
+  tail that fails restarts with backoff rather than taking the agent down.
 - **Forseer** — AI/ML lives in the sibling [`forseer/`](../forseer/) folder.
   Statistical detectors (z-score, CUSUM, log templates, slow spans, process
   culprits) are always on. Optional Grok narrative when `XAI_API_KEY` is set.
@@ -336,12 +340,5 @@ extracting and running the resulting binary.
 
 **Deliberately not built yet, flagged rather than silently skipped:**
 
-- **Log file tailing/parsing.** OTLP log ingest (`POST /v1/logs`) and the
-  query/dashboard surface are built; reading and parsing log *files* on disk
-  (tail + pattern extraction) still deserves its own careful design.
-- **Seasonal baselines and SLO error-budget forecast.** Forseer ships
-  rolling z-score / CUSUM / log-template / slow-span detectors; hour-of-day
-  baselines and **ErrorBudget** projection are next (see
-  [`forseer/README.md`](../forseer/README.md)).
 - **A real query language.** The API takes simple time-range + exact-label
   filters, not anything PromQL-equivalent.

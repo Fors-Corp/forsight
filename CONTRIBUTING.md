@@ -127,12 +127,33 @@ Overlay or positioned components (anything opening on click/hover — dialogs, m
 - **Draw on `ChartFrame`.** It supplies the measured, responsive `<svg>` and the visually hidden data table that stands in for the picture. A plot without that table is not shippable — it is the WCAG 1.1.1 equivalent, and it is what makes the light-theme series colors permissible under the data-viz relief rule (see the comment in `src/styles/tokens.css`).
 - **Geometry lives in `src/lib/chart.ts`.** Scales, path builders and formatters are pure functions with their own unit tests; components stay thin renderers over them. Add new maths there, not inline in a component.
 - **Series colors are the eight `--forsight-viz-*` slots, in order, never cycled.** Do not add a ninth hue, re-order the slots, or re-step them: the ordering is what keeps adjacent series distinguishable for colorblind readers, and `src/tokens/__tests__/contrast.test.ts` pins both the 3:1 non-text contrast bar and the exact light-theme slots allowed to take relief. Past slot 8, `seriesFill`/`seriesBg` go neutral on purpose — fold the tail into "Other".
-- **Never a second y-axis.** Two measures of different scale are two plots (see the `Forsight/Overview` → "Dashboard" story), small multiples, or indexed to a common base.
+- **Never a second y-axis.** Two measures of different scale are two plots (see the `Forsight/Overview` → "Dashboard" story), small multiples, or indexed to a common base. The one guarded exception is `ComboChart`, and it stays the only one because of its three guardrails: the bar axis is zero-based, the line axis takes its own range, and the plot states in text which series read on which axis.
 - **Color is never the only carrier.** Two or more series means a legend; status means a word next to the dot; a delta means an arrow _and_ the sign; a failed span means the word "error".
 - **The hover layer is keyboard-reachable.** Plotted charts take focus and move their cursor with Arrow/Home/End, Escape dismisses, and the reading goes out through a polite `role="status"` region rather than the (aria-hidden) tooltip.
 - Verify in the `Forsight/Overview` → "Dashboard" / "DashboardRTL" stories, which compose the whole family the way a real service dashboard does.
 
-**Testing overlay components (Dialog, DropdownMenu, Popover, Tooltip, Select):** keep jsdom tests **structural and fast** — render with `defaultOpen` and assert roles / props / classes. Do **not** run `axe()` on an _open_ overlay in jsdom: with no layout engine it takes minutes and times out on CI. Open-state accessibility and real open/close interaction are covered by the Storybook test runner in real Chromium (`npm run test:storybook`) via the component's stories and `play` functions. `axe()` in a `*.test.tsx` is for **inline** components. See `.claude/skills/testing`.
+**Testing overlay components (Dialog, AlertDialog, Drawer, DropdownMenu, Popover, Tooltip, Select):** keep jsdom tests **structural and fast** — render with `defaultOpen` and assert roles / props / classes. Do **not** run `axe()` on an _open_ overlay in jsdom: with no layout engine it takes minutes and times out on CI. Open-state accessibility and real open/close interaction are covered by the Storybook test runner in real Chromium (`npm run test:storybook`) via the component's stories and `play` functions. `axe()` in a `*.test.tsx` is for **inline** components. See `.claude/skills/testing`.
+
+## Contributing to the agent (`forsight/`, `forseer/`)
+
+Everything above is the design system. The Go agent under `forsight/` and the
+detectors under `forseer/` (its own module) are the repo's second,
+independently versioned artifact — `forsight-vX.Y.Z` tags, see
+[`forsight/README.md`](forsight/README.md) → Releasing — with its own gate,
+which CI runs as the required `go` and `web` checks:
+
+- In `forsight/`: `go vet ./...`, `golangci-lint run ./...`, `go test ./...`,
+  `go build ./...`. In `forseer/`: `go vet ./...` and `go test ./...`.
+- A change under `forsight/web/` ships its rebuilt embed on the same PR —
+  `make build-web` in `forsight/`, then a clean `git status` under
+  `forsight/internal/api/webdist/`. A design-system change does not: the
+  dashboard pins a published `@marcfs31/forsight` and picks a new release up
+  as an ordinary dependency bump (`CLAUDE.md`, "The embed is a snapshot").
+- Anything that trains, scores or forecasts follows the contract in
+  [`forseer/MODELS.md`](forseer/MODELS.md) — no model weights or API keys in
+  this repo, `forseer` stays stdlib-only, every model bounds its state, names
+  a fallback and gates on readiness, and lands on a component the design
+  system already has — rather than restating it here.
 
 ## Versioning
 
