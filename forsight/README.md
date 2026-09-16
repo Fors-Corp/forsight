@@ -53,10 +53,28 @@ curl -fsSL https://raw.githubusercontent.com/marcfs31/forsight/main/forsight/ins
 forsight run
 ```
 
-Downloads the right binary for your OS/architecture, and — on Linux, run as
+Downloads the right binary for your OS/architecture, verifies it against the
+release's `sha256sums.txt` before extracting anything, and — on Linux, run as
 root — registers and starts a systemd service. Everywhere else, `forsight run`
 starts it directly. See [install.sh](install.sh) for the env vars that
 control the install location and version.
+
+**Flags survive an upgrade.** On Linux as root, the unit's
+`ExecStart` reads `$FORSIGHT_ARGS` from `/etc/default/forsight`
+(`EnvironmentFile=-/etc/default/forsight`) rather than hard-coding flags into
+the unit file. install.sh writes that file once, commented out, the first
+time it installs, and never touches it again — so `--store badger`,
+`--auth-token` and `--mlaas-url` set there survive the next `curl | sh`
+re-run instead of getting silently dropped back to a bare `forsight run`:
+
+```bash
+# /etc/default/forsight
+FORSIGHT_ARGS="--store badger --auth-token <token> --mlaas-url http://localhost:9000"
+```
+
+```bash
+sudo systemctl restart forsight   # after editing the file above
+```
 
 Then open `http://localhost:8080` for the dashboard.
 
@@ -316,8 +334,9 @@ forsight/
   web/                      the dashboard — a small React app on the design system
   deploy/k8s/               DaemonSet manifest for cluster-wide deployment
   Dockerfile                 static-binary image the DaemonSet runs
-  install.sh                 curl|sh installer
-  Makefile                   build-web, build-go, build, release, dev, test, lint
+  install.sh                 curl|sh installer — verifies sha256sums.txt before extracting
+  install_test.bats          install.sh's own tests (bats-core)
+  Makefile                   build-web, build-go, build, release, dev, test, test-install, lint
 ```
 
 **The "one host collector, four environments" trick**: rather than writing a
@@ -347,6 +366,7 @@ make build-go     # agent only — no Node needed, webdist/ falls back to a plac
 make build-web    # dashboard only — rebuilds the design system, then web/, then embeds it
 make build        # both
 make test         # go test ./...
+make test-install # bats install_test.bats — install.sh's checksum/systemd-unit behavior
 make lint         # golangci-lint run ./...
 make dev          # go run . run, against whatever's currently embedded
 ```
@@ -364,6 +384,11 @@ Push a `forsight-vX.Y.Z` tag and `.github/workflows/forsight-release.yml`
 does the rest: it checks that tag out, cross-compiles every
 `RELEASE_TARGETS` entry via `make release`, and publishes a GitHub Release
 with the resulting `dist/*.tar.gz` archives attached.
+
+`make release` also writes `dist/sha256sums.txt` over those archives, and
+`install.sh` now downloads and verifies against it before extracting
+anything — so that file has to be attached to the release alongside the
+archives, not just built alongside them. See "For Marc" below.
 
 ```bash
 git tag forsight-v1.0.0
@@ -385,8 +410,18 @@ broken), do exactly what it does:
 
 ```bash
 make release VERSION=v1.0.0
-gh release create forsight-v1.0.0 dist/*.tar.gz --title "forsight v1.0.0"
+gh release create forsight-v1.0.0 dist/*.tar.gz dist/sha256sums.txt --title "forsight v1.0.0"
 ```
+
+**For Marc:** `.github/workflows/forsight-release.yml`'s "Create or update
+the GitHub Release" step currently attaches only `dist/*.tar.gz`; it needs
+`dist/sha256sums.txt` added to both the `gh release upload` and
+`gh release create` argument lists (this file is out of scope for automated
+edits — see CLAUDE.md). Until that lands, `install.sh` will fail closed with
+"could not download sha256sums.txt" against any release cut through the
+workflow, since the file it now requires was never uploaded — the local
+`make release` path above already produces and uploads it correctly in the
+meantime.
 
 ## Scope: what's real vs. what's roadmap
 
@@ -410,7 +445,11 @@ Releasing above. Verified by tracing it step-for-step against
 `forsight/Makefile`'s `release` target (same cross-compile targets, same
 `forsight_<os>_<arch>.tar.gz` naming) and by running that target's
 cross-compile+archive loop locally for all four `RELEASE_TARGETS`, including
-extracting and running the resulting binary.
+extracting and running the resulting binary. `dist/sha256sums.txt` and
+`install.sh`'s verification of it against a real release are covered by
+`install_test.bats` (`make test-install`); the release workflow itself still
+needs the one-line change noted under "For Marc" above before it uploads
+that file.
 
 **Deliberately not built yet, flagged rather than silently skipped:**
 
