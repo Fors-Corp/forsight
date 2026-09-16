@@ -13,7 +13,7 @@ func TestBearerAuth_NoTokenLeavesRoutesOpen(t *testing.T) {
 	inner := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil).Handler()
 	handler := BearerAuth("", inner)
 
-	for _, path := range []string{"/healthz", "/api/v1/metrics", "/api/v1/logs"} {
+	for _, path := range []string{"/healthz", "/readyz", "/api/v1/metrics", "/api/v1/logs"} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code == http.StatusUnauthorized {
@@ -30,6 +30,23 @@ func TestBearerAuth_HealthzOpenWithoutHeader(t *testing.T) {
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /healthz status = %d, want 200", rec.Code)
+	}
+}
+
+func TestBearerAuth_ReadyzOpenWithoutHeader(t *testing.T) {
+	inner := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil).Handler()
+	handler := BearerAuth("secret", inner)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /readyz status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	// The browser asks for this on its own; a 401 there is only console noise.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /favicon.ico status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 

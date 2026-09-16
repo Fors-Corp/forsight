@@ -102,6 +102,18 @@ function stateVariant(state: string): BadgeProps["variant"] {
   }
 }
 
+/** Warning at half of mlaas's own retrain.drift_threshold, critical at or
+ * above it — the same value mlaas retrains on, in Insight.Severity's
+ * vocabulary, not a threshold this dashboard invents. A threshold of 0
+ * (an older agent, or a classifier mlaas has not defaulted yet) never
+ * reads as critical from a stray positive PSI. */
+function driftVariant(max: number, threshold: number): BadgeProps["variant"] {
+  if (threshold <= 0) return "neutral";
+  if (max >= threshold) return "danger";
+  if (max >= threshold / 2) return "warning";
+  return "success";
+}
+
 function jobVariant(status: string): BadgeProps["variant"] {
   switch (status) {
     // mlaas's own terminal success status is "done" — "succeeded" is kept
@@ -419,7 +431,24 @@ function MlaasModelsCard({ status }: { status: MlaasStatus | null }) {
                             : `${formatScore(model.live)} over ${model.liveWindow} labels`}
                         </TableCell>
                         <TableCell>{model.newLabels}</TableCell>
-                        <TableCell>{model.driftMax.toFixed(2)}</TableCell>
+                        <TableCell>
+                          {model.driftMax === undefined || model.driftMax === null ? (
+                            <Text as="span" size="xs" tone="muted">
+                              not enough data yet
+                            </Text>
+                          ) : (
+                            <div className="flex flex-col gap-1">
+                              <Badge variant={driftVariant(model.driftMax, model.driftThreshold)}>
+                                {model.driftMax.toFixed(2)} of {model.driftThreshold.toFixed(2)}
+                              </Badge>
+                              {model.driftFeature ? (
+                                <Text as="span" size="xs" tone="muted">
+                                  {model.driftFeature}
+                                </Text>
+                              ) : null}
+                            </div>
+                          )}
+                        </TableCell>
                         <TableCell>{model.predictionsLogged}</TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-2">

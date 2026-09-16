@@ -290,6 +290,55 @@ gates `Ready` on `minSamples`, the same bar the z-score it replaced used.
 
 **Component.** **TraceWaterfall**, unchanged.
 
+### Culprit ranking
+
+**Job.** Rank the processes most likely contributing to an open host CPU
+anomaly.
+
+`culprit` used to sort candidates by raw `process.cpu.percent`, keep the top
+three, and drop anything under a fixed 20% floor. That drops a process that
+jumped from 2% to 18% during the very spike it is supposed to explain, in
+favour of one that always idles at 22% and is doing nothing unusual at all —
+raw usage cannot tell "always like this" from "just like this".
+
+**Reads are free.** The Detector already keeps a rolling Welford
+mean/variance for every `process.cpu.percent` and `process.memory.rss_bytes`
+series, as a side effect of running its own anomaly check on them
+(`Detector.SeriesBaseline`). Once a process's own series has `minSamples` of
+history, how far it has risen above its own baseline — in that series' own
+standard deviations, signed — is already sitting there to ask for.
+
+**Method.** For each process, take whichever of cpu or rss has risen further
+above its own baseline. A rise of at least 1.5σ — comfortably under the 3σ
+the Detector itself uses to open a warning, since this ranks a handful of
+candidates against each other rather than deciding whether to alert at all —
+makes it a candidate, ranked by that σ. A process whose own baseline says it
+is at or below normal is excluded outright, never re-scored by its raw
+value: that is precisely the "always sits at 22%" case the raw-CPU rule used
+to promote over the one that actually moved. Only a process too new for
+either series to have `minSamples` of history falls back to the original
+rule — raw CPU over a 20% floor — which is why that rule is still in the
+code, named as `Fallback` rather than replaced.
+
+**Measured.** There is no label yet for "this process actually caused the
+spike" — see the next paragraph — so the Card reports `Unmeasured`, and
+`Ready` just means at least one ranking has used a real baseline rather than
+the floor.
+
+**The learned score is the follow-up, not this.** A jump that merely
+preceded the host anomaly is a proxy for causation, not causation itself:
+the process that jumps because it is causing the spike and the process that
+jumps because the spike is starving it of CPU look identical from here. The
+self-supervised label this needs — "this process's own series fell back
+toward normal as the host anomaly closed" — has to be watched for a while
+before a logistic weight over the same features (cpu deviation, rss
+deviation) can be trained and graded against the rule above, the same way
+the paging model is graded against the volume rule. Until that label exists,
+the rule above is the whole model, and the Card says so rather than
+borrowing a number from a different job.
+
+**Component.** **Table** (process rows), unchanged.
+
 ### Models page
 
 The cards were already served over the API; what shipped is a page for them.

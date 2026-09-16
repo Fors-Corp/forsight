@@ -278,6 +278,18 @@ func scanNewestFirst[T any](txn *badger.Txn, typ byte, filterValue string, since
 	return out, nil
 }
 
+// Ping reports whether the underlying Badger database is still open and
+// answering, by running the cheapest possible transaction: a no-op read.
+// db.View checks db.IsClosed() before doing anything else (see Badger's
+// txn.go), so this fails fast with badger.ErrDBClosed after Close, without
+// this store needing to track that state itself.
+func (s *BadgerStore) Ping(_ context.Context) error {
+	if err := s.db.View(func(*badger.Txn) error { return nil }); err != nil {
+		return fmt.Errorf("ping badger store: %w", err)
+	}
+	return nil
+}
+
 func (s *BadgerStore) WriteMetrics(_ context.Context, metrics []model.Metric) error {
 	if len(metrics) == 0 {
 		return nil

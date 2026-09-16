@@ -97,3 +97,60 @@ func TestRegistry_FailingCollectorDoesNotBlockOthers(t *testing.T) {
 		t.Errorf("sink has %d metrics, want exactly one per good-collector call (%d)", sink.count(), good.callCount())
 	}
 }
+
+// TestRegistry_StatusesReportsCollectorsBeforeAnyTick proves Statuses is
+// populated from NewRegistry's collector list, not lazily on first tick —
+// /readyz (see internal/api's handleReadyz) must be able to name every
+// registered collector even if it's called before Run has ticked once.
+func TestRegistry_StatusesReportsCollectorsBeforeAnyTick(t *testing.T) {
+	registry := NewRegistry(&recordingSink{}, time.Hour, slog.New(slog.DiscardHandler),
+		&countingCollector{name: "host"}, &countingCollector{name: "docker"})
+
+	statuses := registry.Statuses()
+	if len(statuses) != 2 {
+		t.Fatalf("Statuses() returned %d entries, want 2", len(statuses))
+	}
+	if statuses[0].Name != "host" || statuses[1].Name != "docker" {
+		t.Errorf("Statuses() = %+v, want registration order (host, docker)", statuses)
+	}
+	for _, s := range statuses {
+		if s.LastError != "" {
+			t.Errorf("%s: LastError = %q before any tick, want empty", s.Name, s.LastError)
+		}
+		if !s.LastRunAt.IsZero() {
+			t.Errorf("%s: LastRunAt = %v before any tick, want zero", s.Name, s.LastRunAt)
+		}
+	}
+}
+
+// TestRegistry_StatusesReportsCollectorsLastError is the regression test for
+// what /readyz actually depends on: a collector that fails keeps its error
+// visible in Statuses (rather than the map entry never being set, or a later
+// success on another collector clobbering it), and a collector that
+// succeeds reports no error.
+func TestRegistry_StatusesReportsCollectorsLastError(t *testing.T) {
+	failing := &countingCollector{name: "failing", fail: true}
+	good := &countingCollector{name: "good"}
+	registry := NewRegistry(&recordingSink{}, 20*time.Millisecond, slog.New(slog.DiscardHandler), failing, good)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	registry.Run(ctx)
+
+	statuses := registry.Statuses()
+	if len(statuses) != 2 {
+		t.Fatalf("Statuses() returned %d entries, want 2", len(statuses))
+	}
+	if statuses[0].LastError == "" {
+		t.Error("failing collector's LastError is empty, want the Collect error")
+	}
+	if statuses[0].LastRunAt.IsZero() {
+		t.Error("failing collector's LastRunAt is zero after ticking, want a real time")
+	}
+	if statuses[1].LastError != "" {
+		t.Errorf("good collector's LastError = %q, want empty", statuses[1].LastError)
+	}
+	if statuses[1].LastRunAt.IsZero() {
+		t.Error("good collector's LastRunAt is zero after ticking, want a real time")
+	}
+}

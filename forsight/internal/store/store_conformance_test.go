@@ -312,4 +312,11 @@ func runStoreConformanceTests(t *testing.T, newStore func(t *testing.T) Store) {
 			t.Fatalf("QueryLogs with Before = %+v, want only entry a", got)
 		}
 	})
+
+	t.Run("ping succeeds on a freshly built store", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.Ping(context.Background()); err != nil {
+			t.Errorf("Ping: %v, want nil on a store nothing has touched yet", err)
+		}
+	})
 }

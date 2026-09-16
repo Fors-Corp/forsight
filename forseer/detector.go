@@ -149,6 +149,28 @@ func (d *Detector) expireLocked(now time.Time) {
 	}
 }
 
+// SeriesBaseline returns the rolling mean and standard deviation Observe has
+// built for one exact series (name plus labels) — the same Welford
+// statistics the anomaly check itself scores z against — and whether it has
+// minSamples of history to trust them. ready is false for a series that is
+// too new, or one whose variance is not yet positive, exactly as
+// observeOneLocked treats those cases: a caller ranking by "how far from
+// baseline" gets no answer rather than a division by zero.
+func (d *Detector) SeriesBaseline(name string, labels map[string]string) (mean, stddev float64, ready bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	key := seasonalKey(name, labels, d.now().Hour())
+	s := d.series[key]
+	if s == nil || s.n < minSamples {
+		return 0, 0, false
+	}
+	variance := s.m2 / float64(s.n-1)
+	if variance <= 0 {
+		return 0, 0, false
+	}
+	return s.mean, math.Sqrt(variance), true
+}
+
 // Insights returns a copy of the currently open findings, critical first.
 func (d *Detector) Insights() []Insight {
 	d.mu.Lock()

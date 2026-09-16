@@ -188,6 +188,9 @@ func TestClient_ListModelsDecodesChampionAndHoldout(t *testing.T) {
 	if cpu.Spec.Retrain.ScheduleMinutes != 30 || cpu.Spec.Task != "forecast" {
 		t.Errorf("spec not decoded: %+v", cpu.Spec)
 	}
+	if cpu.Spec.Retrain.DriftThreshold != 0.2 {
+		t.Errorf("drift threshold = %v, want 0.2 (the value mlaas retrains on)", cpu.Spec.Retrain.DriftThreshold)
+	}
 	sev := ms[1]
 	if sev.Champion != nil || sev.ChampionVersion != nil || !reflect.DeepEqual(sev.Classes, []string{"error", "info"}) {
 		t.Errorf("classifier decoded as %+v", sev)
@@ -212,7 +215,7 @@ func TestClient_GetModelDecodesModelOnly(t *testing.T) {
 }
 
 func TestClient_GetHealthDecodesLastCheck(t *testing.T) {
-	c, got := record(t, 200, `{"model":"forsight-log-severity","metric":"accuracy","last_check":{"checked_at":"2026-09-15T10:10:00Z","champion":2,"new_labels":12,"window_n":40,"window_metric":0.85,"holdout_metric":0.9,"drift_n":40,"drift":{"message":0.01},"drift_max":0.01,"note":"ok"},"last_retrain_at":"2026-09-15T09:00:00Z","champion":{"id":5,"model":"forsight-log-severity","number":2,"artifact_dir":"x","status":"champion","metrics":{"holdout":{"accuracy":0.9}},"reason":"","trained_at":"2026-09-15T09:00:00Z"},"active_job":true,"predictions_logged":123}`)
+	c, got := record(t, 200, `{"model":"forsight-log-severity","metric":"accuracy","last_check":{"checked_at":"2026-09-15T10:10:00Z","champion":2,"new_labels":12,"window_n":40,"window_metric":0.85,"holdout_metric":0.9,"drift_n":40,"drift":{"message":0.01},"drift_feature":"message","drift_max":0.01,"note":"ok"},"last_retrain_at":"2026-09-15T09:00:00Z","champion":{"id":5,"model":"forsight-log-severity","number":2,"artifact_dir":"x","status":"champion","metrics":{"holdout":{"accuracy":0.9}},"reason":"","trained_at":"2026-09-15T09:00:00Z"},"active_job":true,"predictions_logged":123}`)
 	h, err := c.GetHealth(context.Background(), "forsight-log-severity")
 	if err != nil {
 		t.Fatal(err)
@@ -221,14 +224,37 @@ func TestClient_GetHealthDecodesLastCheck(t *testing.T) {
 		t.Errorf("path = %s", got.path)
 	}
 	chk := h.check()
-	if chk.Champion != 2 || chk.NewLabels != 12 || chk.WindowN != 40 || chk.WindowMetric == nil || *chk.WindowMetric != 0.85 || chk.HoldoutMetric == nil || *chk.HoldoutMetric != 0.9 || chk.DriftMax != 0.01 || chk.Note != "ok" {
+	if chk.Champion != 2 || chk.NewLabels != 12 || chk.WindowN != 40 || chk.WindowMetric == nil || *chk.WindowMetric != 0.85 || chk.HoldoutMetric == nil || *chk.HoldoutMetric != 0.9 || chk.Note != "ok" {
 		t.Errorf("last_check decoded as %+v", chk)
+	}
+	// Drift is measured here (drift is non-nil), so DriftMax/DriftFeature
+	// are trustworthy — the "0 means unmeasured" trap this item exists to
+	// avoid is exercised below, on a check with no drift key at all.
+	if chk.Drift == nil || chk.Drift["message"] != 0.01 || chk.DriftFeature != "message" || chk.DriftMax != 0.01 {
+		t.Errorf("drift decoded as %+v", chk)
 	}
 	if !h.ActiveJob || h.PredictionsLogged != 123 || h.Champion == nil || h.Champion.Number != 2 || h.LastRetrainAt == nil {
 		t.Errorf("health decoded as %+v", h)
 	}
-	if (&wireHealth{LastCheck: json.RawMessage("null")}).check() != (wireCheck{}) {
-		t.Error("a null last_check did not decode to the zero check")
+	if empty := (&wireHealth{LastCheck: json.RawMessage("null")}).check(); empty.Champion != 0 || empty.NewLabels != 0 || empty.Drift != nil || empty.DriftMax != 0 || empty.Note != "" {
+		t.Errorf("a null last_check did not decode to the zero check, got %+v", empty)
+	}
+}
+
+// TestClient_GetHealthDriftAbsentIsNilNotZero: a check with no "drift" key
+// at all (too few recent predictions for mlaas to compare, loop.go's
+// MinWindow gate) must decode to a nil Drift even though drift_max is
+// still the wire's ever-present 0 — the exact "flattering zero" MODELS.md
+// says a card must never show, so callers must gate on Drift, not DriftMax.
+func TestClient_GetHealthDriftAbsentIsNilNotZero(t *testing.T) {
+	c, _ := record(t, 200, `{"model":"forsight-log-severity","metric":"accuracy","last_check":{"checked_at":"2026-09-15T10:10:00Z","champion":2,"new_labels":3,"window_n":0,"drift_n":2,"drift_max":0},"last_retrain_at":null,"active_job":false,"predictions_logged":5}`)
+	h, err := c.GetHealth(context.Background(), "forsight-log-severity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chk := h.check()
+	if chk.Drift != nil || chk.DriftFeature != "" || chk.DriftMax != 0 {
+		t.Errorf("no-drift check decoded as %+v, want a nil Drift", chk)
 	}
 }
 

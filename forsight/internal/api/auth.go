@@ -7,18 +7,22 @@ import (
 )
 
 // isPublicPath reports whether a request can be served with no bearer token
-// at all: GET/HEAD /healthz, and GET/HEAD on the dashboard's static shell
-// ("/" and everything under "/assets/"). The shell is a public build — no
-// agent data lives in index.html or its bundled JS/CSS, only the React app
-// that then calls the protected /api/v1/* routes with the token the user
-// types into it (see fetchWithAuth in forsight/web/src/api.ts). Without this
-// exemption, --auth-token also locks the browser out of the one page that
-// could ever prompt for the token.
+// at all: GET/HEAD on the probes (/healthz, and /readyz, which a kubelet hits
+// with no headers at all, so requiring a token there would make every pod
+// permanently unready the moment --auth-token is set), on the browser's own
+// /favicon.ico request, and on the dashboard's static shell ("/" and
+// everything under "/assets/"). The shell is a public build — no agent data
+// lives in index.html or its bundled JS/CSS, only the React app that then
+// calls the protected /api/v1/* routes with the token the user types into it
+// (see fetchWithAuth in forsight/web/src/api.ts). Without this exemption,
+// --auth-token also locks the browser out of the one page that could ever
+// prompt for the token.
 func isPublicPath(method, path string) bool {
 	if method != http.MethodGet && method != http.MethodHead {
 		return false
 	}
-	if path == "/healthz" || path == "/" {
+	switch path {
+	case "/healthz", "/readyz", "/favicon.ico", "/":
 		return true
 	}
 	return strings.HasPrefix(path, "/assets/")
