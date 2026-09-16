@@ -40,14 +40,16 @@ jobs:
     name: build archives and publish the GitHub Release
     runs-on: ubuntu-latest
     # contents: write — create the GitHub Release and upload its assets.
-    # packages: read — `make release` depends on `build-web` (see
-    # forsight/Makefile), which builds forsight/web against the pinned,
-    # published @marcfs31/forsight from GitHub Packages
-    # (forsight/web/.npmrc); npm ci/install against that registry 401s
-    # without it. Same scope, same reason, as forsight-ci.yml's "web" job.
+    # packages: write — two uses. Reading: `make release` depends on
+    # `build-web` (see forsight/Makefile), which builds forsight/web against
+    # the pinned, published @marcfs31/forsight from GitHub Packages
+    # (forsight/web/.npmrc); npm ci against that registry 401s without it,
+    # same reason as forsight-ci.yml's "web" job. Writing: the image step
+    # below pushes ghcr.io/marcfs31/forsight, which is the same GitHub
+    # Packages scope. write implies read.
     permissions:
       contents: write
-      packages: read
+      packages: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -89,21 +91,12 @@ jobs:
           # "forsight-" prefix to get it.
           echo "version=${TAG#forsight-}" >> "$GITHUB_OUTPUT"
 
-      # forsight/web/package-lock.json still resolves @marcfs31/forsight as
-      # `file:../..` — it predates #53's move to consuming the published
-      # package from GitHub Packages, and was never regenerated because that
-      # needs packages:read auth nobody had locally at the time. `npm ci`
-      # (what `make build-web` runs) refuses to reconcile that against
-      # package.json's `^3.0.0` registry pin. forsight-ci.yml's "web" job
-      # already carries the same workaround, with the same comment; mirror
-      # it here so `make release` gets a lockfile npm ci can actually use.
-      - name: Refresh forsight/web's lockfile against the published design system
-        working-directory: forsight/web
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          rm -f package-lock.json
-          npm install --no-fund --no-audit
+      # No lockfile refresh here: forsight/web/package-lock.json resolves
+      # @marcfs31/forsight from the registry (since #76), and `make release`
+      # depends on `build-web`, whose `npm ci` reproduces that lockfile
+      # exactly, sourcing its registry credential from NODE_AUTH_TOKEN
+      # (forsight/Makefile, since #106). Same shape as forsight-ci.yml's
+      # "web" job, so a release build is the build CI already verified.
 
       # Cross-compiles every RELEASE_TARGETS entry and tars each one up as
       # dist/forsight_<os>_<arch>.tar.gz — exactly the sequence
@@ -133,10 +126,35 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          # dist/sha256sums.txt is what install.sh verifies each archive
+          # against before extracting (since #101); a release without it
+          # makes `curl | sh` refuse to install rather than install unverified.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.tar.gz --clobber
+            gh release upload "$TAG" dist/*.tar.gz dist/sha256sums.txt --clobber
           else
-            gh release create "$TAG" dist/*.tar.gz \
+            gh release create "$TAG" dist/*.tar.gz dist/sha256sums.txt \
               --title "forsight $VERSION" \
               --generate-notes
           fi
+
+      # The image the DaemonSet runs (forsight/deploy/k8s/daemonset.yaml
+      # pulls ghcr.io/marcfs31/forsight:latest). Built from the REPO ROOT
+      # with -f forsight/Dockerfile, because forsight/go.mod replaces the
+      # forseer module with the sibling ../forseer directory, so the build
+      # context has to hold both. Plain `docker login` with GITHUB_TOKEN,
+      # the same "no third-party Action for a one-liner" reasoning as the
+      # gh step above; GITHUB_TOKEN can push to this repo's own ghcr.io
+      # namespace with packages: write. Tagged with the release version and
+      # as latest, so a pinned manifest and the shipped one both resolve.
+      - name: Build and push the container image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ghcr.io/${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker build -f forsight/Dockerfile \
+            -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:latest"

@@ -16,9 +16,8 @@
 #
 #   docker build -f forsight/Dockerfile -t forsight .
 #
-# .github/workflows/forsight-release.yml does not yet run this — publishing
-# to ghcr.io needs a packages:write step Marc adds separately (see
-# ROADMAP.md item 24 and this PR's "For Marc" section).
+# .github/workflows/forsight-release.yml builds and pushes this on every
+# forsight-vX.Y.Z tag, as ghcr.io/marcfs31/forsight:<version> and :latest.
 
 FROM golang:1.27-alpine AS builder
 WORKDIR /src
