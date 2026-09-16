@@ -238,10 +238,14 @@ check("tailwind.css and tailwind-preset expose the same color utilities", () => 
   return true;
 });
 
-// Named-import tree-shaking: a consumer `import { Button }` must not pull the
-// entire barrel. Before the PURE/displayName fix this sat near the full
-// dist/index.js size-limit budget; after, it must land dramatically below.
-check("named-import tree-shaking keeps Button far below the full barrel", () => {
+// bundleNamedImports builds `import { ...names } from dist/index.js` the way
+// a consumer's bundler would — react external, everything else resolved from
+// node_modules so esbuild can read each package's `sideEffects` and drop what
+// nothing reaches. (Marking @radix-ui/* external instead would force esbuild
+// to keep every `import "@radix-ui/..."` for possible side effects, and even
+// a bare Button would carry nineteen Radix specifiers.) The metafile is the
+// exact record of which node_modules packages contributed bytes.
+function bundleNamedImports(names) {
   const esbuild = require("esbuild");
   const { brotliCompressSync } = require("node:zlib");
   const { mkdtempSync, writeFileSync: write, rmSync } = require("node:fs");
@@ -250,9 +254,10 @@ check("named-import tree-shaking keeps Button far below the full barrel", () => 
   const dir = mkdtempSync(join(tmpdir(), "forsight-treeshake-"));
   try {
     const entry = join(dir, "entry.mjs");
+    const list = names.join(", ");
     write(
       entry,
-      `import { Button } from ${JSON.stringify(path.resolve(distIndex))};\nconsole.log(Button);\n`
+      `import { ${list} } from ${JSON.stringify(path.resolve(distIndex))};\nconsole.log(${list});\n`
     );
     const result = esbuild.buildSync({
       entryPoints: [entry],
@@ -264,31 +269,90 @@ check("named-import tree-shaking keeps Button far below the full barrel", () => 
       logLevel: "silent",
       treeShaking: true,
       minify: true,
+      metafile: true,
     });
     const buf = result.outputFiles[0].contents;
-    const brotli = brotliCompressSync(buf).length;
-    const fullBrotli = brotliCompressSync(readFileSync(distIndex)).length;
-    // Hard ceiling: must be well under half the full barrel and under 25 KB.
-    // Pre-fix was ~75–110 KB brotli for this same import.
-    if (brotli >= fullBrotli * 0.5) {
-      throw new Error(`Button import brotli ${brotli} is not << full barrel ${fullBrotli}`);
-    }
-    if (brotli > 25_000) {
-      throw new Error(`Button import brotli ${brotli} exceeds 25 KB ceiling`);
-    }
-    const text = new TextDecoder().decode(buf);
-    for (const leaked of ["AlertDialog", "BarChart", "CalendarHeatmap", "CommandInput"]) {
-      if (text.includes(leaked)) {
-        throw new Error(`tree-shaken Button bundle still contains ${leaked}`);
-      }
-    }
-    console.log(
-      `    (Button named-import brotli: ${brotli} B; full index.js brotli: ${fullBrotli} B)`
-    );
-    return true;
+    const output = Object.values(result.metafile.outputs)[0];
+    const bundledPackages = [
+      ...new Set(
+        Object.keys(output.inputs)
+          .map((p) => p.match(/node_modules\/((?:@[^/]+\/)?[^/]+)/)?.[1])
+          .filter(Boolean)
+      ),
+    ].sort();
+    return {
+      text: new TextDecoder().decode(buf),
+      brotli: brotliCompressSync(buf).length,
+      bundledPackages,
+    };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+const fullBarrelBrotli = () => {
+  const { brotliCompressSync } = require("node:zlib");
+  return brotliCompressSync(readFileSync(distIndex)).length;
+};
+
+// Named-import tree-shaking: a consumer `import { Button }` must not pull the
+// entire barrel. Before the PURE/displayName fix this sat near the full
+// dist/index.js size-limit budget; after, it must land dramatically below.
+check("named-import tree-shaking keeps Button far below the full barrel", () => {
+  const { text, brotli } = bundleNamedImports(["Button"]);
+  const fullBrotli = fullBarrelBrotli();
+  // Hard ceiling: must be well under half the full barrel and under 25 KB.
+  // Pre-fix was ~75–110 KB brotli for this same import.
+  if (brotli >= fullBrotli * 0.5) {
+    throw new Error(`Button import brotli ${brotli} is not << full barrel ${fullBrotli}`);
+  }
+  if (brotli > 25_000) {
+    throw new Error(`Button import brotli ${brotli} exceeds 25 KB ceiling`);
+  }
+  for (const leaked of ["AlertDialog", "BarChart", "CalendarHeatmap", "CommandInput"]) {
+    if (text.includes(leaked)) {
+      throw new Error(`tree-shaken Button bundle still contains ${leaked}`);
+    }
+  }
+  console.log(
+    `    (Button named-import brotli: ${brotli} B; full index.js brotli: ${fullBrotli} B)`
+  );
+  return true;
+});
+
+// The observability dashboard (forsight/web) draws with exactly these eight
+// and nothing that composes a Radix primitive. Its embedded bundle is the
+// artifact the tree-shaking win was measured on, so this is the path that
+// must stay light: no @radix-ui package may contribute a byte, no Radix
+// marker (data-radix-*, the radix- id prefix) may survive into the output,
+// and the whole set stays under a ceiling with headroom over today's size.
+check("the dashboard's chart path bundles no Radix", () => {
+  const chartPath = [
+    "ChartFrame",
+    "LineChart",
+    "BarChart",
+    "ComboChart",
+    "Sparkline",
+    "StatCard",
+    "StatusDot",
+    "Table",
+  ];
+  const { text, brotli, bundledPackages } = bundleNamedImports(chartPath);
+  const radix = bundledPackages.filter((name) => name.startsWith("@radix-ui/"));
+  if (radix.length > 0) {
+    throw new Error(`chart path bundles Radix: ${radix.join(", ")}`);
+  }
+  if (/radix/i.test(text)) {
+    throw new Error("chart path output still contains a Radix identifier");
+  }
+  // 14.5 KB brotli at 4.0.1; the ceiling leaves a third of headroom.
+  if (brotli > 20_000) {
+    throw new Error(`chart path brotli ${brotli} exceeds 20 KB ceiling`);
+  }
+  console.log(
+    `    (chart path brotli: ${brotli} B; bundled packages: ${bundledPackages.join(", ")})`
+  );
+  return true;
 });
 
 check("dist keeps named forwardRef render functions for DevTools", () => {
