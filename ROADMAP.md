@@ -862,3 +862,9 @@ are the judges' composites.
   test** (quality-dx-1, quality-dx-9, dashboard-ux-7, design-system-2, -3, -5,
   -6, agent-collection-10, mlaas-depth-9, -10; all at or below 3.18). Low
   value, wrong shape, or no consumer. The judges' notes stand.
+
+## Shipped after the roadmap
+
+- **LineChart area fill respects dashedFrom** — a series with both `area` and
+  `dashedFrom` now fills the projected run lighter and hatched instead of as
+  a second solid measurement, 2026-09-16, #121.
