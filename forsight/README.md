@@ -187,6 +187,19 @@ Badger's per-entry TTL the same way it governs MemoryStore's pruning.
 `internal/store/badger.go`'s doc comment covers the key encoding and why it's
 shaped the way it is.
 
+`--store badger` also gives Forseer itself somewhere to persist what it has
+learned: `<data-dir>/forseer.json`, one JSON document written on shutdown and
+read back at startup, before the severity model's fallback wires up. It
+carries each model's own trained state (naive-Bayes counts, per-series
+thresholds, Holt's forecast, and so on) so a restart doesn't re-earn
+`severityMinTrained`/`thresholdMinSamples`/every other model's own warm-up
+from zero; each model's prequential grading window still resets, so
+readiness against a fallback is always re-earned on live data. `--store
+memory` has no data dir, so Forseer stays cold on every restart, the same as
+its metrics/logs/spans. See
+[`forseer/MODELS.md`](../forseer/MODELS.md#persisted-state) for what
+persists model by model and what doesn't.
+
 ### The dashboard under `--auth-token`
 
 `--auth-token` protects every route except the dashboard's static shell

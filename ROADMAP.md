@@ -754,7 +754,7 @@ trio.
 
 ### 25. Persist what has been learned
 
-- **Area** forseer · **Effort** L · **Score** 3.47
+- **Area** forseer · **Effort** L · **Score** 3.47 · **Shipped** 2026-09-16, `Snapshot`/`Restore` on `Model` in `forseer/learn.go`
 
 **Why.** `forseer/engine.go:37-54` constructs every model cold and restores
 nothing, so `severityMinTrained` and `thresholdMinSamples` are re-earned on
