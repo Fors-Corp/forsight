@@ -170,7 +170,7 @@ func (c *Collector) tlsConfig(hostname string, cert *tlsCapture) *tls.Config {
 		// Go's own verification is skipped so an expired or untrusted
 		// certificate never aborts the handshake; verifyChain below runs the
 		// same check by hand purely to report probe.tls.valid.
-		InsecureSkipVerify: true, //nolint:gosec // verified manually in VerifyConnection
+		InsecureSkipVerify: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
 				return nil
