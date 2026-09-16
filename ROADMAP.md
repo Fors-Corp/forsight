@@ -867,4 +867,10 @@ are the judges' composites.
 
 - **forsight/CHANGELOG.md and make help** — added a Keep a Changelog `forsight/CHANGELOG.md` (1.1.0 Unreleased, derived from every commit since `forsight-v1.0.0`, plus 1.0.0) and a self-generating `make help`/default-goal target sourced from `##` comments above each Makefile target, 2026-09-16, #119.
 
+- **Fold the chart family into the DashboardRTL story** — DashboardRTL
+  already composed every chart Dashboard does, so the actual work was
+  fixing three RTL rendering bugs the story's new geometry checks caught
+  (axis labels overlapping the plot, the keyboard-cursor tooltip covering
+  its own point, TraceWaterfall reading a trace backwards), 2026-09-16, #122.
+
 - **Deterministic incident grouping on the Timeline** — forseer-models-9's window-plus-shared-`Related` substitute for the label-less grouping model, folding insights within five minutes of each other into one incident event when they share a Related value or a Source, 2026-09-16, #118.
