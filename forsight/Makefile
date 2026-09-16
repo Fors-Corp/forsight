@@ -53,7 +53,8 @@ clean:
 # for every target in RELEASE_TARGETS and tars each one up as
 # dist/forsight_<os>_<arch>.tar.gz. Upload the result with:
 #   gh release create forsight-$(VERSION) dist/*.tar.gz
-# (No automated release workflow yet — see forsight/README.md's roadmap note.)
+# `.github/workflows/forsight-release.yml` runs exactly this on every
+# forsight-vX.Y.Z tag push — see forsight/README.md, Releasing.
 release: build-web
 	@if [ "$(VERSION)" = "dev" ]; then \
 		echo "release: pass an explicit VERSION, e.g. make release VERSION=v1.0.1" >&2; \

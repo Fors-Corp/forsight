@@ -92,9 +92,8 @@ Seasonal (hour-of-day) baselines, the NL-filter → FilterBar facets, incident
 stitching onto Timeline, and trace critical-path → TraceWaterfall are all
 built — see the detector table above (`seasonal baseline`, `NL filter`,
 `incident stitch`, `critical path` rows). `Engine.Budget()` reads the current
-error-log burn against a 1% SLO for **ErrorBudget**; what is NOT built yet is
-the *forecast* — projecting that burn forward, not just reading it now (see
-the table below).
+error-log burn against a 1% SLO for **ErrorBudget**, and the forecast that
+projects that burn forward is built too — see [MODELS.md](MODELS.md).
 
 ## Next (stay in this folder)
 
