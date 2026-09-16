@@ -61,7 +61,7 @@ exists for that shape of answer. Forseer never invents a new widget.
 | `anomaly` | Welford online mean/variance, 3σ / 5σ | The baseline is the series itself, not a hardcoded CPU% | **AlertList** (severity vocabulary is identical) |
 | `changepoint` | CUSUM on the same z-scores | Catches a *shift* that a single spike detector misses (disk filling, leak) | **Timeline** |
 | `log_burst` | Drain-lite templates (UUID/IP/number → `<*>`) + short-window volume | Turns a firehose into "this pattern just exploded" | **BarList** (ranked templates) + **LogStream** (raw lines) |
-| `slow_span` | Per `(service, span name)` duration z-score | "This endpoint is slow *for itself*", not vs a global 200ms SLO | **TraceWaterfall** (related trace id) |
+| `slow_span` | Per `(service, span name)` P² p50/p99, opened on a run past p99 | "This endpoint is slow *for itself*", not vs a global 200ms SLO, and not a mean/sigma test on a long-tailed shape. See [MODELS.md](MODELS.md) | **TraceWaterfall** (related trace id) |
 | `culprit` | Join a `host.cpu` anomaly with `process.cpu.percent` | Answers *which process* when the host is hot | **Table** (process rows) |
 | Grok narrative | SpaceXAI `grok-4.5` | Stitches the above into four sentences an on-call can read | **Card** + **Text** |
 | error-log budget | error/total vs 1% SLO | **ErrorBudget** |

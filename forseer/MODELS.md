@@ -249,6 +249,47 @@ it is ahead.
 is ready and by this score after — the card's title says which — with the
 burst's own severity on **AlertList**.
 
+### Per-endpoint latency shape
+
+**Job.** Decide what slow means for one endpoint.
+
+`slow_span` used to compare an endpoint to itself with a mean/three-sigma
+z-score, which assumes a shape latency does not have: it is long-tailed, so
+the mean sits above the median and the standard deviation is set by the very
+tail the check is supposed to be judging. "Slower than this endpoint's own
+p99" is a sentence an on-call can act on; "5.2 sigma out" is not, unless they
+already know the distribution — which for latency, nobody does.
+
+**Method.** Two P² ("piecewise-parabolic") quantile estimators — Jain &
+Chlamtac, 1985 — per `(service, span name)`: five markers each, updated in
+O(1) time and space with no buffered sample and no assumption about the
+shape of the distribution. One targets the median, whose five markers are
+min/q1/median/q3/max — a box plot, for free, for a later per-endpoint spread
+view. The other targets p99, and a span past it is what opens `slow_span`
+now, replacing the sigma test.
+
+p99 fires on about one span in a hundred *by construction*, so opening still
+waits for a run of `spanExceedRun` (3) consecutive exceedances — an alert
+budget in the spirit of the learned thresholds above, sized without standing
+up a second model to learn it. Closing is immediate on the first span back
+in line; the budget only guards the false-positive cost of opening.
+
+A CUSUM on the span's deviation from the median — scaled by the p50
+tracker's own interquartile spread, so it is a shape-free "how many spreads
+out" rather than a sigma — watches for a sustained shift and resets both
+estimators when it crosses the same `cusumK`/`cusumH` the Detector runs on
+its metric series. Spans never reach the Detector, so this is the same test
+wired up locally rather than shared; without it a deploy that doubles an
+endpoint's latency would get a p99 that inches toward the new normal one
+marker-move at a time and, in the meantime, an insight that never closes
+because it is being compared against a baseline that stopped being true.
+
+**Measured.** Nobody tags a trace with "yes, this really was slow", so there
+is no label to grade `slow_span` against — the Card reports `Unmeasured` and
+gates `Ready` on `minSamples`, the same bar the z-score it replaced used.
+
+**Component.** **TraceWaterfall**, unchanged.
+
 ### Models page
 
 The cards were already served over the API; what shipped is a page for them.
@@ -304,20 +345,7 @@ Ordered by what each one is worth against what it costs. Every row keeps the
 rules above: declared inputs, a readiness gate, a named fallback, and an
 existing Forsight component to land on.
 
-### 1. Per-endpoint latency shape
-
-**Job.** Decide what slow means for one endpoint.
-
-`slow_span` already compares an endpoint to itself, but with a z-score, which
-assumes a shape latency does not have — it is long-tailed, so the mean sits
-above the median and the tail is wide by nature. A streaming quantile per
-`(service, span name)` describes it properly, and "slower than this endpoint's
-own p99" is a sentence an on-call can act on.
-
-*Reads: durations for one (service, span name). Fallback: the current
-z-score. Component: **TraceWaterfall**.*
-
-### 2. Persist what has been learned
+### 1. Persist what has been learned
 
 A model that resets on restart has to re-earn its readiness every deploy,
 which on a frequently-restarted agent means it is never ready. The state is

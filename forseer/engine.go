@@ -115,7 +115,7 @@ func (e *Engine) ClassifySeverity(message string) (string, bool) {
 // inputs it reads, whether it is ready, and how it is scoring. This is the
 // only place the agent claims anything about what it has learned.
 func (e *Engine) Models() []Card {
-	models := []Model{e.severity, e.det.thresholds, e.forecast, e.paging}
+	models := []Model{e.severity, e.det.thresholds, e.forecast, e.paging, e.spans}
 	cards := make([]Card, 0, len(models))
 	for _, m := range models {
 		cards = append(cards, m.Card())
