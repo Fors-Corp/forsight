@@ -402,6 +402,7 @@ reported, not a reason to pull the pod from service.
 
 ```bash
 brew install go golangci-lint   # or your platform's equivalent
+make               # or `make help` — lists every target below with its description
 make build-go     # agent only — no Node needed, webdist/ falls back to a placeholder page
 make build-web    # dashboard only — rebuilds the design system, then web/, then embeds it
 make build        # both
@@ -420,7 +421,13 @@ matches what `web/` currently builds (`.github/workflows/forsight-ci.yml`'s
 
 ## Releasing
 
-Push a `forsight-vX.Y.Z` tag and `.github/workflows/forsight-release.yml`
+A release starts by updating `forsight/CHANGELOG.md`: move the entries
+under `## [Unreleased]` to a new `## [X.Y.Z] - YYYY-MM-DD` heading matching
+the tag you're about to cut, and commit that before tagging — the tag
+should never point at a commit whose changelog still says the version is
+unreleased.
+
+Then push a `forsight-vX.Y.Z` tag and `.github/workflows/forsight-release.yml`
 does the rest: it checks that tag out, cross-compiles every
 `RELEASE_TARGETS` entry via `make release`, and publishes a GitHub Release
 with the resulting `dist/*.tar.gz` archives attached.
@@ -428,7 +435,7 @@ with the resulting `dist/*.tar.gz` archives attached.
 `make release` also writes `dist/sha256sums.txt` over those archives, and
 `install.sh` now downloads and verifies against it before extracting
 anything — so that file has to be attached to the release alongside the
-archives, not just built alongside them. See "For Marc" below.
+archives, not just built alongside them.
 
 ```bash
 git tag forsight-v1.0.0
@@ -453,15 +460,13 @@ make release VERSION=v1.0.0
 gh release create forsight-v1.0.0 dist/*.tar.gz dist/sha256sums.txt --title "forsight v1.0.0"
 ```
 
-**For Marc:** `.github/workflows/forsight-release.yml`'s "Create or update
-the GitHub Release" step currently attaches only `dist/*.tar.gz`; it needs
-`dist/sha256sums.txt` added to both the `gh release upload` and
-`gh release create` argument lists (this file is out of scope for automated
-edits — see CLAUDE.md). Until that lands, `install.sh` will fail closed with
-"could not download sha256sums.txt" against any release cut through the
-workflow, since the file it now requires was never uploaded — the local
-`make release` path above already produces and uploads it correctly in the
-meantime.
+`.github/workflows/forsight-release.yml`'s "Create or update the GitHub
+Release" step attaches `dist/sha256sums.txt` alongside the archives (since
+#115), so a release cut through the workflow verifies the same way the
+local path above does. That same workflow also builds `forsight/Dockerfile`
+from the repo root and pushes `ghcr.io/marcfs31/forsight`, tagged with the
+release version and as `latest` — the image `deploy/k8s/daemonset.yaml`
+pulls.
 
 ## Scope: what's real vs. what's roadmap
 
@@ -487,9 +492,8 @@ Releasing above. Verified by tracing it step-for-step against
 cross-compile+archive loop locally for all four `RELEASE_TARGETS`, including
 extracting and running the resulting binary. `dist/sha256sums.txt` and
 `install.sh`'s verification of it against a real release are covered by
-`install_test.bats` (`make test-install`); the release workflow itself still
-needs the one-line change noted under "For Marc" above before it uploads
-that file.
+`install_test.bats` (`make test-install`); the release workflow itself
+attaches that file too, since #115.
 
 **Deliberately not built yet, flagged rather than silently skipped:**
 
