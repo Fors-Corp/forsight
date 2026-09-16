@@ -9,7 +9,7 @@
 VERSION ?= dev
 LDFLAGS := -X github.com/marcfs31/forsight/forsight/internal/version.Version=$(VERSION)
 
-.PHONY: build build-web build-go release dev test lint vet clean
+.PHONY: build build-web build-go release dev demo test lint vet clean
 
 # OS/arch pairs cross-compiled for a release — matches install.sh's
 # "forsight_<os>_<arch>.tar.gz" naming exactly.
@@ -36,6 +36,13 @@ build-go:
 # internal/api/webdist/ (the fallback page unless build-web has been run).
 dev:
 	go run . run
+
+# Runs against a bounded, clearly-labelled synthetic stream instead of real
+# collectors — a populated dashboard with no infrastructure to point it at.
+# See cmd/demo.go and README.md's CLI section for the flags (--backfill,
+# --tick, --seed, ...).
+demo:
+	go run . demo
 
 test:
 	go test ./...
