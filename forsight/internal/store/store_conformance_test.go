@@ -268,6 +268,81 @@ func runStoreConformanceTests(t *testing.T, newStore func(t *testing.T) Store) {
 		}
 	})
 
+	// PerName: the unscoped read's own cap. Two names with unequal traffic,
+	// interleaved in write order, so a plain Limit would be all "busy".
+	t.Run("metrics query per-name cap keeps the newest N of every name", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		base := time.Now().Add(-30 * time.Minute)
+		points := make([]model.Metric, 0, 12)
+		for i := 0; i < 10; i++ {
+			points = append(points, model.Metric{Name: "busy", Value: float64(i), Timestamp: base.Add(time.Duration(i) * time.Minute)})
+			if i%5 == 0 {
+				points = append(points, model.Metric{Name: "quiet", Value: float64(100 + i), Timestamp: base.Add(time.Duration(i)*time.Minute + 30*time.Second)})
+			}
+		}
+		_ = s.WriteMetrics(ctx, points)
+
+		got, err := s.QueryMetrics(ctx, MetricQuery{PerName: 2})
+		if err != nil {
+			t.Fatalf("QueryMetrics: %v", err)
+		}
+		want := map[string][]float64{"busy": {8, 9}, "quiet": {100, 105}}
+		if !sameByName(got, want) {
+			t.Fatalf("unscoped QueryMetrics with PerName 2 = %+v, want the newest two of each name: %v", got, want)
+		}
+		// Oldest-first within each name, which is the order consumers key on
+		// (the order across names is the store's own: a keyed store groups
+		// by name, the memory store answers in write order).
+		last := make(map[string]time.Time)
+		for _, m := range got {
+			if prev, ok := last[m.Name]; ok && m.Timestamp.Before(prev) {
+				t.Fatalf("QueryMetrics with PerName is not oldest-first within %q: %+v", m.Name, got)
+			}
+			last[m.Name] = m.Timestamp
+		}
+
+		// A since bound composes: within [3m, ∞) busy has 3..9 and quiet only
+		// 105, so quiet's cap is not reached and busy's is.
+		got, err = s.QueryMetrics(ctx, MetricQuery{PerName: 3, Since: base.Add(3 * time.Minute)})
+		if err != nil {
+			t.Fatalf("QueryMetrics: %v", err)
+		}
+		want = map[string][]float64{"busy": {7, 8, 9}, "quiet": {105}}
+		if !sameByName(got, want) {
+			t.Fatalf("QueryMetrics with PerName 3 and Since = %+v, want %v", got, want)
+		}
+
+		// Limit applies on top of the per-name cap, to the merged result.
+		got, err = s.QueryMetrics(ctx, MetricQuery{PerName: 2, Limit: 1})
+		if err != nil {
+			t.Fatalf("QueryMetrics: %v", err)
+		}
+		if len(got) != 1 || got[0].Name != "busy" || got[0].Value != 9 {
+			t.Fatalf("QueryMetrics with PerName 2 and Limit 1 = %+v, want the single newest point overall", got)
+		}
+
+		// Scoped to one name, the per-name cap is simply the cap.
+		got, err = s.QueryMetrics(ctx, MetricQuery{Name: "busy", PerName: 2})
+		if err != nil {
+			t.Fatalf("QueryMetrics: %v", err)
+		}
+		if len(got) != 2 || got[0].Value != 8 || got[1].Value != 9 {
+			t.Fatalf("scoped QueryMetrics with PerName 2 = %+v, want values 8, 9", got)
+		}
+
+		// A name whose every point is outside the window contributes nothing,
+		// and does not stop the walk from reaching the names after it.
+		got, err = s.QueryMetrics(ctx, MetricQuery{PerName: 1, Since: base.Add(6 * time.Minute)})
+		if err != nil {
+			t.Fatalf("QueryMetrics: %v", err)
+		}
+		want = map[string][]float64{"busy": {9}}
+		if !sameByName(got, want) {
+			t.Fatalf("QueryMetrics with PerName 1 and a Since past quiet's last point = %+v, want %v", got, want)
+		}
+	})
+
 	t.Run("spans query limit returns the newest N, oldest-first", func(t *testing.T) {
 		s := newStore(t)
 		ctx := context.Background()
@@ -319,4 +394,27 @@ func runStoreConformanceTests(t *testing.T, newStore func(t *testing.T) Store) {
 			t.Errorf("Ping: %v, want nil on a store nothing has touched yet", err)
 		}
 	})
+}
+
+// sameByName reports whether got holds exactly the values want lists for
+// each name, in order, and no other names.
+func sameByName(got []model.Metric, want map[string][]float64) bool {
+	byName := make(map[string][]float64)
+	for _, m := range got {
+		byName[m.Name] = append(byName[m.Name], m.Value)
+	}
+	if len(byName) != len(want) {
+		return false
+	}
+	for name, values := range want {
+		if len(byName[name]) != len(values) {
+			return false
+		}
+		for i := range values {
+			if byName[name][i] != values[i] {
+				return false
+			}
+		}
+	}
+	return true
 }

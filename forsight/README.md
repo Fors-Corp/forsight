@@ -330,7 +330,7 @@ the mlaas card unreachable rather than hiding it.
 | `/`                                      | GET    | The dashboard                                             |
 | `/healthz`                               | GET    | `{"status":"ok"}` unconditionally — for a liveness probe    |
 | `/readyz`                                | GET    | Pings the store and reports each collector's last error; 503 only if the store ping fails — for a readiness probe |
-| `/api/v1/metrics?name=&since=&label.<k>=<v>` | GET | Query stored metrics (all filters optional)             |
+| `/api/v1/metrics?name=&since=&before=&limit=&per_name=&label.<k>=<v>` | GET | Query stored metrics (all filters optional; `limit` keeps the newest N, `per_name` the newest N of every metric name) |
 | `/api/v1/traces?service=&traceId=&since=`    | GET | Query stored spans                                        |
 | `/api/v1/logs?since=&source=&severity=`       | GET | Query stored log entries                                  |
 | `/api/v1/forseer/insights`                   | GET | Current Forseer findings (always on, no API key)          |

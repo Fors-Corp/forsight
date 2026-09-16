@@ -264,7 +264,7 @@ routes to the surface table, fix the Makefile comment. Still S: prose only.
 
 ### 7. CodeQL scans the Go, then the results check becomes required
 
-- **Area** ops · **Effort** S · **Score** 4.07 · Marc applies
+- **Area** ops · **Effort** S · **Score** 4.07 · Marc applies · **Shipped** 2026-09-16, the Go analysis in #90 and the `CodeQL` results check required on `main` (it reports only from `pull_request` analyses, so a bot PR's gated runs are approved rather than re-dispatched)
 
 **Why.** `.github/workflows/codeql.yml:42-46` analyses `actions` and
 `javascript-typescript` only. The Go under `forsight/` parses untrusted OTLP
@@ -337,7 +337,7 @@ retention.
 
 ### 10. Limit and Before on every store query, walking newest-first
 
-- **Area** agent · **Effort** M · **Score** 3.93 · corrected · **Shipped** 2026-09-16, `scanNewestFirst` in `forsight/internal/store/badger.go`; metrics reads stay uncapped until there is a per-name history read
+- **Area** agent · **Effort** M · **Score** 3.93 · corrected · **Shipped** 2026-09-16, `scanNewestFirst` in `forsight/internal/store/badger.go`; the per-name cap (`MetricQuery.PerName`, `?per_name=`) followed on 2026-09-17, so an unscoped metrics read is bounded per name instead of uncapped
 
 **Why.** `forsight/internal/store/store.go:19-37`: `MetricQuery`, `SpanQuery`
 and `LogQuery` carry Name, Labels and Since and nothing that bounds the
@@ -866,6 +866,8 @@ are the judges' composites.
 
 ## Shipped after the roadmap
 
+- **Forecasts drawn as a dashed projection** — the dashboard pins `@marcfs31/forsight` 4.1.0 and passes the Forecast series' first minute as `dashedFrom`, so the projection is told apart by stroke shape as well as colour and the chart's hidden description names the minute it is projected from; item 7 is marked shipped in the same change, 2026-09-17, #126.
+
 - **HTTP and TLS-expiry probe collector** — a repeatable `--probe <url>` GETs each target on the agent's collect interval, reporting `probe.http.up`/`.status`/`.duration_ms` and, for `https://` targets, `probe.tls.days_remaining`/`.valid` from the leaf certificate, read independently so an expiring or already-expired cert never flips an otherwise-reachable site's up metric, 2026-09-16, #120.
 
 - **LineChart area fill respects dashedFrom** — a series with both `area` and
@@ -884,4 +886,4 @@ are the judges' composites.
 
 - **Deterministic incident grouping on the Timeline** — forseer-models-9's window-plus-shared-`Related` substitute for the label-less grouping model, folding insights within five minutes of each other into one incident event when they share a Related value or a Source, 2026-09-16, #118.
 
-- **Probe uptime strips on the Overview** — a "Probes" card renders one UptimeBar per `--probe` target from the agent's `probe.*` metrics, bucketing the selected time range into operational/degraded/outage/unknown segments and showing a TLS-expiry badge beside it, visible only once a target is configured, 2026-09-17, #128.
+- **Probe uptime strips on the Overview** — a "Probes" card renders one UptimeBar per `--probe` target from the agent's `probe.*` metrics, bucketing the selected time range into operational/degraded/outage/unknown segments and showing a TLS-expiry badge beside it, visible only once a target is configured, 2026-09-17, #130.

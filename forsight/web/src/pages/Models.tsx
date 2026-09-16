@@ -177,6 +177,12 @@ interface ForecastChart {
   observed: Array<number | null>;
   forecast: Array<number | null>;
   annotations: ChartAnnotation[];
+  /** Index of the first forecast minute — the Forecast series' `dashedFrom`,
+   * so the projection is drawn dashed past the last real measurement (a
+   * shape, not only a colour, so it survives grayscale and colorblind
+   * vision) and the chart's own description names the minute it is
+   * projected from. Undefined when the forecast has no points. */
+  forecastFrom: number | undefined;
 }
 
 /** The x-axis is the sorted union of every minute timestamp either series
@@ -205,10 +211,14 @@ export function forecastChart(forecast: MlaasForecast, metrics: Metric[]): Forec
   const originMs = new Date(forecast.origin).getTime();
   const originLabel = Number.isNaN(originMs) ? undefined : formatMinute(originMs);
 
+  const forecastValues = allMs.map((ms) => forecastByMs.get(ms) ?? null);
+  const firstForecast = forecastValues.findIndex((v) => v !== null);
+
   return {
     labels,
     observed: allMs.map((ms) => observedByMs.get(ms) ?? null),
-    forecast: allMs.map((ms) => forecastByMs.get(ms) ?? null),
+    forecast: forecastValues,
+    forecastFrom: firstForecast === -1 ? undefined : firstForecast,
     annotations:
       originLabel && labels.includes(originLabel)
         ? [{ label: originLabel, text: "forecast starts", tone: "accent" }]
@@ -526,7 +536,7 @@ function ForecastsCard({ forecasts, metrics }: { forecasts: MlaasForecast[]; met
                 labels={chart.labels}
                 series={[
                   { name: "Observed", values: chart.observed },
-                  { name: "Forecast", values: chart.forecast },
+                  { name: "Forecast", values: chart.forecast, dashedFrom: chart.forecastFrom },
                 ]}
                 annotations={chart.annotations}
               />
