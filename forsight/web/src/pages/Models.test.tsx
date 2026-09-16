@@ -76,6 +76,8 @@ const connected: MlaasStatus = {
       liveWindow: 40,
       newLabels: 12,
       driftMax: 0.0421,
+      driftFeature: "host.cpu.percent",
+      driftThreshold: 0.2,
       activeJob: false,
       predictionsLogged: 160,
     },
@@ -92,7 +94,9 @@ const connected: MlaasStatus = {
       metric: "rmse",
       liveWindow: 0,
       newLabels: 0,
-      driftMax: 0,
+      // No champion has ever been trained, so mlaas has nothing to
+      // compare recent inputs against yet — driftMax stays absent.
+      driftThreshold: 0.2,
       activeJob: false,
       predictionsLogged: 0,
     },
@@ -110,7 +114,11 @@ const connected: MlaasStatus = {
       holdout: 0.917,
       liveWindow: 0,
       newLabels: 30,
-      driftMax: 0.1,
+      // At or above mlaas's own retrain.drift_threshold: the Badge must
+      // read as critical, not just a bigger number.
+      driftMax: 0.24,
+      driftFeature: "message",
+      driftThreshold: 0.2,
       activeJob: false,
       predictionsLogged: 75,
     },
@@ -172,7 +180,8 @@ describe("Models page", () => {
     expect(within(cpu!).getByText("v3")).toBeInTheDocument();
     expect(within(cpu!).getByText("rmse 1.23")).toBeInTheDocument();
     expect(within(cpu!).getByText("1.50 over 40 labels")).toBeInTheDocument();
-    expect(within(cpu!).getByText("0.04")).toBeInTheDocument();
+    expect(within(cpu!).getByText("0.04 of 0.20")).toBeInTheDocument();
+    expect(within(cpu!).getByText("host.cpu.percent")).toBeInTheDocument();
 
     const memory = screen.getByRole("button", { name: "Train forsight-memory-forecast" }).closest("tr");
     expect(within(memory!).getByText("waiting-for-data")).toBeInTheDocument();
@@ -184,6 +193,25 @@ describe("Models page", () => {
     expect(screen.getByText("82% vs rule 60% on 500 graded")).toBeInTheDocument();
     // "Ready" is also the column header; the badge is the span.
     expect(screen.getByText("Ready", { selector: "span" })).toBeInTheDocument();
+  });
+
+  it("shows drift as not-yet-measured rather than a flattering zero, and flags a model at its retrain threshold", async () => {
+    mockFetch(baseEndpoints);
+    render(<Models />);
+    await screen.findByText("Connected to http://127.0.0.1:8090");
+
+    // A model whose live window has not filled must never render a bare
+    // "0.00" — the flattering zero MODELS.md forbids on any card.
+    const memory = screen.getByRole("button", { name: "Train forsight-memory-forecast" }).closest("tr");
+    expect(within(memory!).getByText("not enough data yet")).toBeInTheDocument();
+    expect(within(memory!).queryByText(/of 0.20/)).not.toBeInTheDocument();
+
+    // At or above mlaas's own retrain.drift_threshold, the cell states the
+    // measured value, the threshold it is judged against, and which
+    // feature drifted — not just a number.
+    const severity = screen.getByRole("button", { name: "Train forsight-log-severity" }).closest("tr");
+    expect(within(severity!).getByText("0.24 of 0.20")).toBeInTheDocument();
+    expect(within(severity!).getByText("message")).toBeInTheDocument();
   });
 
   it("POSTs to the model's train route on click and reports the queued job", async () => {

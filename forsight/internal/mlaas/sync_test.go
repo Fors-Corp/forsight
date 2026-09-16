@@ -216,6 +216,12 @@ func (f *fakeMlaas) createModel(w http.ResponseWriter, r *http.Request) {
 		f.json(w, 409, map[string]any{"error": "model already exists"})
 		return
 	}
+	// The agent never sets drift_threshold (wireRetrain's omitempty), the
+	// same way a real POST /models leaves it out; mlaas fills its own
+	// default in, same as store.go's RetrainPolicy does.
+	if spec.Retrain.DriftThreshold == 0 {
+		spec.Retrain.DriftThreshold = 0.2
+	}
 	m := &fakeModel{spec: spec}
 	if spec.Task == "classification" {
 		ti := slices.Index(d.header, spec.Target)
@@ -1244,6 +1250,81 @@ func TestStatus_RefreshesOnTTLAndKeepsSnapshotWhenUnreachable(t *testing.T) {
 	st = s.Status(context.Background())
 	if st.Reachable || !st.LastSync.Equal(clock) || st.LastError == "" {
 		t.Errorf("pass while unreachable: %+v", st)
+	}
+}
+
+// setCheck installs a fake model's last_check, the way a running mlaas
+// would after CheckModel — the tests below drive Status through it rather
+// than calling buildModelsLocked directly, so they exercise the same
+// decode-then-derive path a real refresh does.
+func (f *fakeMlaas) setCheck(t *testing.T, name string, c *wireCheck) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.models[name]
+	if m == nil {
+		t.Fatalf("setCheck: no model %s", name)
+	}
+	m.check = c
+}
+
+// TestStatus_DriftUnmeasuredIsNilNotZero: mlaas's own wire always carries
+// drift_max as a plain float64 (0 when there is nothing to report yet,
+// client.go's wireCheck comment) — the flattering zero MODELS.md says a
+// card must never show. A last_check with no "drift" key at all (too few
+// recent predictions, loop.go's MinWindow gate) must leave ModelStatus's
+// DriftMax nil, never a *float64 pointing at 0, so the dashboard can tell
+// "measured, and it's zero" from "not measured".
+func TestStatus_DriftUnmeasuredIsNilNotZero(t *testing.T) {
+	f := newFakeMlaas(t)
+	s := newSyncer(t, f, seedStore(t))
+	s.pass(context.Background())
+	f.promote("forsight-cpu-forecast", 3, "rmse", 1.1)
+	f.setCheck(t, "forsight-cpu-forecast", &wireCheck{CheckedAt: base, NewLabels: 4, DriftMax: 0})
+
+	s.now = func() time.Time { return base.Add(statusTTL + time.Second) }
+	st := s.Status(context.Background())
+	cpu := modelByName(t, st, "forsight-cpu-forecast")
+	if cpu.DriftMax != nil {
+		t.Errorf("driftMax = %v, want nil (unmeasured, not a flattering 0)", *cpu.DriftMax)
+	}
+	if cpu.DriftFeature != "" {
+		t.Errorf("driftFeature = %q, want empty when drift was not measured", cpu.DriftFeature)
+	}
+	if cpu.DriftThreshold != 0.2 {
+		t.Errorf("driftThreshold = %v, want 0.2 (mlaas's default) even while unmeasured", cpu.DriftThreshold)
+	}
+}
+
+// TestStatus_DriftMeasuredReportsFeatureAndThreshold: once mlaas has
+// enough recent predictions to compare against the training profile, the
+// Badge needs three things out of one check: the measured max, which
+// feature it came from, and the threshold mlaas itself retrains on
+// (retrain.drift_threshold) — not a value this agent invents.
+func TestStatus_DriftMeasuredReportsFeatureAndThreshold(t *testing.T) {
+	f := newFakeMlaas(t)
+	s := newSyncer(t, f, seedStore(t))
+	s.pass(context.Background())
+	f.promote("forsight-cpu-forecast", 3, "rmse", 1.1)
+	f.setCheck(t, "forsight-cpu-forecast", &wireCheck{
+		CheckedAt:    base,
+		NewLabels:    4,
+		Drift:        map[string]float64{"at": 0.24, "value": 0.05},
+		DriftFeature: "at",
+		DriftMax:     0.24,
+	})
+
+	s.now = func() time.Time { return base.Add(statusTTL + time.Second) }
+	st := s.Status(context.Background())
+	cpu := modelByName(t, st, "forsight-cpu-forecast")
+	if cpu.DriftMax == nil || *cpu.DriftMax != 0.24 {
+		t.Errorf("driftMax = %v, want 0.24", cpu.DriftMax)
+	}
+	if cpu.DriftFeature != "at" {
+		t.Errorf("driftFeature = %q, want %q", cpu.DriftFeature, "at")
+	}
+	if cpu.DriftThreshold != 0.2 {
+		t.Errorf("driftThreshold = %v, want 0.2", cpu.DriftThreshold)
 	}
 }
 

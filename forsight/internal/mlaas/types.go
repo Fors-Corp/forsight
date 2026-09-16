@@ -140,8 +140,18 @@ type ModelStatus struct {
 	// the count mlaas's min_new_labels retrain trigger watches.
 	NewLabels int `json:"newLabels"`
 	// DriftMax is the largest per-feature population-stability index mlaas
-	// measured on recent inputs against the training profile.
-	DriftMax float64 `json:"driftMax"`
+	// measured on recent inputs against the training profile. Nil until
+	// mlaas has enough recent predictions to measure it — a live window
+	// too small for drift is a "not enough data yet" card, never a
+	// flattering zero (MODELS.md).
+	DriftMax *float64 `json:"driftMax,omitempty"`
+	// DriftFeature names the feature DriftMax came from. Empty whenever
+	// DriftMax is nil.
+	DriftFeature string `json:"driftFeature,omitempty"`
+	// DriftThreshold is the value mlaas itself retrains on
+	// (retrain.drift_threshold, default 0.2) — what the Badge compares
+	// DriftMax against, not a value this agent chooses.
+	DriftThreshold float64 `json:"driftThreshold"`
 	// ActiveJob is true while a train or tune job is queued or running.
 	ActiveJob bool `json:"activeJob"`
 	// PredictionsLogged is how many predictions mlaas has served for this
