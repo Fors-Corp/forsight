@@ -9,12 +9,48 @@ import (
 	"time"
 
 	"github.com/marcfs31/forsight/forseer"
+	"github.com/marcfs31/forsight/forsight/internal/collector"
 	"github.com/marcfs31/forsight/forsight/internal/model"
 	"github.com/marcfs31/forsight/forsight/internal/store"
 )
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// readyzResponse is handleReadyz's body. Collectors is omitted entirely
+// (rather than an empty array) when no Registry was attached — cmd/demo has
+// no real collectors, so there is nothing meaningful to list.
+type readyzResponse struct {
+	Status     string                      `json:"status"`
+	StoreError string                      `json:"storeError,omitempty"`
+	Collectors []collector.CollectorStatus `json:"collectors,omitempty"`
+}
+
+// handleReadyz serves GET /readyz. Unlike /healthz — an unconditional "the
+// process is up", meant for a liveness probe that should never crash-loop
+// the pod over something a restart can't fix — this is the readiness
+// signal: it pings the store and fails (503) only when that ping fails,
+// since nothing this agent serves is meaningful without it. Each
+// collector's last error is reported alongside, for visibility, but never
+// fails the probe by itself: a Docker collector with no socket to talk to,
+// or a transient host-metrics hiccup, is not a reason to pull an otherwise
+// healthy pod out of service (see ROADMAP.md item 24's Why).
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	resp := readyzResponse{Status: "ready"}
+	if err := s.store.Ping(r.Context()); err != nil {
+		resp.Status = "unavailable"
+		resp.StoreError = err.Error()
+	}
+	if s.registry != nil {
+		resp.Collectors = s.registry.Statuses()
+	}
+
+	status := http.StatusOK
+	if resp.Status != "ready" {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, resp)
 }
 
 // handleMetrics serves GET /api/v1/metrics?name=&since=<RFC3339>&before=<RFC3339>&limit=<n>&label.<key>=<value>
