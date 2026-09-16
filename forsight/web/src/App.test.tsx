@@ -3,6 +3,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 import { submitAuthToken, type ForseerQueryFacet } from "./api";
+import { THEME_STORAGE_KEY } from "./theme";
 
 type FetchResponses = Record<string, unknown>;
 
@@ -618,6 +619,48 @@ describe("Overview memory and disk charts", () => {
   });
 });
 
+// Item #128: a per-target UptimeBar under a "Probes" Card, built from the
+// agent's probe.* metrics (forsight/internal/collector/probe). The card
+// must be invisible on a deployment that never passed --probe, so the
+// no-metrics case is asserted right alongside the populated one.
+describe("Overview probe strips", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const now = () => new Date().toISOString();
+  const probeMetrics = [
+    { name: "probe.http.up", value: 1, timestamp: now(), labels: { name: "checkout", url: "https://checkout.example.com" } },
+    { name: "probe.tls.days_remaining", value: 5, timestamp: now(), labels: { name: "checkout", url: "https://checkout.example.com" } },
+    { name: "probe.tls.valid", value: 1, timestamp: now(), labels: { name: "checkout", url: "https://checkout.example.com" } },
+  ];
+
+  it("shows a Probes card with an UptimeBar naming the target once probe metrics arrive", async () => {
+    mockFetch({ ...emptyEndpoints, "/api/v1/metrics": probeMetrics });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Probes" })).toBeInTheDocument();
+    // A single, almost-current sample holds the smallest range on offer
+    // (15m — see "Overview time range" above), not the 1h default.
+    expect(screen.getByText("checkout, last 15m")).toBeInTheDocument();
+  });
+
+  it("shows a warning-toned TLS expiry badge when the certificate is valid but expiring soon", async () => {
+    mockFetch({ ...emptyEndpoints, "/api/v1/metrics": probeMetrics });
+    render(<App />);
+
+    expect(await screen.findByText("TLS expires in 5 days")).toBeInTheDocument();
+  });
+
+  it("shows no Probes heading at all when the agent has no --probe target configured", async () => {
+    mockFetch(emptyEndpoints);
+    render(<App />);
+
+    await screen.findByText("Host CPU over time");
+    expect(screen.queryByRole("heading", { name: "Probes" })).not.toBeInTheDocument();
+  });
+});
+
 /**
  * Item 18: forsight/internal/api/auth.go rejects every route but the
  * dashboard's static shell with a 401 once --auth-token is set, so the page
@@ -733,5 +776,56 @@ describe("Auth token gate", () => {
 
     await screen.findByText("Host CPU over time");
     expect(screen.queryByRole("dialog", { name: "Access token required" })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The sidebar footer's theme Switch (App.tsx's ThemeToggle, backed by
+ * useTheme in theme.ts). data-theme lives on <html> — outside whatever
+ * render() mounts — and localStorage persists across tests in the same
+ * jsdom environment, so both are reset in afterEach to keep every other
+ * describe block in this file (which all assume the dark default) honest.
+ */
+describe("Theme toggle", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.documentElement.removeAttribute("data-theme");
+    try {
+      localStorage.clear();
+    } catch {
+      // Nothing to clean up if storage was never usable to begin with.
+    }
+  });
+
+  it("is unchecked by default and leaves the document in the dark theme applyForsightTheme sets", async () => {
+    mockFetch(emptyEndpoints);
+    render(<App />);
+
+    const toggle = await screen.findByRole("switch", { name: "Light theme" });
+    expect(toggle).not.toBeChecked();
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  });
+
+  it("switches the document to light and stores the choice when clicked", async () => {
+    const user = userEvent.setup();
+    mockFetch(emptyEndpoints);
+    render(<App />);
+
+    const toggle = await screen.findByRole("switch", { name: "Light theme" });
+    await user.click(toggle);
+
+    expect(toggle).toBeChecked();
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+  });
+
+  it("starts checked and applied when localStorage already holds \"light\"", async () => {
+    localStorage.setItem(THEME_STORAGE_KEY, "light");
+    mockFetch(emptyEndpoints);
+    render(<App />);
+
+    const toggle = await screen.findByRole("switch", { name: "Light theme" });
+    expect(toggle).toBeChecked();
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
   });
 });
