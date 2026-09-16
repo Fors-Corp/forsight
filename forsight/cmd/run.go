@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -141,9 +142,20 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 		return err
 	}
 
+	// Restored before anything else touches the engine, per roadmap item 25:
+	// every model's own Restore overwrites rather than merges, so restoring
+	// after the fallback (or after any live data) would either be a no-op
+	// racing live traffic or discard what that traffic had already taught
+	// it. snapshotPath is "" for a memory-store run, which makes restore and
+	// (later) write both silent no-ops — a memory deployment has no data
+	// dir, and Forseer's learned state has nowhere of its own to live
+	// either.
+	snapshotPath := forseerSnapshotPath(opts)
+	eng := forseer.NewEngine()
+	restoreForseerSnapshot(eng, snapshotPath, logger)
 	// The severity model competes against the tailer's substring rule on the
 	// same stream, and is used only while it is winning.
-	eng := forseer.NewEngine().WithSeverityFallback(func(message string) string {
+	eng = eng.WithSeverityFallback(func(message string) string {
 		return string(filelog.FallbackSeverity(message))
 	})
 	if slo := resolveErrorSLO(opts.errorSLO); slo > 0 {
@@ -272,8 +284,10 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		shutdownErr := httpServer.Shutdown(shutdownCtx)
+		writeForseerSnapshot(eng, snapshotPath, logger)
 		return errors.Join(shutdownErr, closeBadgerStore(badgerStore, logger))
 	case err := <-serveErr:
+		writeForseerSnapshot(eng, snapshotPath, logger)
 		return errors.Join(err, closeBadgerStore(badgerStore, logger))
 	}
 }
@@ -313,6 +327,87 @@ func closeBadgerStore(bs *store.BadgerStore, logger *slog.Logger) error {
 		return fmt.Errorf("close Badger store: %w", err)
 	}
 	return nil
+}
+
+// forseerSnapshotFile is the name of the file Forseer's own learned state
+// restores from and is written to, beside the Badger directory under
+// --data-dir. See forseerSnapshotPath for when there is one at all.
+const forseerSnapshotFile = "forseer.json"
+
+// forseerSnapshotPath returns where this run's Forseer snapshot lives, or
+// "" when there is none to have. Only --store=badger has a --data-dir that
+// belongs to this deployment; a memory store's data — and Forseer's learned
+// state alongside it — disappears with the process by design, so there is
+// nowhere durable to put a snapshot and restoreForseerSnapshot/
+// writeForseerSnapshot both treat "" as a silent no-op.
+func forseerSnapshotPath(opts *runOptions) string {
+	if opts.storeBackend != "badger" || opts.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(opts.dataDir, forseerSnapshotFile)
+}
+
+// restoreForseerSnapshot reads path (a no-op for "") and restores eng from
+// it. Callers must call this right after forseer.NewEngine and before
+// anything else touches the engine — every model's own Restore overwrites
+// rather than merges, so restoring onto an engine that has already wired up
+// live data would discard that observation.
+//
+// A missing file is silent: it is not an error, it is what a brand new
+// deployment or data dir looks like, on every run, not just the first — so
+// logging it every restart would be noise rather than signal. Anything else
+// that keeps the snapshot from being read or from parsing as this engine's
+// own envelope is logged and otherwise ignored: the engine is left exactly
+// as NewEngine built it, cold, which is always a safe place to start from.
+// A model that did restore is logged once at INFO, by name and by the
+// schema version its own payload carried — the roadmap item's own
+// observability requirement, and the one line an operator needs to confirm
+// a restart actually came back warm.
+func restoreForseerSnapshot(eng *forseer.Engine, path string, logger *slog.Logger) {
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warn("reading forseer snapshot, starting cold", "path", path, "error", err)
+		}
+		return
+	}
+	reports, err := eng.Restore(data)
+	if err != nil {
+		logger.Warn("forseer snapshot discarded, starting cold", "path", path, "error", err)
+		return
+	}
+	restored := make([]string, 0, len(reports))
+	for _, r := range reports {
+		if r.Restored {
+			restored = append(restored, fmt.Sprintf("%s(v%d)", r.Name, r.Version))
+		}
+	}
+	if len(restored) == 0 {
+		return
+	}
+	logger.Info("forseer models restored", "path", path, "models", restored)
+}
+
+// writeForseerSnapshot snapshots eng and writes it to path (a no-op for
+// ""), called from the shutdown path next to closeBadgerStore. A failure to
+// snapshot or to write it is logged, never returned as a shutdown-blocking
+// error: losing a snapshot only means the next start re-earns readiness the
+// way every start did before this roadmap item, never a failed shutdown.
+func writeForseerSnapshot(eng *forseer.Engine, path string, logger *slog.Logger) {
+	if path == "" {
+		return
+	}
+	data, err := eng.Snapshot()
+	if err != nil {
+		logger.Error("snapshotting forseer models", "path", path, "error", err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		logger.Error("writing forseer snapshot", "path", path, "error", err)
+	}
 }
 
 // tailMinBackoff and tailMaxBackoff bound the delay tailWithRetry waits
