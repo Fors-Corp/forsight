@@ -264,7 +264,7 @@ routes to the surface table, fix the Makefile comment. Still S: prose only.
 
 ### 7. CodeQL scans the Go, then the results check becomes required
 
-- **Area** ops · **Effort** S · **Score** 4.07 · Marc applies
+- **Area** ops · **Effort** S · **Score** 4.07 · Marc applies · **Shipped** 2026-09-16, the Go analysis in #90 and the `CodeQL` results check required on `main` (it reports only from `pull_request` analyses, so a bot PR's gated runs are approved rather than re-dispatched)
 
 **Why.** `.github/workflows/codeql.yml:42-46` analyses `actions` and
 `javascript-typescript` only. The Go under `forsight/` parses untrusted OTLP
@@ -865,6 +865,8 @@ are the judges' composites.
   value, wrong shape, or no consumer. The judges' notes stand.
 
 ## Shipped after the roadmap
+
+- **Forecasts drawn as a dashed projection** — the dashboard pins `@marcfs31/forsight` 4.1.0 and passes the Forecast series' first minute as `dashedFrom`, so the projection is told apart by stroke shape as well as colour and the chart's hidden description names the minute it is projected from; item 7 is marked shipped in the same change, 2026-09-17, #126.
 
 - **HTTP and TLS-expiry probe collector** — a repeatable `--probe <url>` GETs each target on the agent's collect interval, reporting `probe.http.up`/`.status`/`.duration_ms` and, for `https://` targets, `probe.tls.days_remaining`/`.valid` from the leaf certificate, read independently so an expiring or already-expired cert never flips an otherwise-reachable site's up metric, 2026-09-16, #120.
 
