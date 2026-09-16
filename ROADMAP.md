@@ -884,4 +884,4 @@ are the judges' composites.
 
 - **Deterministic incident grouping on the Timeline** — forseer-models-9's window-plus-shared-`Related` substitute for the label-less grouping model, folding insights within five minutes of each other into one incident event when they share a Related value or a Source, 2026-09-16, #118.
 
-- **Dashboard theme toggle** — a Switch in the sidebar footer flips the dashboard between the design system's dark and light themes via `applyForsightTheme`, persists the choice to `localStorage`, and applies it before first paint with `forsightAntiFlashScript` so a stored light theme never flashes dark on load, 2026-09-17, #127.
+- **Dashboard theme toggle** — a Switch in the sidebar footer flips the dashboard between the design system's dark and light themes via `applyForsightTheme`, persists the choice to `localStorage`, and applies it before first paint with `forsightAntiFlashScript` so a stored light theme never flashes dark on load, 2026-09-17.
