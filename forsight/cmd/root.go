@@ -1,5 +1,6 @@
 // Package cmd wires forsight's CLI (cobra): "forsight run" starts the agent,
-// "forsight version" prints the build version.
+// "forsight demo" runs it against a bounded synthetic stream, "forsight
+// version" prints the build version.
 package cmd
 
 import (
@@ -15,7 +16,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(newRunCmd(), newVersionCmd())
+	root.AddCommand(newRunCmd(), newDemoCmd(), newVersionCmd())
 	return root
 }
 

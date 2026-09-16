@@ -617,7 +617,7 @@ to `npm ci` in #76 and the release workflow should follow.
 
 ### 20. `forsight demo`: a synthetic stream so the dashboard is never empty
 
-- **Area** agent · **Effort** M · **Score** 3.40
+- **Area** agent · **Effort** M · **Score** 3.40 · **Shipped** 2026-09-16, `forsight/cmd/demo.go`
 
 **Why.** `Overview.tsx` renders **EmptyState** in eight panels (`:336`, `:406`,
 `:420`, `:458`, `:494`, `:515`, `:531`, `:544`), the Models page needs enough
