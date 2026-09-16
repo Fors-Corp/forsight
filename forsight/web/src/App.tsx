@@ -1,7 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   AppShell,
   AppShellMain,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
   Sidebar,
   SidebarContent,
   SidebarHeader,
@@ -13,6 +21,7 @@ import {
   useSidebar,
 } from "@marcfs31/forsight";
 import { useHashRoute, type Route } from "./route";
+import { submitAuthToken, useAuthPrompt } from "./api";
 import Overview from "./pages/Overview";
 import Models from "./pages/Models";
 
@@ -89,6 +98,77 @@ function SidebarNavLinks({ route }: { route: Route }) {
 }
 
 /**
+ * Blocks the dashboard behind a bearer-token prompt whenever the agent's
+ * data routes 401 (see forsight/internal/api/auth.go's BearerAuth — every
+ * route but the static shell requires one once --auth-token is set). The
+ * shell itself always loads with no token, so this is the only gate the
+ * page has; it isn't dismissable (no close button, Escape and an outside
+ * click are both swallowed) because the pages behind it have nothing to
+ * show without a good token anyway. `useAuthPrompt` opens it the moment any
+ * fetchWithAuth call gets a 401 and `submitAuthToken` closes it again — a
+ * wrong guess just reopens it (this time with `rejected: true`) once the
+ * next poll 401s.
+ */
+function AuthTokenDialog() {
+  const { open, rejected } = useAuthPrompt();
+  const [value, setValue] = useState("");
+
+  // Never carry a rejected guess (or the last one typed) into the next time
+  // the dialog opens.
+  useEffect(() => {
+    if (open) setValue("");
+  }, [open]);
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const token = value.trim();
+    if (!token) return;
+    // Never touches a URL or a log — sessionStorage and the Authorization
+    // header only (see submitAuthToken/fetchWithAuth in api.ts).
+    submitAuthToken(token);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={() => {}}>
+      <DialogContent
+        hideClose
+        onEscapeKeyDown={(event) => event.preventDefault()}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
+      >
+        <DialogHeader>
+          <DialogTitle>Access token required</DialogTitle>
+          <DialogDescription>
+            {rejected
+              ? "That token was rejected. Enter the value forsight was started with (--auth-token or FORSIGHT_AUTH_TOKEN)."
+              : "This agent requires a bearer token to show its data. Enter the value forsight was started with (--auth-token or FORSIGHT_AUTH_TOKEN)."}
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <Input
+            type="password"
+            autoFocus
+            autoComplete="off"
+            spellCheck={false}
+            aria-label="Access token"
+            placeholder="Bearer token"
+            invalid={rejected}
+            hint={rejected ? "Incorrect token." : undefined}
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+          />
+          <DialogFooter>
+            <Button type="submit" disabled={!value.trim()}>
+              Continue
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
  * The dashboard shell: a sidebar with one link per page and a `<main>`
  * that shows whichever page the location hash names. Routing is a hash so
  * the embedded build keeps working from any mount point without a server
@@ -100,6 +180,7 @@ export default function App() {
 
   return (
     <SidebarProvider>
+      <AuthTokenDialog />
       <AppShell>
         <Sidebar label="Main navigation">
           <SidebarHeader>

@@ -559,7 +559,7 @@ cert-manager secret.
 
 ### 18. The dashboard can supply the bearer token — and can load at all under `--auth-token`
 
-- **Area** dashboard · **Effort** M · **Score** 3.57 · reframed
+- **Area** dashboard · **Effort** M · **Score** 3.57 · reframed · **Shipped** 2026-09-16, `BearerAuth` in `forsight/internal/api/auth.go`
 
 **Why.** `forsight/internal/api/auth.go:11-29` exempts only `GET /healthz`,
 and `run.go:219` wraps `server.Handler()` — which mounts the dashboard at `/`
