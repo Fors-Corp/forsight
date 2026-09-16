@@ -870,3 +870,5 @@ are the judges' composites.
   fixing three RTL rendering bugs the story's new geometry checks caught
   (axis labels overlapping the plot, the keyboard-cursor tooltip covering
   its own point, TraceWaterfall reading a trace backwards), 2026-09-16, #122.
+
+- **Deterministic incident grouping on the Timeline** — forseer-models-9's window-plus-shared-`Related` substitute for the label-less grouping model, folding insights within five minutes of each other into one incident event when they share a Related value or a Source, 2026-09-16, #118.
