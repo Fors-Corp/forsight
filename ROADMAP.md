@@ -537,7 +537,7 @@ step is a workflow edit, so it is proposed; the benchmarks stay informational.
 
 ### 17. TLS on the agent listener, opt-in
 
-- **Area** agent · **Effort** M · **Score** 3.62
+- **Area** agent · **Effort** M · **Score** 3.62 · **Shipped** 2026-09-16, `forsight/cmd/run.go`'s `resolveTLSConfig`
 
 **Why.** `run.go:219-224` is a plain `http.Server` and `ListenAndServe`;
 there is no TLS path in the binary. With `--auth-token` set on a non-loopback

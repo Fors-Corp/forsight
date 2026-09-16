@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -34,6 +36,9 @@ import (
 type runOptions struct {
 	addr              string
 	authToken         string
+	tlsCertFile       string
+	tlsKeyFile        string
+	tlsClientCAFile   string
 	retention         time.Duration
 	collectInterval   time.Duration
 	disableDocker     bool
@@ -67,6 +72,16 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.authToken, "auth-token", "",
 		"require Authorization: Bearer <token> on every route except GET /healthz; "+
 			"also read from FORSIGHT_AUTH_TOKEN when the flag is empty (auth is off by default)")
+	cmd.Flags().StringVar(&opts.tlsCertFile, "tls-cert", "",
+		"path to a PEM certificate; with --tls-key, serves HTTPS instead of plaintext HTTP "+
+			"(off by default); also read from FORSIGHT_TLS_CERT when the flag is empty")
+	cmd.Flags().StringVar(&opts.tlsKeyFile, "tls-key", "",
+		"path to the PEM private key matching --tls-cert; "+
+			"also read from FORSIGHT_TLS_KEY when the flag is empty")
+	cmd.Flags().StringVar(&opts.tlsClientCAFile, "tls-client-ca", "",
+		"path to a PEM CA bundle; with --tls-cert/--tls-key, requires and verifies a client "+
+			"certificate signed by it on every connection (mTLS); also read from "+
+			"FORSIGHT_TLS_CLIENT_CA when the flag is empty")
 	cmd.Flags().DurationVar(&opts.retention, "retention", time.Hour, "how long the store retains data, memory or Badger alike")
 	cmd.Flags().DurationVar(&opts.collectInterval, "collect-interval", 10*time.Second, "how often the host/Docker collectors poll")
 	cmd.Flags().BoolVar(&opts.disableDocker, "disable-docker", false, "skip the Docker collector even if a daemon is reachable")
@@ -113,6 +128,14 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 	// Validated up front, before the store (possibly a Badger database) is
 	// opened, so a bad --scrape value fails fast with nothing to clean up.
 	targets, err := parseScrapeTargets(opts.scrapeTargets)
+	if err != nil {
+		return err
+	}
+
+	// TLS is opt-in and, like --scrape, validated up front: a missing key, an
+	// unreadable cert, or a bad --tls-client-ca bundle must fail at startup
+	// with nothing to clean up yet, never fall back to serving plaintext.
+	tlsConfig, tlsEnabled, err := resolveTLSConfig(opts)
 	if err != nil {
 		return err
 	}
@@ -216,12 +239,27 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 	if authToken == "" && !isLoopbackListenAddr(opts.addr) {
 		logger.Warn("listening on a non-loopback address with no authentication configured; set --auth-token or FORSIGHT_AUTH_TOKEN")
 	}
+	if authToken != "" && !tlsEnabled && !isLoopbackListenAddr(opts.addr) {
+		logger.Warn("--auth-token is set on a non-loopback address with no TLS configured; " +
+			"the bearer token and every payload cross the network in cleartext. Set --tls-cert/--tls-key.")
+	}
 	httpServer := newHTTPServer(opts.addr, api.BearerAuth(authToken, server.Handler()))
+	if tlsEnabled {
+		httpServer.TLSConfig = tlsConfig
+	}
 
 	serveErr := make(chan error, 1)
 	go func() {
-		logger.Info("forsight listening", "addr", opts.addr)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Info("forsight listening", "addr", opts.addr, "tls", tlsEnabled)
+		// TLSConfig already carries the loaded certificate (and, for mTLS, the
+		// client CA pool), so ListenAndServeTLS needs no filenames of its own —
+		// net/http only reads its two string args when TLSConfig.Certificates
+		// is empty.
+		serve := httpServer.ListenAndServe
+		if tlsEnabled {
+			serve = func() error { return httpServer.ListenAndServeTLS("", "") }
+		}
+		if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 		}
 		close(serveErr)
@@ -319,13 +357,63 @@ func retryTail(ctx context.Context, path string, sink filelog.Sink, classifier f
 	}
 }
 
-// resolveAuthToken prefers the --auth-token flag; when that is empty it falls
-// back to FORSIGHT_AUTH_TOKEN. An empty result means auth stays off.
-func resolveAuthToken(flagValue string) string {
+// resolveFlagOrEnv prefers flagValue; when that is empty it falls back to
+// envVar. Every flag in this file with an environment fallback (the auth
+// token, and the TLS paths below) shares this precedence.
+func resolveFlagOrEnv(flagValue, envVar string) string {
 	if flagValue != "" {
 		return flagValue
 	}
-	return os.Getenv("FORSIGHT_AUTH_TOKEN")
+	return os.Getenv(envVar)
+}
+
+// resolveAuthToken prefers the --auth-token flag; when that is empty it falls
+// back to FORSIGHT_AUTH_TOKEN. An empty result means auth stays off.
+func resolveAuthToken(flagValue string) string {
+	return resolveFlagOrEnv(flagValue, "FORSIGHT_AUTH_TOKEN")
+}
+
+// resolveTLSConfig builds the *tls.Config for --tls-cert/--tls-key (env
+// fallbacks FORSIGHT_TLS_CERT/FORSIGHT_TLS_KEY) plus the optional
+// --tls-client-ca (FORSIGHT_TLS_CLIENT_CA) for mTLS. ok is false only when
+// neither --tls-cert nor --tls-key was set anywhere — TLS is opt-in, the same
+// shape as --auth-token and --mlaas-url. Setting just one of --tls-cert/
+// --tls-key, an unreadable or mismatched cert/key pair, or a --tls-client-ca
+// file with no PEM certificate in it, is an error returned up front: run's
+// caller treats any error here as fatal before the listener starts, so a bad
+// path can never fall back to plaintext.
+func resolveTLSConfig(opts *runOptions) (*tls.Config, bool, error) {
+	certFile := resolveFlagOrEnv(opts.tlsCertFile, "FORSIGHT_TLS_CERT")
+	keyFile := resolveFlagOrEnv(opts.tlsKeyFile, "FORSIGHT_TLS_KEY")
+	if certFile == "" && keyFile == "" {
+		return nil, false, nil
+	}
+	if certFile == "" || keyFile == "" {
+		return nil, false, errors.New("--tls-cert and --tls-key (or their FORSIGHT_TLS_CERT/FORSIGHT_TLS_KEY " +
+			"equivalents) must both be set, or both left empty, to enable TLS")
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, false, fmt.Errorf("loading --tls-cert/--tls-key: %w", err)
+	}
+	// TLS 1.2 is the floor, stated rather than inherited from whatever the
+	// runtime's default happens to be in the Go version that built this.
+	cfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+
+	if caFile := resolveFlagOrEnv(opts.tlsClientCAFile, "FORSIGHT_TLS_CLIENT_CA"); caFile != "" {
+		caPEM, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, false, fmt.Errorf("reading --tls-client-ca: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, false, fmt.Errorf("--tls-client-ca %q: no PEM certificate found", caFile)
+		}
+		cfg.ClientCAs = pool
+		cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+
+	return cfg, true, nil
 }
 
 // resolveErrorSLO prefers the --error-slo flag; when that is unset (the flag
