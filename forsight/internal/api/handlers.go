@@ -53,12 +53,19 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, resp)
 }
 
-// handleMetrics serves GET /api/v1/metrics?name=&since=<RFC3339>&before=<RFC3339>&limit=<n>&label.<key>=<value>
+// handleMetrics serves GET /api/v1/metrics?name=&since=<RFC3339>&before=<RFC3339>&limit=<n>&per_name=<n>&label.<key>=<value>
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	query := store.MetricQuery{Name: q.Get("name"), Labels: labelsFromQuery(q)}
 
 	if err := parseWindow(q, &query.Since, &query.Before, &query.Limit); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// per_name is the metrics read's own cap (see store.MetricQuery.PerName):
+	// the newest N of every name, so an unscoped read stays bounded without
+	// a busy name starving a quiet one.
+	if err := parsePositive(q.Get("per_name"), errInvalidPerName, &query.PerName); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -121,13 +128,20 @@ func parseWindow(q url.Values, since, before *time.Time, limit *int) error {
 	if *before, err = parseTime(q.Get("before"), errInvalidBefore); err != nil {
 		return err
 	}
-	if raw := q.Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			return errInvalidLimit
-		}
-		*limit = n
+	return parsePositive(q.Get("limit"), errInvalidLimit, limit)
+}
+
+// parsePositive stores raw as a positive integer in dst, leaves dst alone
+// when raw is empty, and answers invalid for anything else.
+func parsePositive(raw string, invalid error, dst *int) error {
+	if raw == "" {
+		return nil
 	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return invalid
+	}
+	*dst = n
 	return nil
 }
 
@@ -143,9 +157,10 @@ func parseTime(raw string, invalid error) (time.Time, error) {
 }
 
 var (
-	errInvalidSince  = &queryError{"invalid since: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
-	errInvalidBefore = &queryError{"invalid before: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
-	errInvalidLimit  = &queryError{"invalid limit: expected a positive integer"}
+	errInvalidSince   = &queryError{"invalid since: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
+	errInvalidBefore  = &queryError{"invalid before: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
+	errInvalidLimit   = &queryError{"invalid limit: expected a positive integer"}
+	errInvalidPerName = &queryError{"invalid per_name: expected a positive integer"}
 )
 
 type queryError struct{ msg string }

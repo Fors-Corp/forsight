@@ -196,6 +196,13 @@ func truncatedKeyName(name string) []byte {
 	return nb
 }
 
+// keyName extracts the (possibly truncated) name a key built by encodeKey
+// carries between the type byte and the timestamp.
+func keyName(key []byte) []byte {
+	nameLen := int(binary.BigEndian.Uint16(key[1:3]))
+	return key[3 : 3+nameLen]
+}
+
 // keyTimestamp extracts the timestamp encoded in a key built by encodeKey.
 // It lets a full-keyspace scan (no name/service/source filter) reject a
 // key that fails a Since filter before paying for a value decode.
@@ -236,8 +243,13 @@ var maxKeySuffix = bytes.Repeat([]byte{0xFF}, 16)
 // newest N reads N keys and not the whole history. The result is reversed
 // on the way out, oldest-first, which is what every consumer expects. Within
 // one name the key's timestamp orders the walk, so a key older than since
-// ends the scan; across names (the unscoped case) it only skips.
-func scanNewestFirst[T any](txn *badger.Txn, typ byte, filterValue string, since, before time.Time, limit int,
+// ends the scan; across names (the unscoped case) the walk visits names in
+// descending key order, each newest-first, so a key older than since means
+// the rest of that name is older too and the scan seeks straight to the
+// next name. perName, the unscoped read's own cap, works the same way: once
+// a name has matched perName records the scan seeks past it. (Scoped, the
+// caller folds perName into limit; the scan ignores it.)
+func scanNewestFirst[T any](txn *badger.Txn, typ byte, filterValue string, since, before time.Time, limit, perName int,
 	decode func([]byte) (T, error), match func(T) bool) ([]T, error) {
 	out := make([]T, 0)
 	prefix, seek := scanBounds(typ, filterValue, before)
@@ -247,16 +259,32 @@ func scanNewestFirst[T any](txn *badger.Txn, typ byte, filterValue string, since
 	iopts.Reverse = true
 	it := txn.NewIterator(iopts)
 	defer it.Close()
-	for it.Seek(seek); it.ValidForPrefix(prefix); it.Next() {
+	var curName []byte
+	curCount := 0
+	it.Seek(seek)
+	for it.ValidForPrefix(prefix) {
 		item := it.Item()
-		ts := keyTimestamp(item.Key())
+		key := item.Key()
+		if !scoped {
+			if name := keyName(key); !bytes.Equal(name, curName) {
+				curName = append(curName[:0], name...)
+				curCount = 0
+			}
+		}
+		ts := keyTimestamp(key)
 		if !before.IsZero() && !ts.Before(before) {
+			it.Next()
 			continue
 		}
 		if !since.IsZero() && ts.Before(since) {
 			if scoped {
 				break
 			}
+			seekPastName(it, typ, curName)
+			continue
+		}
+		if !scoped && perName > 0 && curCount >= perName {
+			seekPastName(it, typ, curName)
 			continue
 		}
 		var rec T
@@ -264,18 +292,28 @@ func scanNewestFirst[T any](txn *badger.Txn, typ byte, filterValue string, since
 		if verr := item.Value(func(val []byte) error { rec, err = decode(val); return err }); verr != nil {
 			return nil, verr
 		}
-		if !match(rec) {
-			continue
+		if match(rec) {
+			out = append(out, rec)
+			curCount++
+			if limit > 0 && len(out) == limit {
+				break
+			}
 		}
-		out = append(out, rec)
-		if limit > 0 && len(out) == limit {
-			break
-		}
+		it.Next()
 	}
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
 	}
 	return out, nil
+}
+
+// seekPastName moves a reverse iterator to the newest key of the name that
+// precedes name in key order. The bare <type><nameLen><name> prefix sorts
+// below every key of that name (they all extend it) and above every key of
+// the names before it, and a reverse Seek lands on the largest key below
+// its argument, so one seek skips the rest of the name's history.
+func seekPastName(it *badger.Iterator, typ byte, name []byte) {
+	it.Seek(encodeNamePrefix(typ, string(name)))
 }
 
 // Ping reports whether the underlying Badger database is still open and
@@ -316,7 +354,18 @@ func (s *BadgerStore) QueryMetrics(_ context.Context, q MetricQuery) ([]model.Me
 	var out []model.Metric
 	err := s.db.View(func(txn *badger.Txn) error {
 		var err error
-		out, err = scanNewestFirst(txn, metricKeyType, q.Name, q.Since, q.Before, q.Limit,
+		limit, perName := q.Limit, q.PerName
+		if q.Name != "" && perName > 0 && (limit == 0 || perName < limit) {
+			// One name: the per-name cap is the cap.
+			limit, perName = perName, 0
+		}
+		scanLimit := limit
+		if perName > 0 {
+			// The per-name cap bounds the walk; Limit then picks the newest of
+			// that set by time below, not the last N in key order.
+			scanLimit = 0
+		}
+		out, err = scanNewestFirst(txn, metricKeyType, q.Name, q.Since, q.Before, scanLimit, perName,
 			func(val []byte) (model.Metric, error) {
 				var rec model.Metric
 				if err := json.Unmarshal(val, &rec); err != nil {
@@ -325,6 +374,9 @@ func (s *BadgerStore) QueryMetrics(_ context.Context, q MetricQuery) ([]model.Me
 				return rec, nil
 			},
 			func(rec model.Metric) bool { return matchesMetric(rec, q) })
+		if err == nil && perName > 0 {
+			out = newestByTime(out, limit)
+		}
 		return err
 	})
 	if out == nil {
@@ -359,7 +411,7 @@ func (s *BadgerStore) QuerySpans(_ context.Context, q SpanQuery) ([]model.Span, 
 	var out []model.Span
 	err := s.db.View(func(txn *badger.Txn) error {
 		var err error
-		out, err = scanNewestFirst(txn, spanKeyType, q.Service, q.Since, q.Before, q.Limit,
+		out, err = scanNewestFirst(txn, spanKeyType, q.Service, q.Since, q.Before, q.Limit, 0,
 			func(val []byte) (model.Span, error) {
 				var rec model.Span
 				if err := json.Unmarshal(val, &rec); err != nil {
@@ -402,7 +454,7 @@ func (s *BadgerStore) QueryLogs(_ context.Context, q LogQuery) ([]model.LogEntry
 	var out []model.LogEntry
 	err := s.db.View(func(txn *badger.Txn) error {
 		var err error
-		out, err = scanNewestFirst(txn, logKeyType, q.Source, q.Since, q.Before, q.Limit,
+		out, err = scanNewestFirst(txn, logKeyType, q.Source, q.Since, q.Before, q.Limit, 0,
 			func(val []byte) (model.LogEntry, error) {
 				var rec model.LogEntry
 				if err := json.Unmarshal(val, &rec); err != nil {
