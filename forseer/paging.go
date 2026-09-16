@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sync"
@@ -370,4 +371,86 @@ func (m *pagingModel) Card() Card {
 		Detail: fmt.Sprintf("%d bursts awaiting their label, %d templates with their own weights",
 			len(m.pending), len(m.clusters)),
 	}
+}
+
+// pagingSnapshotVersion is this model's own schema version — see
+// severitySnapshotVersion's comment for what that guards against.
+const pagingSnapshotVersion = 1
+
+// pagingSnapshot is Snapshot's JSON payload: the shared weight vector, every
+// cluster's own specialised weights, and the trained count — the logistic
+// model itself. The prequential grading window and the in-flight
+// pending/marks bookkeeping are deliberately absent — see Restore.
+type pagingSnapshot struct {
+	Version  int                              `json:"version"`
+	Shared   pagingWeights                    `json:"shared"`
+	Clusters map[string]pagingClusterSnapshot `json:"clusters"`
+	Trained  int                              `json:"trained"`
+}
+
+type pagingClusterSnapshot struct {
+	W       pagingWeights `json:"w"`
+	Trained int           `json:"trained"`
+	Last    time.Time     `json:"last"`
+}
+
+// Snapshot implements Model.
+func (m *pagingModel) Snapshot() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snap := pagingSnapshot{
+		Version:  pagingSnapshotVersion,
+		Shared:   m.shared,
+		Clusters: make(map[string]pagingClusterSnapshot, len(m.clusters)),
+		Trained:  m.trained,
+	}
+	for id, c := range m.clusters {
+		snap.Clusters[id] = pagingClusterSnapshot{W: c.w, Trained: c.trained, Last: c.last}
+	}
+	return json.Marshal(snap)
+}
+
+// Restore implements Model. The shared weight vector, every cluster's own
+// specialised weights, and the trained count all come back — that is the
+// logistic model itself. Bounded the same way clusterLocked keeps it
+// bounded live: a snapshot with more than maxClusters entries is truncated
+// on the way in, never grown past the cap the running model itself never
+// exceeds.
+//
+// What does not come back:
+//   - The prequential grading window (grades, fallbackGrade, gradePos,
+//     graded, hits, fallbackHits) that gates readiness — readyLocked needs
+//     pagingMinGraded graded bursts still ahead of the volume rule.
+//     Resetting it means a restarted agent starts back at "not yet ready"
+//     and has to beat the volume rule again on live bursts before the model
+//     is trusted, the same fallback contract a freshly started model has to
+//     earn.
+//   - pending and marks: a burst awaiting its label, and the recent
+//     critical insights that would label it, are both keyed to real
+//     wall-clock time against a live, continuous insight stream. A gap of
+//     unknown length sits between the shutdown that wrote this snapshot and
+//     the startup that reads it, so neither can be resumed honestly; they
+//     start empty, and a burst genuinely still in flight when the agent
+//     stopped is not carried over half-labelled.
+func (m *pagingModel) Restore(data []byte) error {
+	var snap pagingSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return fmt.Errorf("paging snapshot: %w", err)
+	}
+	if snap.Version != pagingSnapshotVersion {
+		return fmt.Errorf("paging snapshot version %d, want %d", snap.Version, pagingSnapshotVersion)
+	}
+	clusters := make(map[string]*pagingCluster, len(snap.Clusters))
+	for id, c := range snap.Clusters {
+		if len(clusters) >= maxClusters {
+			break
+		}
+		clusters[id] = &pagingCluster{w: c.W, trained: c.Trained, last: c.Last}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.shared = snap.Shared
+	m.clusters = clusters
+	m.trained = snap.Trained
+	return nil
 }

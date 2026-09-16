@@ -1,6 +1,8 @@
 package forseer
 
 import (
+	"encoding/json"
+	"fmt"
 	"hash/fnv"
 	"math"
 	"sort"
@@ -294,6 +296,85 @@ func (m *severityModel) Card() Card {
 		FallbackAccuracy: fallbackAccuracy,
 		Graded:           m.graded,
 	}
+}
+
+// severitySnapshotVersion is this model's own schema version, independent
+// of every other model's and of the engine-level envelope in persist.go. A
+// payload whose version does not match this constant is discarded by
+// Restore rather than decoded into a shape it was not written for.
+const severitySnapshotVersion = 1
+
+// severitySnapshot is Snapshot's JSON payload: the learned naive-Bayes
+// counts per class and the trained count that gates readiness. The
+// prequential grading window (grades, fallbackGrade, hits, fallbackHits,
+// graded, gradePos) is deliberately absent — see Restore.
+type severitySnapshot struct {
+	Version int                              `json:"version"`
+	Classes map[string]severityClassSnapshot `json:"classes"`
+	Trained int                              `json:"trained"`
+}
+
+// severityClassSnapshot mirrors severityClass. Counts is severityBuckets
+// long on the way out; Restore copies it into the fixed-size array with a
+// plain slice-to-array copy, which only ever takes the shorter of the two
+// lengths — a hand-edited or truncated file can lose counts, never overrun
+// the array it copies into.
+type severityClassSnapshot struct {
+	Counts  []uint32 `json:"counts"`
+	Total   uint64   `json:"total"`
+	Trained int      `json:"trained"`
+}
+
+// Snapshot implements Model.
+func (m *severityModel) Snapshot() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snap := severitySnapshot{
+		Version: severitySnapshotVersion,
+		Classes: make(map[string]severityClassSnapshot, len(m.classes)),
+		Trained: m.trained,
+	}
+	for name, class := range m.classes {
+		counts := make([]uint32, severityBuckets)
+		copy(counts, class.counts[:])
+		snap.Classes[name] = severityClassSnapshot{Counts: counts, Total: class.total, Trained: class.trained}
+	}
+	return json.Marshal(snap)
+}
+
+// Restore implements Model. It replaces the learned class statistics and
+// the trained count that gate severityMinTrained/severityMinPerClass — a
+// deployment does not have to relearn its own log vocabulary every restart,
+// which is the whole point of this roadmap item. It is for a cold model at
+// startup, never a warm one (see Model.Restore).
+//
+// What does not come back: the prequential grading window (grades,
+// fallbackGrade, hits, fallbackHits, graded, gradePos) stays at the zero
+// value newSeverityModel already gave it. Readiness compares the model
+// against its fallback over that window, so restoring it would let a
+// restart open with a comparison earned in a previous run rather than one
+// this run has actually made; zeroing it means readiness — and the
+// fallback contract it protects — is re-earned on live data, exactly like a
+// model that had fallen behind and has just started winning again.
+func (m *severityModel) Restore(data []byte) error {
+	var snap severitySnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return fmt.Errorf("severity snapshot: %w", err)
+	}
+	if snap.Version != severitySnapshotVersion {
+		return fmt.Errorf("severity snapshot version %d, want %d", snap.Version, severitySnapshotVersion)
+	}
+	classes := make(map[string]*severityClass, len(snap.Classes))
+	for name, c := range snap.Classes {
+		class := &severityClass{total: c.Total, trained: c.Trained}
+		copy(class.counts[:], c.Counts)
+		classes[name] = class
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.classes = classes
+	m.trained = snap.Trained
+	return nil
 }
 
 // severityTokens lowercases, splits on anything that is not a letter or

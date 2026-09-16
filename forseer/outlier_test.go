@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"bytes"
 	"math"
 	"testing"
 	"time"
@@ -266,5 +267,89 @@ func TestInvert5_SingularMatrixIsRejected(t *testing.T) {
 	var a [hostOutlierDims][hostOutlierDims]float64 // all zero: singular
 	if _, ok := invert5(a); ok {
 		t.Fatal("invert5 accepted the zero matrix")
+	}
+}
+
+// warmHostOutlier feeds the same correlated warm-up pattern the Detector
+// tests above use, but straight into the model, and returns the running net
+// counters so a caller can keep feeding it afterwards.
+func warmHostOutlier(m *hostOutlierModel, n int) (sent, recv float64) {
+	sent, recv = 1_000_000.0, 800_000.0
+	for i := 0; i < n; i++ {
+		cpu := 50 + float64(i%5)
+		jitter := []float64{0, 0.01, -0.01, 0.02, -0.02}[i%5]
+		mem := cpu + jitter
+		disk := 30 + float64(i%3)*0.5
+		sent += 1000 + float64(i%4)*20
+		recv += 800 + float64((i+1)%4)*15
+		m.Observe(cpu, mem, disk, sent, recv)
+	}
+	return sent, recv
+}
+
+// TestHostOutlierModel_SnapshotRestoreRoundTrip is roadmap item 25's proof
+// for this model: the mean vector, covariance and net-counter baseline all
+// come back, so a restored model scores the very next batch exactly as a
+// warm one would.
+func TestHostOutlierModel_SnapshotRestoreRoundTrip(t *testing.T) {
+	m := newHostOutlierModel()
+	sent, recv := warmHostOutlier(m, 200)
+	if !m.Card().Ready {
+		t.Fatal("test setup: model not ready after warm-up")
+	}
+
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	restored := newHostOutlierModel()
+	if err := restored.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if !restored.Card().Ready {
+		t.Fatal("restored model is not ready even though n/mean/m2 all came back")
+	}
+	if restored.n != m.n || restored.mean != m.mean || restored.m2 != m.m2 {
+		t.Fatalf("restored model's fitted state differs from the original")
+	}
+
+	// The same next batch, fed to both, must score identically — proof the
+	// restored covariance (and the net-counter baseline it deltas against)
+	// is not just present but usable.
+	sent += 1000
+	recv += 800
+	wantD2, wantMetric, wantReady := m.Observe(54, 50, 30.5, sent, recv)
+	gotD2, gotMetric, gotReady := restored.Observe(54, 50, 30.5, sent, recv)
+	if gotD2 != wantD2 || gotMetric != wantMetric || gotReady != wantReady {
+		t.Fatalf("restored Observe = (%v,%q,%v), want (%v,%q,%v)", gotD2, gotMetric, gotReady, wantD2, wantMetric, wantReady)
+	}
+}
+
+func TestHostOutlierModel_RestoreDiscardsAVersionMismatch(t *testing.T) {
+	m := newHostOutlierModel()
+	warmHostOutlier(m, 60)
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	data = bytes.Replace(data, []byte(`"version":1`), []byte(`"version":2`), 1)
+
+	fresh := newHostOutlierModel()
+	if err := fresh.Restore(data); err == nil {
+		t.Fatal("Restore accepted a payload with the wrong schema version")
+	}
+	if fresh.n != 0 {
+		t.Fatalf("a discarded restore left n=%d, want 0", fresh.n)
+	}
+}
+
+func TestHostOutlierModel_RestoreDiscardsCorruptJSON(t *testing.T) {
+	m := newHostOutlierModel()
+	if err := m.Restore([]byte("{not json")); err == nil {
+		t.Fatal("Restore accepted corrupt JSON")
+	}
+	if m.n != 0 {
+		t.Fatalf("a discarded restore left n=%d, want 0", m.n)
 	}
 }

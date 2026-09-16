@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
@@ -328,5 +329,81 @@ func TestSeverityModel_FallbackScoreSharesTheModelsWindow(t *testing.T) {
 	// the same denominator.
 	if card.FallbackAccuracy < 0 || card.FallbackAccuracy > 1 {
 		t.Errorf("fallback accuracy %.2f is not a fraction", card.FallbackAccuracy)
+	}
+}
+
+// TestSeverityModel_SnapshotRestoreRoundTrip is roadmap item 25's proof for
+// this model: what Snapshot writes, a brand new model's Restore reads back
+// into the same classifier, same trained count, same answers.
+func TestSeverityModel_SnapshotRestoreRoundTrip(t *testing.T) {
+	m := newSeverityModel()
+	trainRealistic(m, 30)
+	wantTrained := m.Card().Trained
+
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	restored := newSeverityModel()
+	if err := restored.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if got := restored.Card().Trained; got != wantTrained {
+		t.Fatalf("restored Trained = %d, want %d", got, wantTrained)
+	}
+
+	for _, line := range []string{
+		"panic: nil map write in the checkout handler",
+		"could not reach the database cluster",
+		"retrying upstream call after timeout",
+		"request completed in 40ms",
+	} {
+		want, _, wantOK := m.Classify(line)
+		got, _, gotOK := restored.Classify(line)
+		if wantOK != gotOK || want != got {
+			t.Errorf("%q: original classified (%q, %v), restored classified (%q, %v)", line, want, wantOK, got, gotOK)
+		}
+	}
+
+	// The prequential grading window is what readiness against a fallback is
+	// earned from — restoring it would carry a comparison from a previous
+	// run into this one, so it must come back at zero rather than whatever
+	// trainRealistic left it at.
+	if restored.graded != 0 || restored.hits != 0 {
+		t.Fatalf("restored model carries a graded window (graded=%d hits=%d), want zero", restored.graded, restored.hits)
+	}
+}
+
+// TestSeverityModel_RestoreDiscardsAVersionMismatch proves a payload from a
+// different schema version never gets misread: the model is left exactly as
+// its own constructor built it.
+func TestSeverityModel_RestoreDiscardsAVersionMismatch(t *testing.T) {
+	m := newSeverityModel()
+	trainRealistic(m, 30)
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	data = bytes.Replace(data, []byte(`"version":1`), []byte(`"version":2`), 1)
+
+	fresh := newSeverityModel()
+	if err := fresh.Restore(data); err == nil {
+		t.Fatal("Restore accepted a payload with the wrong schema version")
+	}
+	if fresh.Card().Trained != 0 {
+		t.Fatalf("a discarded restore left the model with %d trained examples, want 0", fresh.Card().Trained)
+	}
+}
+
+// TestSeverityModel_RestoreDiscardsCorruptJSON proves unparsable input is an
+// error, not a partial or misread state.
+func TestSeverityModel_RestoreDiscardsCorruptJSON(t *testing.T) {
+	m := newSeverityModel()
+	if err := m.Restore([]byte("{not json")); err == nil {
+		t.Fatal("Restore accepted corrupt JSON")
+	}
+	if m.Card().Trained != 0 {
+		t.Fatalf("a discarded restore left the model with %d trained examples, want 0", m.Card().Trained)
 	}
 }

@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sync"
@@ -233,4 +234,104 @@ func (w *spanWatch) Card() Card {
 		FallbackAccuracy: Unmeasured,
 		Detail:           detail,
 	}
+}
+
+// spanSnapshotVersion is this model's own schema version — see
+// severitySnapshotVersion's comment for what that guards against.
+const spanSnapshotVersion = 1
+
+// spanSnapshot is Snapshot's JSON payload: every (service, span name)
+// series' P² markers, sample count, CUSUM statistic and exceedance run
+// length — the whole learned shape of "normal" for that endpoint. The
+// currently-open insights and the recent-trace buffer are deliberately
+// absent — see Restore.
+type spanSnapshot struct {
+	Version int                           `json:"version"`
+	Series  map[string]spanSeriesSnapshot `json:"series"`
+}
+
+type spanSeriesSnapshot struct {
+	N      int                 `json:"n"`
+	P50    p2EstimatorSnapshot `json:"p50"`
+	P99    p2EstimatorSnapshot `json:"p99"`
+	Cusum  float64             `json:"cusum"`
+	RunLen int                 `json:"runLen"`
+}
+
+// p2EstimatorSnapshot mirrors p2Estimator's own fields exactly, so restoring
+// one continues the running quantile estimate from precisely where it left
+// off rather than re-deriving it from anything looser.
+type p2EstimatorSnapshot struct {
+	P       float64    `json:"p"`
+	N       int        `json:"n"`
+	Initial []float64  `json:"initial"`
+	Height  [5]float64 `json:"height"`
+	Pos     [5]int     `json:"pos"`
+	Desired [5]float64 `json:"desired"`
+	Incr    [5]float64 `json:"incr"`
+}
+
+func snapshotP2(e *p2Estimator) p2EstimatorSnapshot {
+	initial := make([]float64, len(e.initial))
+	copy(initial, e.initial)
+	return p2EstimatorSnapshot{
+		P: e.p, N: e.n, Initial: initial,
+		Height: e.height, Pos: e.pos, Desired: e.desired, Incr: e.incr,
+	}
+}
+
+func restoreP2(s p2EstimatorSnapshot) *p2Estimator {
+	e := &p2Estimator{p: s.P, n: s.N, height: s.Height, pos: s.Pos, desired: s.Desired, incr: s.Incr}
+	e.initial = make([]float64, len(s.Initial))
+	copy(e.initial, s.Initial)
+	return e
+}
+
+// Snapshot implements Model.
+func (w *spanWatch) Snapshot() ([]byte, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	snap := spanSnapshot{Version: spanSnapshotVersion, Series: make(map[string]spanSeriesSnapshot, len(w.series))}
+	for key, s := range w.series {
+		snap.Series[key] = spanSeriesSnapshot{
+			N: s.n, P50: snapshotP2(s.p50), P99: snapshotP2(s.p99), Cusum: s.cusum, RunLen: s.runLen,
+		}
+	}
+	return json.Marshal(snap)
+}
+
+// Restore implements Model. Every series' P² markers, sample count, CUSUM
+// statistic and exceedance run length come back — the whole learned shape
+// of "normal" for that endpoint, so a series that had a stable p50/p99
+// stays stable across a restart instead of re-warming from nothing.
+// Bounded the same way observeOneLocked bounds it live: a snapshot with
+// more than maxSpanSeries entries is truncated on the way in.
+//
+// What does not come back: open (the currently-open slow-span insights) and
+// traces/traceSeen (the recent-trace buffer CriticalPath reads). Both are
+// tied to a live, continuous stream of spans arriving close enough together
+// in wall-clock time to still be "the same trace" or "the same episode" —
+// exactly the kind of state a restart's own gap invalidates, the same
+// reasoning pagingModel's pending and marks reset for. A series with a
+// restored p99 starts closing its own new insights on the first span that
+// actually exceeds it, same as any warm series would.
+func (w *spanWatch) Restore(data []byte) error {
+	var snap spanSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return fmt.Errorf("spans snapshot: %w", err)
+	}
+	if snap.Version != spanSnapshotVersion {
+		return fmt.Errorf("spans snapshot version %d, want %d", snap.Version, spanSnapshotVersion)
+	}
+	series := make(map[string]*spanSeries, len(snap.Series))
+	for key, s := range snap.Series {
+		if len(series) >= maxSpanSeries {
+			break
+		}
+		series[key] = &spanSeries{n: s.N, p50: restoreP2(s.P50), p99: restoreP2(s.P99), cusum: s.Cusum, runLen: s.RunLen}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.series = series
+	return nil
 }

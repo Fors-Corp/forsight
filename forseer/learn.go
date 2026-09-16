@@ -27,6 +27,40 @@ package forseer
 type Model interface {
 	// Card describes the model: its job, its inputs, and how it is doing.
 	Card() Card
+
+	// Snapshot serializes everything about this model worth carrying across
+	// a restart: the learned state, and how much of it there is. The
+	// payload is this model's own JSON document, carrying its own schema
+	// version so a later change to what a model persists can tell an old
+	// snapshot apart from a new one rather than misreading it.
+	//
+	// It deliberately does not include the transient bookkeeping that
+	// exists only to grade the model against its own fallback in real time
+	// — see Restore for which fields that is, model by model.
+	//
+	// Snapshot is not itself the file on disk: Engine.Snapshot
+	// (engine.go/persist.go) wraps every model's payload into one document,
+	// and forsight/cmd/run.go is what writes that beside the Badger
+	// directory under --data-dir.
+	Snapshot() ([]byte, error)
+
+	// Restore replaces this model's learned state from a payload Snapshot
+	// produced. It is for a cold model at startup, never a warm one: it
+	// overwrites rather than merges, so calling it on a model that has
+	// already observed live data would discard that observation.
+	//
+	// A payload whose version does not match this model's current schema,
+	// or that does not parse as this model's shape at all, is an error: the
+	// caller discards it and the model is left exactly as its constructor
+	// built it — never partially applied, never misread as a different
+	// shape.
+	//
+	// What actually comes back, and what is deliberately reset to zero
+	// instead — usually the window a model grades itself against its
+	// fallback in, so readiness is re-earned on live data rather than
+	// carried over from a previous run — is documented on each model's own
+	// Restore.
+	Restore([]byte) error
 }
 
 // Card is the self-description of one model. GET /api/v1/forseer/models

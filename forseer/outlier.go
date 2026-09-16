@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sync"
@@ -237,6 +238,72 @@ func (m *hostOutlierModel) Card() Card {
 		Graded:           0,
 		Detail:           detail,
 	}
+}
+
+// hostOutlierSnapshotVersion is this model's own schema version — see
+// severitySnapshotVersion's comment for what that guards against.
+const hostOutlierSnapshotVersion = 1
+
+// hostOutlierSnapshot is Snapshot's JSON payload: the online mean vector and
+// covariance accumulator, the previous net-counter reading, and the
+// exit-criterion counters — the entire fitted model, with nothing to reset.
+type hostOutlierSnapshot struct {
+	Version     int                                       `json:"version"`
+	N           int                                       `json:"n"`
+	Mean        [hostOutlierDims]float64                  `json:"mean"`
+	M2          [hostOutlierDims][hostOutlierDims]float64 `json:"m2"`
+	Ready       bool                                      `json:"ready"`
+	PrevSent    float64                                   `json:"prevSent"`
+	PrevRecv    float64                                   `json:"prevRecv"`
+	HavePrevNet bool                                      `json:"havePrevNet"`
+	Opened      int                                       `json:"opened"`
+	OpenedAlone int                                       `json:"openedAlone"`
+}
+
+// Snapshot implements Model.
+func (m *hostOutlierModel) Snapshot() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snap := hostOutlierSnapshot{
+		Version: hostOutlierSnapshotVersion, N: m.n, Mean: m.mean, M2: m.m2, Ready: m.ready,
+		PrevSent: m.prevSent, PrevRecv: m.prevRecv, HavePrevNet: m.havePrevNet,
+		Opened: m.opened, OpenedAlone: m.openedAlone,
+	}
+	return json.Marshal(snap)
+}
+
+// Restore implements Model. The mean vector, covariance accumulator and
+// sample count come back — that is the fitted Gaussian this model scores
+// against — and Ready comes back as it was snapshotted rather than
+// re-derived by inverting the matrix again here, since it already reflects
+// the same n and m2 being restored alongside it.
+//
+// The previous net-counter reading (prevSent, prevRecv, havePrevNet) also
+// comes back: host.net.bytes_sent/recv are counters that persist across an
+// agent restart — they reset only on a NIC reset or a host reboot, neither
+// of which this process restarting is — so keeping them avoids treating the
+// first batch after a restart as a fresh baseline with nothing to delta
+// against, the same way reading()'s own comment describes for a live NIC
+// reset.
+//
+// opened/openedAlone — the exit-criterion counters Card reports — come back
+// too, on the same reasoning as culpritModel's ranked/floored: there is no
+// prequential window here to re-earn, just a running count of what this
+// model has actually found.
+func (m *hostOutlierModel) Restore(data []byte) error {
+	var snap hostOutlierSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return fmt.Errorf("host outlier snapshot: %w", err)
+	}
+	if snap.Version != hostOutlierSnapshotVersion {
+		return fmt.Errorf("host outlier snapshot version %d, want %d", snap.Version, hostOutlierSnapshotVersion)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.n, m.mean, m.m2, m.ready = snap.N, snap.Mean, snap.M2, snap.Ready
+	m.prevSent, m.prevRecv, m.havePrevNet = snap.PrevSent, snap.PrevRecv, snap.HavePrevNet
+	m.opened, m.openedAlone = snap.Opened, snap.OpenedAlone
+	return nil
 }
 
 // invert5 returns the inverse of a 5x5 matrix by Gauss-Jordan elimination
