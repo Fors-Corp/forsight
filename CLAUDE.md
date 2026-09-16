@@ -30,18 +30,48 @@ job. The two artifacts then version independently, and the dashboard picks up
 a new design-system release as an ordinary Dependabot PR that rebuilds the
 embed — the same shape as every other dependency.
 
-# Standing rule: prefer Graft for codebase navigation
+# Standing rule: Graft and CodeGraph, both — each for the job it wins
 
-For any task in this repo — understanding how something works, finding where
-code lives, tracing callers/callees, scoping an edit, judging a diff's blast
-radius, or onboarding to an unfamiliar area — reach for a `graft` tool first
-(`graft ask`, `graft grep`, `graft skeleton`, `graft callers`, `graft map`, or
-their MCP equivalents) before raw `grep`/`Read`/`Glob`. This is Marc's explicit
-preference: fall back to raw tools only when graft's own guidance says to (a
-truncated span, a file it doesn't index, a stale path, a genuinely weak hit) —
-see `.claude/skills/graft/SKILL.md`. Never pipe graft through `head`/`tail`,
-and when a turn used graft, close the reply with graft's own "tokens saved"
-tally summed across the calls.
+This repo carries two code indexes, both regenerable and gitignored:
+`graft/` (`graft build`) and `.codegraph/` (`codegraph init`; `codegraph.json`
+keeps the embedded dashboard bundle, Storybook output and coverage out of
+it). Marc's rule (2026-09-16, decided on measurements against this tree, not
+preference): use both, by job, and never both for the same question. Reach
+for whichever fits before raw `grep`/`Read`/`Glob`.
+
+**Graft first for the cheap, exact views.** `graft skeleton <file>` for a
+file's API (about 3 KB where `codegraph node <file>` returns the whole file,
+33 KB for `sync.go`); `graft grep "<literal>"` for every occurrence, grouped
+by enclosing symbol; `graft callers <sym>` for exact static edges (when it
+reports an ambiguous name, follow its own hint rather than guessing);
+`graft map` for orientation. Never pipe graft through `head`/`tail`, and when
+a turn used graft, close the reply with graft's "tokens saved" tally summed
+across the calls.
+
+**CodeGraph for flows, blast radius and dynamic dispatch.** `codegraph
+explore "<symbol names or question>"` (the `codegraph_explore` MCP tool in
+the main session; subagents run the CLI) when the answer is "how does X work"
+or "how does X reach Y" and you want the verbatim source plus the call paths
+in one answer; `codegraph impact <sym> --depth 2` before an edit, because it
+follows the hops graft's static edges do not (interface → implementation,
+React render trees, callbacks); `git diff --name-only | codegraph affected
+--stdin` to pick the tests a diff touches; `codegraph ui` when a human wants
+to walk the graph.
+
+**What not to do, measured.** Do not send a plain-English question to `graft
+ask` — it is lexical, and "where is the mlaas API key sent" produced a 42k-token
+pack that cited the minified bundle and missed `client.go`; name a symbol, or
+scope with `--in`, or use `graft grep` for the literal. Do not use `codegraph
+explore`/`node` for a file's API or an exhaustive occurrence list. Phrase
+CodeGraph queries with symbol names: the same question without them returned
+the wrong package. Both tools missed a call through a method value
+(`eng.ClassifySeverity` passed as a function) — confirm a "no callers" answer
+with `graft grep` before deleting anything.
+
+**Costs to know.** CodeGraph's `prompt-hook` (in `~/.claude/settings.json`)
+injects 13–16 KB of structural context into every prompt; graft's prompt hook
+injects a few lines. Both indexes refresh on their own (CodeGraph watches the
+tree; graft refreshes before each query).
 
 # Standing rule: pick the right model for every agent you spawn
 
