@@ -464,7 +464,7 @@ it shares `MODELS.md` and the Detector code item 12 reworks.
 
 ### 14. File-descriptor and connection-state metrics
 
-- **Area** agent · **Effort** S · **Score** 3.82
+- **Area** agent · **Effort** S · **Score** 3.82 · **Shipped** 2026-09-16, `internal/collector/host/host.go`
 
 **Why.** `host.go:46-81` emits cpu, memory, disk, net bytes and uptime;
 `proc.go:21-26`'s sample is PID, Name, CPUPercent, RSS. Nothing counts open
