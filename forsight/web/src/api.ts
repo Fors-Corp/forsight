@@ -183,9 +183,19 @@ export function useMetrics(intervalMs: number, options?: UseMetricsOptions): Pol
   );
 }
 
-/** Polls /api/v1/logs every `intervalMs` — same retention window as metrics. */
+// What the Overview draws from logs and traces is bounded — a stream of
+// the newest lines, a heatmap over them, one trace in the waterfall — so the
+// reads are too. The store hands back the newest `limit` in the window,
+// oldest-first, so under a week of retention the page stays the size it is
+// under an hour. Metrics are not capped here: that endpoint mixes every
+// metric name, and a global cap would truncate the CPU chart's history
+// before the stat cards' newest points; sizing it needs a per-name read.
+export const LOG_READ_LIMIT = 2000;
+export const TRACE_READ_LIMIT = 2000;
+
+/** Polls /api/v1/logs every `intervalMs` — the newest LOG_READ_LIMIT lines. */
 export function useLogs(intervalMs: number): PollState<LogEntry[]> {
-  return usePoll<LogEntry[]>("/api/v1/logs", intervalMs, [], asArray);
+  return usePoll<LogEntry[]>(`/api/v1/logs?limit=${LOG_READ_LIMIT}`, intervalMs, [], asArray);
 }
 
 /** Every point for one metric name, oldest first (LineChart expects that order). */
@@ -294,8 +304,9 @@ export interface Span {
   status: string;
 }
 
+/** Polls /api/v1/traces every `intervalMs` — the newest TRACE_READ_LIMIT spans. */
 export function useTraces(intervalMs: number): PollState<Span[]> {
-  return usePoll<Span[]>("/api/v1/traces", intervalMs, [], asArray);
+  return usePoll<Span[]>(`/api/v1/traces?limit=${TRACE_READ_LIMIT}`, intervalMs, [], asArray);
 }
 
 export interface ForseerBudget {

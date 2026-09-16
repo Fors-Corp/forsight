@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { connectionState, usePoll, type PollState } from "./api";
+import {
+  LOG_READ_LIMIT,
+  TRACE_READ_LIMIT,
+  connectionState,
+  useLogs,
+  usePoll,
+  useTraces,
+  type PollState,
+} from "./api";
 
 function ok(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -211,5 +219,31 @@ describe("connectionState", () => {
       state: "stale",
       silentForMs: 15_001,
     });
+  });
+});
+
+describe("bounded reads", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("asks the store for only the newest lines and spans it will draw", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        urls.push(String(input));
+        return ok([]);
+      })
+    );
+    renderHook(() => {
+      useLogs(60_000);
+      useTraces(60_000);
+    });
+    await act(async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    expect(urls).toContain(`/api/v1/logs?limit=${LOG_READ_LIMIT}`);
+    expect(urls).toContain(`/api/v1/traces?limit=${TRACE_READ_LIMIT}`);
   });
 });

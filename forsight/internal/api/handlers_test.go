@@ -68,6 +68,51 @@ func TestHandleMetrics_RejectsInvalidSince(t *testing.T) {
 	}
 }
 
+func TestHandleMetrics_LimitAndBefore(t *testing.T) {
+	st := store.NewMemoryStore(time.Hour)
+	base := time.Now().Add(-30 * time.Minute)
+	_ = st.WriteMetrics(context.Background(), []model.Metric{
+		{Name: "m", Value: 1, Timestamp: base},
+		{Name: "m", Value: 2, Timestamp: base.Add(time.Minute)},
+		{Name: "m", Value: 3, Timestamp: base.Add(2 * time.Minute)},
+	})
+	s := NewServer(st, nil, nil, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics?name=m&limit=1", nil)
+	s.Handler().ServeHTTP(rec, req)
+	var got []model.Metric
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if len(got) != 1 || got[0].Value != 3 {
+		t.Fatalf("limit=1 returned %+v, want only the newest point", got)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/metrics?name=m&before="+base.Add(time.Minute).UTC().Format(time.RFC3339), nil)
+	s.Handler().ServeHTTP(rec, req)
+	got = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if len(got) != 1 || got[0].Value != 1 {
+		t.Fatalf("before= returned %+v, want only the point before it", got)
+	}
+}
+
+func TestHandleMetrics_RejectsInvalidLimitAndBefore(t *testing.T) {
+	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil)
+	for _, query := range []string{"limit=abc", "limit=0", "limit=-5", "before=not-a-date"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics?"+query, nil)
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", query, rec.Code)
+		}
+	}
+}
+
 func TestHandleTraces_FiltersByService(t *testing.T) {
 	st := store.NewMemoryStore(time.Hour)
 	now := time.Now()
