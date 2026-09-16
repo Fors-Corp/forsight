@@ -3,6 +3,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 import { submitAuthToken, type ForseerQueryFacet } from "./api";
+import { THEME_STORAGE_KEY } from "./theme";
 
 type FetchResponses = Record<string, unknown>;
 
@@ -775,5 +776,56 @@ describe("Auth token gate", () => {
 
     await screen.findByText("Host CPU over time");
     expect(screen.queryByRole("dialog", { name: "Access token required" })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The sidebar footer's theme Switch (App.tsx's ThemeToggle, backed by
+ * useTheme in theme.ts). data-theme lives on <html> — outside whatever
+ * render() mounts — and localStorage persists across tests in the same
+ * jsdom environment, so both are reset in afterEach to keep every other
+ * describe block in this file (which all assume the dark default) honest.
+ */
+describe("Theme toggle", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.documentElement.removeAttribute("data-theme");
+    try {
+      localStorage.clear();
+    } catch {
+      // Nothing to clean up if storage was never usable to begin with.
+    }
+  });
+
+  it("is unchecked by default and leaves the document in the dark theme applyForsightTheme sets", async () => {
+    mockFetch(emptyEndpoints);
+    render(<App />);
+
+    const toggle = await screen.findByRole("switch", { name: "Light theme" });
+    expect(toggle).not.toBeChecked();
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  });
+
+  it("switches the document to light and stores the choice when clicked", async () => {
+    const user = userEvent.setup();
+    mockFetch(emptyEndpoints);
+    render(<App />);
+
+    const toggle = await screen.findByRole("switch", { name: "Light theme" });
+    await user.click(toggle);
+
+    expect(toggle).toBeChecked();
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+  });
+
+  it("starts checked and applied when localStorage already holds \"light\"", async () => {
+    localStorage.setItem(THEME_STORAGE_KEY, "light");
+    mockFetch(emptyEndpoints);
+    render(<App />);
+
+    const toggle = await screen.findByRole("switch", { name: "Light theme" });
+    expect(toggle).toBeChecked();
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
   });
 });

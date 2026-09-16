@@ -868,6 +868,8 @@ are the judges' composites.
 
 - **Probe uptime strips on the Overview** — a "Probes" card renders one UptimeBar per `--probe` target from the agent's `probe.*` metrics, bucketing the selected time range into operational/degraded/outage/unknown segments and showing a TLS-expiry badge beside it, visible only once a target is configured, 2026-09-17, #131.
 
+- **Dashboard theme toggle** — a Switch in the sidebar footer flips the dashboard between the design system's dark and light themes via `applyForsightTheme`, persists the choice to `localStorage`, and applies it before first paint with `forsightAntiFlashScript` so a stored light theme never flashes dark on load, 2026-09-17, #130.
+
 - **Forecasts drawn as a dashed projection** — the dashboard pins `@marcfs31/forsight` 4.1.0 and passes the Forecast series' first minute as `dashedFrom`, so the projection is told apart by stroke shape as well as colour and the chart's hidden description names the minute it is projected from; item 7 is marked shipped in the same change, 2026-09-17, #126.
 
 - **HTTP and TLS-expiry probe collector** — a repeatable `--probe <url>` GETs each target on the agent's collect interval, reporting `probe.http.up`/`.status`/`.duration_ms` and, for `https://` targets, `probe.tls.days_remaining`/`.valid` from the leaf certificate, read independently so an expiring or already-expired cert never flips an otherwise-reachable site's up metric, 2026-09-16, #120.
