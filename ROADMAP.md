@@ -510,7 +510,7 @@ are enough, and a third source of truth is not.
 
 ### 16. Fuzz and benchmark Forseer's ingest boundary
 
-- **Area** forseer · **Effort** S · **Score** 3.77 · merges quality-dx-3
+- **Area** forseer · **Effort** S · **Score** 3.77 · merges quality-dx-3 · **Shipped** 2026-09-16, forseer/logs_fuzz_test.go
 
 **Why.** `grep` for `func Fuzz` and `func Benchmark` across `forseer` and
 `forsight` finds nothing. `templateOf` (`logs.go:179-188`, a four-regex chain)
