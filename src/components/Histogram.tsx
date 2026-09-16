@@ -170,10 +170,16 @@ export const Histogram = React.forwardRef<HTMLDivElement, HistogramProps>(
           </ChartFrame>
 
           {active === null ? null : (
+            // Parked on the side opposite the cursor so the readout never
+            // covers the bar being read. Physical left/right, not logical
+            // start/end: the cursor's x position is a physical pixel (the
+            // plot never mirrors under RTL — see ChartFrame), so which side
+            // avoids it is a physical question too. A logical class would
+            // resolve to the same side as the bar under `dir="rtl"`.
             <div
               className={cn(
                 "absolute top-2 z-10",
-                active > (buckets.length - 1) / 2 ? "start-2" : "end-2"
+                active > (buckets.length - 1) / 2 ? "left-2" : "right-2"
               )}
             >
               <ChartTooltip
