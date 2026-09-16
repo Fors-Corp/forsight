@@ -198,6 +198,36 @@ describe("LineChart", () => {
     });
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it("draws a projected series dashed past dashedFrom, solid before it", () => {
+    const { container } = renderChart({
+      series: [{ ...series[0], dashedFrom: 2 }],
+    });
+    // One un-dashed path for the leading run, one dashed path for the tail —
+    // shape, not color, is what marks the projection (CONTRIBUTING.md).
+    const paths = container.querySelectorAll("path");
+    expect(paths).toHaveLength(2);
+    expect(container.querySelectorAll("path[stroke-dasharray]")).toHaveLength(1);
+    expect(container.querySelector("path:not([stroke-dasharray])")).not.toHaveAttribute(
+      "stroke-dasharray"
+    );
+  });
+
+  it("renders every point solid when a series has no dashedFrom", () => {
+    const { container } = renderChart();
+    expect(container.querySelectorAll("path[stroke-dasharray]")).toHaveLength(0);
+  });
+
+  it("folds a series' projection point into the visually hidden description", () => {
+    renderChart({ series: [{ ...series[0], dashedFrom: 2 }] });
+    // Both the SVG <desc> and the sr-only table <caption> carry it.
+    expect(screen.getAllByText(/us-east is projected from 14:00\./)).toHaveLength(2);
+  });
+
+  it("has no accessibility violations with a projected series", async () => {
+    const { container } = renderChart({ series: [{ ...series[0], dashedFrom: 2 }] });
+    expect(await axe(container)).toHaveNoViolations();
+  });
 });
 
 describe("pickLabelIndices", () => {

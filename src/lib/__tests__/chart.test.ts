@@ -15,6 +15,7 @@ import {
   seriesFill,
   seriesStroke,
   SERIES_SLOTS,
+  splitAtProjection,
   type Point,
 } from "../chart";
 
@@ -147,6 +148,72 @@ describe("path builders", () => {
     const [x, y] = polar(0, 0, 10, 0);
     expect(x).toBeCloseTo(0);
     expect(y).toBeCloseTo(-10);
+  });
+});
+
+describe("splitAtProjection", () => {
+  const toPoint = (index: number, value: number): Point => [index, value];
+
+  it("keeps everything solid when there is no projection", () => {
+    const { solid, dashed } = splitAtProjection([10, 20, 30], undefined, toPoint);
+    expect(solid).toEqual([
+      [
+        [0, 10],
+        [1, 20],
+        [2, 30],
+      ],
+    ]);
+    expect(dashed).toEqual([]);
+  });
+
+  it("splits solid from dashed at the given index, sharing the boundary point", () => {
+    const { solid, dashed } = splitAtProjection([10, 20, 30, 40], 2, toPoint);
+    expect(solid).toEqual([
+      [
+        [0, 10],
+        [1, 20],
+        [2, 30],
+      ],
+    ]);
+    expect(dashed).toEqual([
+      [
+        [2, 30],
+        [3, 40],
+      ],
+    ]);
+  });
+
+  it("dashes the whole run when dashedFrom is 0", () => {
+    const { solid, dashed } = splitAtProjection([10, 20], 0, toPoint);
+    expect(solid).toEqual([]);
+    expect(dashed).toEqual([
+      [
+        [0, 10],
+        [1, 20],
+      ],
+    ]);
+  });
+
+  it("leaves everything solid when dashedFrom is past the last index", () => {
+    const { solid, dashed } = splitAtProjection([10, 20], 5, toPoint);
+    expect(solid).toEqual([
+      [
+        [0, 10],
+        [1, 20],
+      ],
+    ]);
+    expect(dashed).toEqual([]);
+  });
+
+  it("still breaks on a null gap that straddles the projection boundary", () => {
+    const { solid, dashed } = splitAtProjection([10, null, 30, 40], 2, toPoint);
+    expect(solid).toEqual([[[0, 10]]]);
+    expect(dashed).toEqual([
+      [
+        [2, 30],
+        [3, 40],
+      ],
+    ]);
   });
 });
 

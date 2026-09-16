@@ -196,6 +196,56 @@ export function splitAtGaps(
   return segments;
 }
 
+/**
+ * Splits a value series into the solid run(s) up to and including
+ * `dashedFrom` and the dashed run(s) from that same point onward — the
+ * shape (not color) that marks a projection past the last real
+ * measurement. The boundary point is shared by both runs so the stroke has
+ * no gap where it switches. Null-gap handling is the same as
+ * `splitAtGaps`: a missing sample still breaks the line rather than being
+ * interpolated through. `dashedFrom` is optional — omitted, every point
+ * comes back solid and `dashed` is empty, so a series with no projection
+ * renders exactly as `splitAtGaps` would draw it.
+ */
+export function splitAtProjection(
+  values: ReadonlyArray<number | null>,
+  dashedFrom: number | undefined,
+  toPoint: (index: number, value: number) => Point
+): { solid: Point[][]; dashed: Point[][] } {
+  const solid: Point[][] = [];
+  const dashed: Point[][] = [];
+  let current: Point[] = [];
+  let currentDashed = false;
+
+  const flush = () => {
+    if (current.length === 0) return;
+    (currentDashed ? dashed : solid).push(current);
+  };
+
+  values.forEach((value, index) => {
+    if (value === null) {
+      flush();
+      current = [];
+      currentDashed = false;
+      return;
+    }
+    const isDashed = dashedFrom !== undefined && index >= dashedFrom;
+    if (current.length > 0 && isDashed !== currentDashed) {
+      // Crossing from solid to dashed mid-run: carry the boundary point onto
+      // both runs so the stroke stays continuous where it switches.
+      current.push(toPoint(index, value));
+      flush();
+      current = [toPoint(index, value)];
+    } else {
+      current.push(toPoint(index, value));
+    }
+    currentDashed = isDashed;
+  });
+  flush();
+
+  return { solid, dashed };
+}
+
 /** The same polyline closed down to `baselineY`, for an area fill. */
 export function areaPath(points: readonly Point[], baselineY: number): string {
   if (points.length === 0) return "";

@@ -269,6 +269,7 @@ export {
   seriesStroke,
   SERIES_SLOTS,
   splitAtGaps,
+  splitAtProjection,
   type ChartAnnotation,
   type NiceScale,
   type Point,
