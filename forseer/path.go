@@ -40,10 +40,7 @@ func CriticalPath(spans []SpanSample) []string {
 	var names []string
 	seen := map[string]bool{}
 	cur := leaf
-	for {
-		if cur.SpanID != "" && seen[cur.SpanID] {
-			break
-		}
+	for cur.SpanID == "" || !seen[cur.SpanID] {
 		if cur.SpanID != "" {
 			seen[cur.SpanID] = true
 		}
