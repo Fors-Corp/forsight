@@ -528,3 +528,86 @@ describe("Overview time range", () => {
     expect(screen.queryByRole("radio", { name: "Last 6 hours" })).not.toBeInTheDocument();
   });
 });
+
+// Item 11: memory and disk get the same Sparkline-on-a-StatCard-plus-chart
+// treatment CPU already had, via a real radio group like TimeRange's.
+describe("Overview memory and disk charts", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const hostMetrics = [
+    { name: "host.cpu.percent", value: 10, timestamp: ago(1) },
+    { name: "host.cpu.percent", value: 12.5, timestamp: ago(0) },
+    { name: "host.memory.percent", value: 40, timestamp: ago(1) },
+    { name: "host.memory.percent", value: 44, timestamp: ago(0) },
+    { name: "host.disk.percent", value: 70, timestamp: ago(1) },
+    { name: "host.disk.percent", value: 71, timestamp: ago(0) },
+  ];
+
+  it("gives Host memory and Host disk a Sparkline too, not only Host CPU", async () => {
+    mockFetch({ ...emptyEndpoints, "/api/v1/metrics": hostMetrics });
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    expect(screen.getByRole("img", { name: /^Host CPU trend:/ })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /^Host memory trend:/ })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /^Host disk trend:/ })).toBeInTheDocument();
+  });
+
+  it("is a radio group with Host CPU checked by default, and starts the chart on CPU", async () => {
+    mockFetch({ ...emptyEndpoints, "/api/v1/metrics": hostMetrics });
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    expect(screen.getByRole("radiogroup", { name: "Chart metric" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /^Host CPU/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /^Host memory/ })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: /^Host disk/ })).not.toBeChecked();
+    expect(screen.getByRole("img", { name: "Host CPU percent over time" })).toBeInTheDocument();
+  });
+
+  it("clicking the Host memory stat repoints the chart at memory's history", async () => {
+    const user = userEvent.setup();
+    mockFetch({ ...emptyEndpoints, "/api/v1/metrics": hostMetrics });
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    await user.click(screen.getByRole("radio", { name: /^Host memory/ }));
+
+    expect(await screen.findByText("Host memory over time")).toBeInTheDocument();
+    expect(screen.queryByText("Host CPU over time")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Host memory percent over time" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /^Host memory/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /^Host CPU/ })).not.toBeChecked();
+  });
+
+  it("moves and selects the charted stat with the arrow keys, wrapping at the ends", async () => {
+    const user = userEvent.setup();
+    mockFetch({ ...emptyEndpoints, "/api/v1/metrics": hostMetrics });
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    screen.getByRole("radio", { name: /^Host CPU/ }).focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("radio", { name: /^Host memory/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /^Host memory/ })).toHaveFocus();
+    expect(await screen.findByText("Host memory over time")).toBeInTheDocument();
+
+    // Wraps past Host disk back to Host CPU.
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    expect(screen.getByRole("radio", { name: /^Host CPU/ })).toBeChecked();
+    expect(await screen.findByText("Host CPU over time")).toBeInTheDocument();
+  });
+
+  it("keeps only the checked stat in the tab order, same as TimeRange", async () => {
+    mockFetch({ ...emptyEndpoints, "/api/v1/metrics": hostMetrics });
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    expect(screen.getByRole("radio", { name: /^Host CPU/ })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("radio", { name: /^Host memory/ })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("radio", { name: /^Host disk/ })).toHaveAttribute("tabindex", "-1");
+  });
+});
