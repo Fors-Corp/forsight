@@ -291,7 +291,7 @@ func newDemoGenerator(seed uint64, backfillSteps int) *demoGenerator {
 func (g *demoGenerator) tick(ts time.Time, index int) demoSample {
 	var s demoSample
 	s.metrics = g.hostMetrics(ts, index)
-	s.metrics = append(s.metrics, g.processMetrics(index)...)
+	s.metrics = append(s.metrics, g.processMetrics(ts, index)...)
 	s.logs = g.logLines(ts, index)
 	if span := g.trace(ts, index); span != nil {
 		s.spans = span
@@ -362,22 +362,22 @@ var demoProcesses = []struct {
 const demoCulpritPID = "4242"
 const demoCulpritName = "demo-reindex-job"
 
-func (g *demoGenerator) processMetrics(index int) []model.Metric {
+func (g *demoGenerator) processMetrics(ts time.Time, index int) []model.Metric {
 	var out []model.Metric
 	for _, p := range demoProcesses {
 		labels := map[string]string{"host": demoHost, "pid": p.pid, "name": p.name}
 		cpu := p.cpu + g.rng.Float64()*(p.cpu2-p.cpu)
 		rss := p.rss + g.rng.Float64()*(p.rss2-p.rss)
 		out = append(out,
-			model.Metric{Name: "process.cpu.percent", Value: cpu, Labels: labels},
-			model.Metric{Name: "process.memory.rss_bytes", Value: rss, Labels: labels},
+			model.Metric{Name: "process.cpu.percent", Value: cpu, Timestamp: ts, Labels: labels},
+			model.Metric{Name: "process.memory.rss_bytes", Value: rss, Timestamp: ts, Labels: labels},
 		)
 	}
 	if g.inSpike(index) {
 		labels := map[string]string{"host": demoHost, "pid": demoCulpritPID, "name": demoCulpritName}
 		out = append(out,
-			model.Metric{Name: "process.cpu.percent", Value: clamp(58+g.noise(14), 40, 90), Labels: labels},
-			model.Metric{Name: "process.memory.rss_bytes", Value: 950_000_000 + g.rng.Float64()*150_000_000, Labels: labels},
+			model.Metric{Name: "process.cpu.percent", Value: clamp(58+g.noise(14), 40, 90), Timestamp: ts, Labels: labels},
+			model.Metric{Name: "process.memory.rss_bytes", Value: 950_000_000 + g.rng.Float64()*150_000_000, Timestamp: ts, Labels: labels},
 		)
 	}
 	return out
