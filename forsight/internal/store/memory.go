@@ -86,6 +86,9 @@ func (s *MemoryStore) QueryMetrics(_ context.Context, q MetricQuery) ([]model.Me
 		}
 		out = append(out, m)
 	}
+	if q.PerName > 0 {
+		return newestByTime(newestPerName(out, q.PerName), q.Limit), nil
+	}
 	return newest(out, q.Limit), nil
 }
 
@@ -223,6 +226,28 @@ func newest[T any](xs []T, limit int) []T {
 		return xs[len(xs)-limit:]
 	}
 	return xs
+}
+
+// newestPerName keeps the newest perName records of each metric name in xs,
+// in xs's own (write) order, which is the order the collectors wrote them.
+// A walk from the end counts each name up to the cap, so the kept set is the
+// tail of every name's run at once.
+func newestPerName(xs []model.Metric, perName int) []model.Metric {
+	if perName <= 0 {
+		return xs
+	}
+	counts := make(map[string]int)
+	kept := make([]model.Metric, 0, len(xs))
+	for i := len(xs) - 1; i >= 0; i-- {
+		if counts[xs[i].Name] < perName {
+			counts[xs[i].Name]++
+			kept = append(kept, xs[i])
+		}
+	}
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	return kept
 }
 
 func matchesMetric(m model.Metric, q MetricQuery) bool {
