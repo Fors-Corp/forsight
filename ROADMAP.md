@@ -862,3 +862,7 @@ are the judges' composites.
   test** (quality-dx-1, quality-dx-9, dashboard-ux-7, design-system-2, -3, -5,
   -6, agent-collection-10, mlaas-depth-9, -10; all at or below 3.18). Low
   value, wrong shape, or no consumer. The judges' notes stand.
+
+## Shipped after the roadmap
+
+- **HTTP and TLS-expiry probe collector** — a repeatable `--probe <url>` GETs each target on the agent's collect interval, reporting `probe.http.up`/`.status`/`.duration_ms` and, for `https://` targets, `probe.tls.days_remaining`/`.valid` from the leaf certificate, read independently so an expiring or already-expired cert never flips an otherwise-reachable site's up metric, 2026-09-16, #PENDING.
