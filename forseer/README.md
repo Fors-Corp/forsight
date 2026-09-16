@@ -66,7 +66,7 @@ exists for that shape of answer. Forseer never invents a new widget.
 | `host_outlier` | Online mean vector + 5x5 covariance (Welford's multivariate form) over cpu%, memory%, disk% and the per-interval delta of each net counter, scored by squared Mahalanobis distance against the Detector's own 3σ/5σ tail probabilities | Three host percentages moving together can hide a story none of them tells alone; a per-series check never looks at more than one series at a time. See [MODELS.md](MODELS.md) | **AlertList** |
 | Grok narrative | SpaceXAI `grok-4.5` | Stitches the above into four sentences an on-call can read | **Card** + **Text** |
 | error-log budget | error/total vs 1% SLO | **ErrorBudget** |
-| incident stitch | insights + related critical path | **Timeline** |
+| incident stitch | insights within a 5-minute window that share a Related value or a Source are folded into one incident event, newest member last; deterministic, not a Model — no label exists for "these were one incident" (`forseer/incident.go`, roadmap's "Left out") | **Timeline** |
 | NL filter | phrase → facets (`error logs from checkout`) | **FilterBar** |
 | hour-of-day baseline | separate z-score per hour for host/docker series | **AlertList** (same findings, less night/day false fire) |
 | critical path | walk error leaf to root | **TraceWaterfall** via `related` |
