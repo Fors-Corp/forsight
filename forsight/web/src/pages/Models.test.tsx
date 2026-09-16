@@ -251,7 +251,7 @@ describe("Models page", () => {
     expect(await screen.findByText("model has no dataset yet")).toBeInTheDocument();
   });
 
-  it("draws one chart per forecast with an Observed and a Forecast series", async () => {
+  it("draws one chart per forecast with an Observed series and a dashed Forecast series", async () => {
     mockFetch({
       ...baseEndpoints,
       "/api/v1/metrics": [
@@ -286,6 +286,10 @@ describe("Models page", () => {
     expect(screen.queryByText("No forecasts yet")).not.toBeInTheDocument();
     // The chart's data table carries the same rows for a screen reader.
     expect(screen.getByRole("rowheader", { name: "Forecast" })).toBeInTheDocument();
+    // The projection is dashed from its first minute, and the chart says so
+    // in text as well — the data table's caption, which names the table for
+    // a screen reader — so the distinction is never sighted-only.
+    expect(screen.getByRole("table", { name: /Forecast is projected from/ })).toBeInTheDocument();
   });
 
   it("marks a prediction that disagrees with the declared level", async () => {
@@ -714,5 +718,39 @@ describe("forecastChart", () => {
     // Observed isn't clipped at the origin: it keeps going through 10:20,
     // past the last forecast point at 10:15.
     expect(chart.observed[chart.observed.length - 1]).not.toBeNull();
+  });
+
+  it("points dashedFrom at the first forecast minute, so the whole projection is drawn dashed", () => {
+    const metrics: Metric[] = [
+      { name: "host.cpu.percent", value: 40, timestamp: "2026-09-15T10:00:30Z" },
+      { name: "host.cpu.percent", value: 41, timestamp: "2026-09-15T10:01:30Z" },
+    ];
+    const forecast: MlaasForecast = {
+      model: "forsight-cpu-forecast",
+      metric: "host.cpu.percent",
+      origin: "2026-09-15T10:01:00Z",
+      points: [
+        { at: "2026-09-15T10:06:00Z", value: 47 },
+        { at: "2026-09-15T10:16:00Z", value: 50 },
+      ],
+    };
+
+    const chart = forecastChart(forecast, metrics);
+
+    // Two observed minutes, then the forecast: the series is null up to the
+    // index dashedFrom names and carries the first forecast value there.
+    expect(chart.forecastFrom).toBe(2);
+    expect(chart.forecast.slice(0, 2)).toEqual([null, null]);
+    expect(chart.forecast[2]).toBe(47);
+  });
+
+  it("has no dashedFrom when the forecast carries no points", () => {
+    const forecast: MlaasForecast = {
+      model: "forsight-cpu-forecast",
+      metric: "host.cpu.percent",
+      origin: "2026-09-15T10:01:00Z",
+      points: [],
+    };
+    expect(forecastChart(forecast, []).forecastFrom).toBeUndefined();
   });
 });

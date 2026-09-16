@@ -8,6 +8,7 @@ package store
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/marcfs31/forsight/forsight/internal/model"
@@ -27,6 +28,31 @@ type MetricQuery struct {
 	// means no cap. The window is handed back oldest-first either way, so a
 	// consumer that never sets Limit sees no change in shape.
 	Limit int
+	// PerName caps each metric name at its newest PerName records in the
+	// window; zero means no cap. It is the bound an unscoped read needs: a
+	// plain Limit on a read that mixes every name cuts a busy name's history
+	// short before it reaches a quiet name's newest point, while PerName
+	// keeps the newest N of every name. With Name set it is the same cap as
+	// Limit. When both are set, PerName bounds the set and Limit keeps the
+	// newest Limit of it by timestamp, the one order both backends agree on.
+	// Within a name the result is oldest-first, as always; across names the
+	// order is otherwise the store's own (a keyed store groups by name).
+	PerName int
+}
+
+// newestByTime keeps the newest limit metrics of xs by timestamp, oldest-
+// first. It is how Limit composes with PerName: the per-name cap has
+// already bounded xs, and this picks the newest of it in the order both
+// backends share. Stable, so equal timestamps keep their store order. Under
+// the cap, xs comes back as it is, in the store's own order.
+func newestByTime(xs []model.Metric, limit int) []model.Metric {
+	if limit <= 0 || len(xs) <= limit {
+		return xs
+	}
+	sorted := make([]model.Metric, len(xs))
+	copy(sorted, xs)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Timestamp.Before(sorted[j].Timestamp) })
+	return sorted[len(sorted)-limit:]
 }
 
 // SpanQuery filters a spans read, analogous to MetricQuery.
