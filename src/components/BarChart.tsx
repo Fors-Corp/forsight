@@ -286,10 +286,15 @@ export const BarChart = React.forwardRef<HTMLDivElement, BarChartProps>(
           </ChartFrame>
 
           {active === null ? null : (
+            // Physical left/right, not logical start/end — see the matching
+            // comment on LineChart's tooltip: the cursor's x position is a
+            // physical pixel because the plot never mirrors under RTL, so a
+            // logical class here would land the tooltip on the same side as
+            // the bar it is supposed to avoid.
             <div
               className={cn(
                 "absolute top-2 z-10",
-                active > (labels.length - 1) / 2 ? "start-2" : "end-2"
+                active > (labels.length - 1) / 2 ? "left-2" : "right-2"
               )}
             >
               <ChartTooltip
