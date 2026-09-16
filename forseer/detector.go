@@ -30,7 +30,11 @@ type Detector struct {
 	// Until a series has enough history it hands back the fixed sigma pair,
 	// so a cold detector behaves exactly as it always did.
 	thresholds *thresholdModel
-	now        func() time.Time
+	// outlier scores the joint host vector; see outlier.go. It only ever
+	// sees a batch that carries all five of its inputs, which in practice
+	// means one host-collector tick, never a Docker/OTLP/scrape batch.
+	outlier *hostOutlierModel
+	now     func() time.Time
 }
 
 type rolling struct {
@@ -46,6 +50,7 @@ func NewDetector() *Detector {
 		series:     make(map[string]*rolling),
 		open:       make(map[string]Insight),
 		thresholds: newThresholdModel(),
+		outlier:    newHostOutlierModel(),
 		now:        time.Now,
 	}
 }
@@ -62,6 +67,7 @@ func (d *Detector) Observe(points []Point) {
 	for _, p := range points {
 		d.observeOneLocked(p, now)
 	}
+	d.observeHostVectorLocked(points, now)
 }
 
 func (d *Detector) observeOneLocked(p Point, now time.Time) {
@@ -139,6 +145,99 @@ func insight(key, kind string, p Point, z float64, sev string, now time.Time) In
 		Value:  p.Value,
 		Time:   now,
 	}
+}
+
+// hostOutlierKey is the single Insight key host_outlier ever opens under —
+// one model, one score, unlike the per-series map keyed by seasonalKey.
+const hostOutlierKey = "host_outlier"
+
+// observeHostVectorLocked feeds the host outlier model with this batch's
+// cpu/memory/disk percentages and net-counter deltas, and opens or closes
+// its insight in d.open the same way a per-series anomaly does. It is a
+// no-op unless a single batch carries all three percentages plus both net
+// counters — exactly what one host-collector tick emits (host.go), and
+// never true of a Docker, OTLP or scrape batch, so this only ever scores
+// this host's own samples, never a container's or another process's.
+func (d *Detector) observeHostVectorLocked(points []Point, now time.Time) {
+	var cpu, mem, disk, sent, recv float64
+	var haveCPU, haveMem, haveDisk, haveSent, haveRecv bool
+	for _, p := range points {
+		switch p.Name {
+		case "host.cpu.percent":
+			cpu, haveCPU = p.Value, true
+		case "host.memory.percent":
+			mem, haveMem = p.Value, true
+		case "host.disk.percent":
+			if !haveDisk {
+				// Today's host collector reports one disk path (DiskPath,
+				// "/" by default); a future multi-disk collector would need
+				// a choice here, but there is only ever one value to pick
+				// from right now.
+				disk, haveDisk = p.Value, true
+			}
+		case "host.net.bytes_sent":
+			sent, haveSent = p.Value, true
+		case "host.net.bytes_recv":
+			recv, haveRecv = p.Value, true
+		}
+	}
+	if !haveCPU || !haveMem || !haveDisk || !haveSent || !haveRecv {
+		return
+	}
+
+	d2, metric, ready := d.outlier.Observe(cpu, mem, disk, sent, recv)
+	if !ready {
+		return
+	}
+	switch {
+	case d2 >= hostOutlierCriticalChi2:
+		d.openHostOutlierLocked(metric, d2, SeverityCritical, now)
+	case d2 >= hostOutlierWarnChi2:
+		d.openHostOutlierLocked(metric, d2, SeverityWarning, now)
+	default:
+		delete(d.open, hostOutlierKey)
+	}
+}
+
+// openHostOutlierLocked opens (or re-scores) the single host_outlier
+// insight. On a genuine open — a transition from not-open to open, never a
+// re-score of one already open — it tells the model whether any per-series
+// anomaly was open on one of the five inputs at that same moment, which is
+// the exit criterion outlier.go's Card reports.
+func (d *Detector) openHostOutlierLocked(metric string, d2 float64, sev string, now time.Time) {
+	if _, already := d.open[hostOutlierKey]; !already {
+		d.outlier.NoteOpened(!d.anyPerSeriesOpenLocked())
+	}
+	d.open[hostOutlierKey] = Insight{
+		ID:       hostOutlierKey,
+		Kind:     KindHostOutlier,
+		Severity: sev,
+		Title:    fmt.Sprintf("host looks unusual across cpu, memory, disk and network together (%.1f)", d2),
+		Description: fmt.Sprintf(
+			"squared Mahalanobis distance %.1f over the host vector; %s stands out most", d2, metric),
+		Source:  "forseer",
+		Metric:  metric,
+		Value:   d2,
+		Time:    now,
+		Related: []string{metric},
+	}
+}
+
+// anyPerSeriesOpenLocked reports whether a per-series anomaly is currently
+// open on any of the five inputs host outlier reads (see hostOutlierMetrics
+// in outlier.go).
+func (d *Detector) anyPerSeriesOpenLocked() bool {
+	for _, ins := range d.open {
+		if ins.Kind != KindAnomaly {
+			continue
+		}
+		for _, name := range hostOutlierMetrics {
+			if ins.Metric == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (d *Detector) expireLocked(now time.Time) {

@@ -63,6 +63,7 @@ exists for that shape of answer. Forseer never invents a new widget.
 | `log_burst` | Drain-lite templates (UUID/IP/number → `<*>`) + short-window volume | Turns a firehose into "this pattern just exploded" | **BarList** (ranked templates) + **LogStream** (raw lines) |
 | `slow_span` | Per `(service, span name)` P² p50/p99, opened on a run past p99 | "This endpoint is slow *for itself*", not vs a global 200ms SLO, and not a mean/sigma test on a long-tailed shape. See [MODELS.md](MODELS.md) | **TraceWaterfall** (related trace id) |
 | `culprit` | Rank processes open during a `host.cpu` anomaly by how far each has risen above its own rolling `process.cpu`/`process.memory.rss` baseline (free from the same Welford stats the Detector runs on them), raw CPU over a 20% floor only while a process's own series is still cold | Raw usage cannot tell a process that jumped from 2% to 18% from one that always idles at 22%; its own baseline can. See [MODELS.md](MODELS.md) | **Table** (process rows) |
+| `host_outlier` | Online mean vector + 5x5 covariance (Welford's multivariate form) over cpu%, memory%, disk% and the per-interval delta of each net counter, scored by squared Mahalanobis distance against the Detector's own 3σ/5σ tail probabilities | Three host percentages moving together can hide a story none of them tells alone; a per-series check never looks at more than one series at a time. See [MODELS.md](MODELS.md) | **AlertList** |
 | Grok narrative | SpaceXAI `grok-4.5` | Stitches the above into four sentences an on-call can read | **Card** + **Text** |
 | error-log budget | error/total vs 1% SLO | **ErrorBudget** |
 | incident stitch | insights + related critical path | **Timeline** |
@@ -98,9 +99,15 @@ projects that burn forward is built too — see [MODELS.md](MODELS.md).
 
 ## Next (stay in this folder)
 
-| Idea | Method | Component |
-| --- | --- | --- |
-| Multivariate outlier | Isolation Forest in `python/`, scores POSTed back | **AlertList** |
+Nothing is queued here right now. The one row this table used to carry —
+multivariate outlier detection, an Isolation Forest in `python/` with scores
+POSTed back — is **built**, but not that way: mlaas has no IsolationForest
+(`plugins/sklearn/plugin.py`) and the agent had no route to ingest a score
+computed elsewhere, so it shipped as a stdlib Mahalanobis check over an
+online mean/covariance instead, the same contract as everything else in this
+module. See `host_outlier` in the detector table above and
+[MODELS.md](MODELS.md#host-outlier) for why, and for the exit criterion that
+decides whether it earns its keep.
 
 The error-budget forecast is **built** — see [MODELS.md](MODELS.md). So are
 per-series alert thresholds and the log-severity classifier; the rest of the

@@ -13,11 +13,12 @@ const (
 // Kind names the detector that produced an insight. The dashboard maps these
 // onto specific design-system components (see README).
 const (
-	KindAnomaly     = "anomaly"     // AlertList — rolling z-score
-	KindChangepoint = "changepoint" // Timeline — CUSUM regime shift
-	KindLogBurst    = "log_burst"   // BarList + LogStream — template volume spike
-	KindSlowSpan    = "slow_span"   // TraceWaterfall — duration outlier
-	KindCulprit     = "culprit"     // Table — process that jumped with host CPU
+	KindAnomaly     = "anomaly"      // AlertList — rolling z-score
+	KindChangepoint = "changepoint"  // Timeline — CUSUM regime shift
+	KindLogBurst    = "log_burst"    // BarList + LogStream — template volume spike
+	KindSlowSpan    = "slow_span"    // TraceWaterfall — duration outlier
+	KindCulprit     = "culprit"      // Table — process that jumped with host CPU
+	KindHostOutlier = "host_outlier" // AlertList — Mahalanobis distance over the host vector
 )
 
 // Insight is one Forseer finding. The agent serves these at GET /api/v1/forseer/insights.
