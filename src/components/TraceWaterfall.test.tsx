@@ -30,7 +30,7 @@ describe("TraceWaterfall", () => {
     const { container } = render(<TraceWaterfall label="trace" spans={spans} />);
     const bars = [...container.querySelectorAll("td span span")] as HTMLElement[];
     expect(bars[0].style.width).toBe("100%");
-    expect(bars[1].style.insetInlineStart).toBe("10%");
+    expect(bars[1].style.left).toBe("10%");
     expect(bars[1].style.width).toBe("30%");
   });
 
