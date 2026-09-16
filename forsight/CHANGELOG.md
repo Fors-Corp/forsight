@@ -8,6 +8,16 @@ line from `@marcfs31/forsight`'s own `vX.Y.Z` tags for the design system;
 see `forsight/README.md`'s Releasing section for how the two relate and how
 this file fits into cutting a release.
 
+## [Unreleased]
+
+### Fixed
+
+- The dashboard's access-token dialog no longer flips back to its first-load
+  wording after a rejected token: a 401 now counts as evidence only about the
+  token that request carried, so the token-less poll that follows a rejection
+  (or a stale one that lands after a new token is entered) leaves the prompt
+  and the stored token alone (#132)
+
 ## [1.1.0] - 2026-09-16
 
 The first release cut end to end by `.github/workflows/forsight-release.yml`:
