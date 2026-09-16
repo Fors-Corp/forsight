@@ -865,4 +865,4 @@ are the judges' composites.
 
 ## Shipped after the roadmap
 
-- **HTTP and TLS-expiry probe collector** — a repeatable `--probe <url>` GETs each target on the agent's collect interval, reporting `probe.http.up`/`.status`/`.duration_ms` and, for `https://` targets, `probe.tls.days_remaining`/`.valid` from the leaf certificate, read independently so an expiring or already-expired cert never flips an otherwise-reachable site's up metric, 2026-09-16, #PENDING.
+- **HTTP and TLS-expiry probe collector** — a repeatable `--probe <url>` GETs each target on the agent's collect interval, reporting `probe.http.up`/`.status`/`.duration_ms` and, for `https://` targets, `probe.tls.days_remaining`/`.valid` from the leaf certificate, read independently so an expiring or already-expired cert never flips an otherwise-reachable site's up metric, 2026-09-16, #120.
