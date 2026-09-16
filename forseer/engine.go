@@ -353,30 +353,43 @@ func (e *Engine) Budget() Budget {
 	}
 }
 
-// Story stitches insights into Timeline events, critical-path related names included.
-func (e *Engine) Story() []Event {
-	insights := e.Insights()
-	out := make([]Event, 0, len(insights))
-	for _, ins := range insights {
-		tone := "accent"
-		switch ins.Severity {
-		case SeverityCritical:
-			tone = "danger"
-		case SeverityWarning:
-			tone = "warning"
-		}
-		desc := ins.Kind
-		if len(ins.Related) > 0 {
-			desc = ins.Kind + " · " + strings.Join(ins.Related, " → ")
-		}
-		out = append(out, Event{
-			ID:          "evt-" + ins.ID,
-			Time:        ins.Time,
-			Title:       ins.Title,
-			Description: desc,
-			Tone:        tone,
-		})
+// eventTone maps an insight's severity onto the tone vocabulary Timeline
+// expects.
+func eventTone(severity string) string {
+	switch severity {
+	case SeverityCritical:
+		return "danger"
+	case SeverityWarning:
+		return "warning"
+	default:
+		return "accent"
 	}
+}
+
+// storyEvent renders a single insight as a Timeline event, critical-path
+// related names included. Unchanged from what Story built inline before
+// incident grouping (incident.go) existed: an insight with no window-mate
+// to fold into still looks exactly like this.
+func storyEvent(ins Insight) Event {
+	desc := ins.Kind
+	if len(ins.Related) > 0 {
+		desc = ins.Kind + " · " + strings.Join(ins.Related, " → ")
+	}
+	return Event{
+		ID:          "evt-" + ins.ID,
+		Time:        ins.Time,
+		Title:       ins.Title,
+		Description: desc,
+		Tone:        eventTone(ins.Severity),
+	}
+}
+
+// Story stitches insights into Timeline events. Insights that land within
+// incidentWindow of each other and share a Related value or a Source are
+// folded into one incident event by groupIncidents (incident.go); every
+// other insight passes through as storyEvent has always rendered it.
+func (e *Engine) Story() []Event {
+	out := groupIncidents(e.Insights())
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
 	return out
 }
