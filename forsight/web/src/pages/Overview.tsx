@@ -3,6 +3,8 @@ import {
   Heading,
   Text,
   StatCard,
+  TimeRange,
+  type TimeRangeOption,
   LineChart,
   Card,
   CardHeader,
@@ -75,6 +77,49 @@ const QUERY_NOT_UNDERSTOOD =
   'Didn\'t recognize that phrase — try error/warn/debug/critical, optionally "from <source>"';
 
 const percentFormat = (value: number) => `${Math.round(value * 100)}%`;
+
+// The ranges the Overview can show. The agent's default retention is one
+// hour, which is why 1h is the default here.
+const TIME_RANGES: Array<TimeRangeOption & { ms: number }> = [
+  { value: "15m", label: "15m", description: "Last 15 minutes", ms: 15 * 60_000 },
+  { value: "1h", label: "1h", description: "Last 1 hour", ms: 60 * 60_000 },
+  { value: "6h", label: "6h", description: "Last 6 hours", ms: 6 * 60 * 60_000 },
+  { value: "24h", label: "24h", description: "Last 24 hours", ms: 24 * 60 * 60_000 },
+  { value: "7d", label: "7d", description: "Last 7 days", ms: 7 * 24 * 60 * 60_000 },
+];
+const DEFAULT_TIME_RANGE = "1h";
+
+/** In range, or undated — a record with no parseable timestamp is kept
+ *  rather than silently dropped by a filter it cannot be judged against. */
+function sinceOrUndated(timestamp: string, since: number): boolean {
+  const t = Date.parse(timestamp);
+  return Number.isNaN(t) || t >= since;
+}
+
+/** Milliseconds between `now` and the oldest timestamp on offer, or null
+ *  when nothing has a usable timestamp. */
+function heldSpanMs(now: number, timestamps: Iterable<string>): number | null {
+  let oldest = Infinity;
+  for (const ts of timestamps) {
+    const t = Date.parse(ts);
+    if (!Number.isNaN(t) && t < oldest) oldest = t;
+  }
+  return oldest === Infinity ? null : Math.max(0, now - oldest);
+}
+
+/** The ranges worth offering: every option shorter than what the store
+ *  holds, plus the first one that covers all of it. A week-long option on
+ *  an hour of data is a choice that changes nothing. Until anything has
+ *  arrived, the span is taken as the agent's default retention. */
+export function offeredTimeRanges(spanMs: number | null): Array<TimeRangeOption & { ms: number }> {
+  const span = spanMs ?? TIME_RANGES.find((r) => r.value === DEFAULT_TIME_RANGE)?.ms ?? 0;
+  const out: Array<TimeRangeOption & { ms: number }> = [];
+  for (const range of TIME_RANGES) {
+    out.push(range);
+    if (range.ms >= span) break;
+  }
+  return out;
+}
 
 function formatPercent(v: number | undefined): string {
   return v === undefined ? "—" : `${v.toFixed(1)}`;
@@ -260,15 +305,35 @@ export default function Overview() {
   // wasn't understood (show it as an inline error instead).
   const [queryError, setQueryError] = useState<string | null>(null);
 
-  const cpuHistory = historyFor(metrics, "host.cpu.percent");
+  const [rangeValue, setRangeValue] = useState(DEFAULT_TIME_RANGE);
+  // Client-side only: the store already returned its whole window, and the
+  // range decides how much of it the charts draw. `now` is read once per
+  // render, and every poll re-renders, so the window slides with the data.
+  const now = Date.now();
+  const offeredRanges = offeredTimeRanges(
+    heldSpanMs(now, [...metrics.map((m) => m.timestamp), ...logs.map((l) => l.timestamp)])
+  );
+  // A selection the data no longer reaches falls back to the widest on offer.
+  const range =
+    offeredRanges.find((r) => r.value === rangeValue) ?? offeredRanges[offeredRanges.length - 1];
+  const since = now - range.ms;
+
+  const cpuHistory = historyFor(metrics, "host.cpu.percent").filter((m) => sinceOrUndated(m.timestamp, since));
   const cpuLabels = cpuHistory.map((m) => timeLabelFormat.format(new Date(m.timestamp)));
+  const rangedLogs = useMemo(
+    () => logs.filter((l) => sinceOrUndated(l.timestamp, since)),
+    [logs, since]
+  );
 
   const cpu = latestValue(metrics, "host.cpu.percent");
   const memory = latestValue(metrics, "host.memory.percent");
   const disk = latestValue(metrics, "host.disk.percent");
   const containers = containerRows(metrics);
   const processes = processRows(metrics).slice(0, 15);
-  const filteredLogs = useMemo(() => logs.filter((l) => matchesFilters(l, filters)), [logs, filters]);
+  const filteredLogs = useMemo(
+    () => rangedLogs.filter((l) => matchesFilters(l, filters)),
+    [rangedLogs, filters]
+  );
   const streamEntries = useMemo(() => toStreamEntries(filteredLogs), [filteredLogs]);
   const errorCount = useMemo(
     () => filteredLogs.filter((entry) => entry.severity === "error").length,
@@ -276,7 +341,7 @@ export default function Overview() {
   );
   const alertItems = useMemo(() => toAlertItems(insights), [insights]);
   const timelineItems = useMemo(() => toTimelineItems(story), [story]);
-  const heatmap = useMemo(() => errorHeatmap(logs), [logs]);
+  const heatmap = useMemo(() => errorHeatmap(rangedLogs), [rangedLogs]);
   const waterfall = useMemo(() => toWaterfall(pickTrace(traces, insights)), [traces, insights]);
   const filterOptions: FilterBarOption[] = useMemo(() => {
     const sources = [...new Set(logs.map((l) => l.source).filter(Boolean))];
@@ -343,11 +408,19 @@ export default function Overview() {
             watches the stream
           </Text>
         </div>
-        {/* Its own live region, so a flip to stale is read out. AlertList's
-            region only announces additions to its list, so a status change
-            is announced once, here. */}
-        <div role="status" aria-live="polite" aria-label="Agent connection" className="shrink-0">
-          <StatusDot status={status} label={connectionLabel} pulse={connection.state === "live"} />
+        <div className="flex flex-wrap items-center gap-3">
+          <TimeRange
+            label="Overview time range"
+            options={offeredRanges}
+            value={range.value}
+            onValueChange={setRangeValue}
+          />
+          {/* Its own live region, so a flip to stale is read out. AlertList's
+              region only announces additions to its list, so a status change
+              is announced once, here. */}
+          <div role="status" aria-live="polite" aria-label="Agent connection" className="shrink-0">
+            <StatusDot status={status} label={connectionLabel} pulse={connection.state === "live"} />
+          </div>
         </div>
       </header>
 
