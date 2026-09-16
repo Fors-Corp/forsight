@@ -2,6 +2,7 @@ package forseer
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -405,5 +406,50 @@ func TestSeverityModel_RestoreDiscardsCorruptJSON(t *testing.T) {
 	}
 	if m.Card().Trained != 0 {
 		t.Fatalf("a discarded restore left the model with %d trained examples, want 0", m.Card().Trained)
+	}
+}
+
+// TestSeverityModel_RestoreNeverOverrunsTheHashedBucketArray builds a
+// snapshot payload (the same severitySnapshot shape Snapshot itself
+// produces, not something Learn could ever create live — every class's
+// counts array is fixed at severityBuckets long by its Go type, the bound
+// this model actually keeps) whose Counts slice is longer than
+// severityBuckets, the way a hand-edited or stale forseer.json could arrive
+// on boot. Restore copies that slice into severityClass's fixed
+// [severityBuckets]uint32 array with a plain slice-to-array copy, which by
+// construction only ever takes the shorter of the two lengths — this proves
+// that holds through a real Restore call, keeping the first severityBuckets
+// entries and silently dropping the rest, rather than merely asserting it
+// of the copy() builtin in isolation.
+func TestSeverityModel_RestoreNeverOverrunsTheHashedBucketArray(t *testing.T) {
+	over := make([]uint32, severityBuckets+500)
+	for i := range over {
+		over[i] = uint32(i + 1)
+	}
+	snap := severitySnapshot{
+		Version: severitySnapshotVersion,
+		Classes: map[string]severityClassSnapshot{
+			"error": {Counts: over, Total: uint64(len(over)), Trained: 1000},
+		},
+		Trained: 1000,
+	}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal test snapshot: %v", err)
+	}
+
+	m := newSeverityModel()
+	if err := m.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	class, ok := m.classes["error"]
+	if !ok {
+		t.Fatal("restored model has no error class")
+	}
+	for i := 0; i < severityBuckets; i++ {
+		if class.counts[i] != over[i] {
+			t.Errorf("bucket %d = %d, want %d (the first severityBuckets entries of the oversized slice)", i, class.counts[i], over[i])
+		}
 	}
 }

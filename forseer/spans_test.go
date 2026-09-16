@@ -2,6 +2,7 @@ package forseer
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -323,5 +324,66 @@ func TestSpanWatch_RestoreDiscardsCorruptJSON(t *testing.T) {
 	}
 	if len(w.series) != 0 {
 		t.Fatalf("a discarded restore left %d series, want 0", len(w.series))
+	}
+}
+
+// TestSpanWatch_RestoreBoundsAnOversizedSnapshot builds a snapshot payload
+// (the same spanSnapshot shape Snapshot itself produces, not something
+// observeOneLocked could ever create live — it refuses a new series outright
+// once len(w.series) reaches maxSpanSeries) with far more than maxSpanSeries
+// entries, the way a hand-edited or stale forseer.json could arrive on boot.
+// Live, observeOneLocked never evicts an already-tracked series once
+// established; it only refuses a *new* one once the cap is full, the same
+// policy thresholds.go's Observe uses for its own series map, so — unlike
+// paging's LRU cache — there is no recency order for Restore to reproduce.
+// The invariant Restore must still uphold is the cap itself, plus that
+// whatever it keeps is exactly what the snapshot said for that key,
+// including a P² estimator that still answers the same quantile.
+func TestSpanWatch_RestoreBoundsAnOversizedSnapshot(t *testing.T) {
+	p50, p99 := newP2Estimator(0.5), newP2Estimator(0.99)
+	for i := 1; i <= 20; i++ {
+		p50.observe(float64(i))
+		p99.observe(float64(i))
+	}
+	p50Snap, p99Snap := snapshotP2(p50), snapshotP2(p99)
+	wantP99, ok := p99.value()
+	if !ok {
+		t.Fatal("test setup: p99 estimator never produced a value")
+	}
+
+	const extra = 50
+	const total = maxSpanSeries + extra
+	snap := spanSnapshot{Version: spanSnapshotVersion, Series: make(map[string]spanSeriesSnapshot, total)}
+	for i := 0; i < total; i++ {
+		key := fmt.Sprintf("svc|op-%04d", i)
+		snap.Series[key] = spanSeriesSnapshot{
+			N: minSamples + i, P50: p50Snap, P99: p99Snap, RunLen: i % spanExceedRun,
+		}
+	}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal test snapshot: %v", err)
+	}
+
+	w := newSpanWatch()
+	if err := w.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	if len(w.series) != maxSpanSeries {
+		t.Fatalf("restored %d span series, want exactly the cap %d", len(w.series), maxSpanSeries)
+	}
+	for key, got := range w.series {
+		want, ok := snap.Series[key]
+		if !ok {
+			t.Fatalf("restored series %q was never in the snapshot", key)
+		}
+		if got.n != want.N || got.runLen != want.RunLen {
+			t.Errorf("series %q n=%d runLen=%d, want n=%d runLen=%d", key, got.n, got.runLen, want.N, want.RunLen)
+		}
+		gotP99, ok := got.p99.value()
+		if !ok || gotP99 != wantP99 {
+			t.Errorf("series %q restored p99 = %v (ok=%v), want %v", key, gotP99, ok, wantP99)
+		}
 	}
 }

@@ -2,6 +2,8 @@ package forseer
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -265,5 +267,68 @@ func TestPagingModel_RestoreDiscardsCorruptJSON(t *testing.T) {
 	}
 	if m.trained != 0 || len(m.clusters) != 0 {
 		t.Fatalf("a discarded restore left trained=%d clusters=%d, want 0/0", m.trained, len(m.clusters))
+	}
+}
+
+// TestPagingModel_RestoreKeepsTheMostRecentlyTrainedClustersOverCap builds a
+// snapshot payload (the same pagingSnapshot shape Snapshot itself produces,
+// not something Burst could ever create live) with far more than maxClusters
+// entries, the way a hand-edited or stale forseer.json could arrive on boot.
+// It proves two things clusterLocked's own live LRU eviction guarantees and
+// Restore must too: the restored model never exceeds maxClusters, and what
+// survives truncation is exactly the maxClusters clusters with the newest
+// Last — the same ones still standing had this snapshot's entries instead
+// arrived one at a time through Burst and evicted each other live — not an
+// arbitrary subset that happens to fall out of Go's randomized map
+// iteration order.
+func TestPagingModel_RestoreKeepsTheMostRecentlyTrainedClustersOverCap(t *testing.T) {
+	base := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	const extra = 50
+	const total = maxClusters + extra
+	snap := pagingSnapshot{
+		Version:  pagingSnapshotVersion,
+		Shared:   pagingWeights{0.1, 0.2, 0.3, 0.4},
+		Clusters: make(map[string]pagingClusterSnapshot, total),
+		Trained:  total,
+	}
+	// Cluster i last trained base+i seconds in, oldest to newest, so the
+	// newest maxClusters clusters are exactly those numbered extra..total-1.
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("cluster-%04d", i)
+		snap.Clusters[id] = pagingClusterSnapshot{
+			W:       pagingWeights{float64(i), 0, 0, 0},
+			Trained: i + 1,
+			Last:    base.Add(time.Duration(i) * time.Second),
+		}
+	}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal test snapshot: %v", err)
+	}
+
+	m := newPagingModel()
+	if err := m.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	if len(m.clusters) != maxClusters {
+		t.Fatalf("restored %d clusters, want exactly the cap %d", len(m.clusters), maxClusters)
+	}
+	for i := 0; i < extra; i++ {
+		id := fmt.Sprintf("cluster-%04d", i)
+		if _, ok := m.clusters[id]; ok {
+			t.Errorf("oldest-trained cluster %q survived truncation, want dropped like clusterLocked would evict it", id)
+		}
+	}
+	for i := extra; i < total; i++ {
+		id := fmt.Sprintf("cluster-%04d", i)
+		c, ok := m.clusters[id]
+		if !ok {
+			t.Errorf("most-recently-trained cluster %q was dropped, want kept", id)
+			continue
+		}
+		if c.trained != i+1 {
+			t.Errorf("cluster %q trained = %d, want %d", id, c.trained, i+1)
+		}
 	}
 }
