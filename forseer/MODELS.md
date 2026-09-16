@@ -201,6 +201,54 @@ one-step skill — information, not a gate.
 **Component.** **ErrorBudget**, whose caption now carries the projection, so a
 dashboard that knows nothing about the new field still shows it.
 
+### Log burst paging
+
+**Job.** Decide whether a burst of this log template is worth paging for.
+
+`log_burst` fires on volume, so a chatty debug template tripling and an
+exception template tripling were the same insight, and the rule that picked
+critical over warning — any error line, or sixteen lines a minute — could
+not tell them apart either.
+
+**Labels are self-supervised.** A burst is worth paging if a critical from
+a different detector — a metric anomaly, a slow span, a culprit process —
+opened within five minutes after it. Log-burst insights are excluded from
+both the label and the co-occurrence feature; otherwise the model would
+learn the volume rule back from itself, which is the one thing the rules
+below forbid. The label is time based on purpose: every template that
+burst in the five minutes before an incident earns the credit, because a
+template that bursts during incidents is worth paging.
+
+**Method.** Online logistic regression over three declared inputs — the
+template's error share, its burst shape (this minute over the last, log
+scaled), and whether a critical from another detector opened within the
+minute before — with one weight vector per template. A template's vector
+starts as a copy of a shared vector that trains on every example, so a
+first burst is scored by what this deployment has learned about bursts in
+general and the template specialises from there. Predict-then-train, with
+the label arriving minutes later: a burst registers one pending example per
+episode, carrying the latest verdict of both the model and the rule (the
+rule's own answer moves from warning to critical as a burst grows, and the
+operator sees the last one), and is graded when the window closes or a
+qualifying critical arrives. State is bounded at 257 vectors of four
+floats, the same 256-template cap the miner keeps plus the shared one.
+
+**Measured on a synthetic stream** of eighty bursts, half from an exception
+template always followed by a metric critical and half from a debug
+template never followed by anything, both past sixteen lines a minute so the
+volume rule calls every one critical: 97.5% prequential accuracy against
+the rule's 50%, with the debug template scoring 0.05 (fed to the model
+directly, in the same suite, the exception template scores 0.95 and the
+debug one 0.07). The gate then lets the model set the burst's severity, so
+the debug burst opens as a warning. As with the severity model, the corpus
+is built from the rule's blind spot; what matters is that the comparison is
+measured on this deployment's own bursts and the model is used only while
+it is ahead.
+
+**Component.** **BarList**, which ranks templates by count until the model
+is ready and by this score after — the card's title says which — with the
+burst's own severity on **AlertList**.
+
 ### Models page
 
 The cards were already served over the API; what shipped is a page for them.
@@ -256,21 +304,7 @@ Ordered by what each one is worth against what it costs. Every row keeps the
 rules above: declared inputs, a readiness gate, a named fallback, and an
 existing Forsight component to land on.
 
-### 1. Is this log cluster worth paging
-
-**Job.** Rank Drain-lite clusters by whether a burst of this template has
-ever coincided with something that mattered.
-
-`log_burst` fires on volume, so a chatty debug template that triples is
-indistinguishable from an exception that triples. Cluster features
-(severity mix, whether an insight opened within the window, whether the
-error budget moved) are enough for a small logistic regression, and the
-labels come from the agent's own insight stream.
-
-*Reads: cluster severity mix, burst shape, co-occurring insights. Fallback:
-the current volume ratio. Component: **BarList**.*
-
-### 2. Per-endpoint latency shape
+### 1. Per-endpoint latency shape
 
 **Job.** Decide what slow means for one endpoint.
 
@@ -283,7 +317,7 @@ own p99" is a sentence an on-call can act on.
 *Reads: durations for one (service, span name). Fallback: the current
 z-score. Component: **TraceWaterfall**.*
 
-### 3. Persist what has been learned
+### 2. Persist what has been learned
 
 A model that resets on restart has to re-earn its readiness every deploy,
 which on a frequently-restarted agent means it is never ready. The state is

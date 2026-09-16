@@ -442,3 +442,45 @@ describe("Overview connection", () => {
     }
   });
 });
+
+describe("Overview log templates", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const cluster = (template: string, count: number, pagingScore?: number) => ({
+    id: `api|${template}`,
+    template,
+    source: "api",
+    count,
+    errorCount: 0,
+    lastSeen: new Date().toISOString(),
+    sample: template,
+    ...(pagingScore === undefined ? {} : { pagingScore }),
+  });
+
+  it("ranks templates by count until the paging model is ready", async () => {
+    mockFetch({
+      ...emptyEndpoints,
+      "/api/v1/forseer/clusters": [cluster("request served", 900), cluster("timeout", 40)],
+    });
+    render(<App />);
+    await screen.findByText("Log templates · by volume");
+    expect(screen.getByText("900")).toBeInTheDocument();
+  });
+
+  it("ranks templates by what a burst is worth once every cluster carries a score", async () => {
+    mockFetch({
+      ...emptyEndpoints,
+      "/api/v1/forseer/clusters": [
+        cluster("request served", 900, 0.07),
+        cluster("timeout", 40, 0.95),
+      ],
+    });
+    render(<App />);
+    await screen.findByText("Log templates · worth paging");
+    const rows = screen.getAllByText(/^(95|7)%$/).map((el) => el.textContent);
+    expect(rows).toEqual(["95%", "7%"]);
+    expect(screen.queryByText("900")).not.toBeInTheDocument();
+  });
+});

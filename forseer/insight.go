@@ -43,6 +43,11 @@ type Cluster struct {
 	ErrorCount int       `json:"errorCount"`
 	LastSeen   time.Time `json:"lastSeen"`
 	Sample     string    `json:"sample"`
+	// PagingScore is the paging model's probability that a burst of this
+	// template right now is worth paging for. Present only while that model
+	// is ready; absent means "use the count", which is what the volume rule
+	// amounts to.
+	PagingScore *float64 `json:"pagingScore,omitempty"`
 }
 
 // Point is the tiny metric shape Forseer needs. Defined here so this module

@@ -17,6 +17,7 @@ type Engine struct {
 	spans    *spanWatch
 	severity *severityModel
 	forecast *burnForecast
+	paging   *pagingModel
 
 	mu        sync.Mutex
 	processes map[string]procSnap
@@ -42,6 +43,7 @@ func NewEngine() *Engine {
 		spans:     newSpanWatch(),
 		severity:  newSeverityModel(),
 		forecast:  newBurnForecast(),
+		paging:    newPagingModel(),
 		processes: make(map[string]procSnap),
 		culprits:  make(map[string]Insight),
 		now:       now,
@@ -50,13 +52,31 @@ func NewEngine() *Engine {
 	e.det.now = func() time.Time { return e.now() }
 	e.logs.now = func() time.Time { return e.now() }
 	e.spans.now = func() time.Time { return e.now() }
+	e.paging.now = func() time.Time { return e.now() }
+	e.logs.paging = e.paging
 	return e
+}
+
+// notePaging hands the paging model every critical the other detectors
+// currently hold open, so it can label the bursts they followed. Cheap: the
+// open sets are bounded by insightTTL, and it runs once per observe batch,
+// not per record.
+func (e *Engine) notePaging() {
+	insights := e.det.Insights()
+	insights = append(insights, e.spans.Insights()...)
+	e.mu.Lock()
+	for _, ins := range e.culprits {
+		insights = append(insights, ins)
+	}
+	e.mu.Unlock()
+	e.paging.NoteInsights(insights)
 }
 
 // ObserveMetrics feeds host/process/Docker/OTLP/scrape/StatsD points.
 func (e *Engine) ObserveMetrics(points []Point) {
 	e.det.Observe(points)
 	e.trackProcesses(points)
+	e.notePaging()
 }
 
 // ObserveLogs feeds OTLP and file-tail log lines into the miner, and trains
@@ -95,7 +115,7 @@ func (e *Engine) ClassifySeverity(message string) (string, bool) {
 // inputs it reads, whether it is ready, and how it is scoring. This is the
 // only place the agent claims anything about what it has learned.
 func (e *Engine) Models() []Card {
-	models := []Model{e.severity, e.det.thresholds, e.forecast}
+	models := []Model{e.severity, e.det.thresholds, e.forecast, e.paging}
 	cards := make([]Card, 0, len(models))
 	for _, m := range models {
 		cards = append(cards, m.Card())
@@ -106,6 +126,7 @@ func (e *Engine) Models() []Card {
 // ObserveSpans feeds OTLP spans into the slow-span watcher.
 func (e *Engine) ObserveSpans(spans []SpanSample) {
 	e.spans.Observe(spans)
+	e.notePaging()
 }
 
 func (e *Engine) trackProcesses(points []Point) {
