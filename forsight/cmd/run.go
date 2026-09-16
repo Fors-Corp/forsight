@@ -405,8 +405,34 @@ func writeForseerSnapshot(eng *forseer.Engine, path string, logger *slog.Logger)
 		logger.Error("snapshotting forseer models", "path", path, "error", err)
 		return
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	// Written to a sibling temp file and renamed into place, so a crash or
+	// power loss mid-write leaves the previous snapshot intact rather than a
+	// truncated one. Restore would discard a truncated file safely, but
+	// "cold after a crash" is a worse outcome than "one snapshot behind".
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		logger.Error("writing forseer snapshot", "path", path, "error", err)
+		return
+	}
+	if _, err := tmp.Write(data); err != nil {
+		logger.Error("writing forseer snapshot", "path", path, "error", err)
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		logger.Error("writing forseer snapshot", "path", path, "error", err)
+		_ = os.Remove(tmp.Name())
+		return
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		logger.Error("writing forseer snapshot", "path", path, "error", err)
+		_ = os.Remove(tmp.Name())
+		return
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		logger.Error("writing forseer snapshot", "path", path, "error", err)
+		_ = os.Remove(tmp.Name())
 	}
 }
 

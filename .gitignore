@@ -10,3 +10,7 @@ coverage
 
 # CodeGraph's local index — regenerable, not committed (run `codegraph init`).
 /.codegraph/
+
+# `forsight run --store badger` without --data-dir writes here when run from forsight/;
+# an operator's data never belongs in the tree.
+forsight/forsight-data/
