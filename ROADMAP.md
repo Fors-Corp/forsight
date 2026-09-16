@@ -583,7 +583,8 @@ data routes.
 
 ### 19. `build-web` supplies its own registry credential — no more `file:` link workaround
 
-- **Area** ops · **Effort** S · **Score** 3.43 · reframed
+- **Area** ops · **Effort** S · **Score** 3.43 · reframed · **Shipped**
+  2026-09-16, `build-web` in `forsight/Makefile`
 
 **Why.** `forsight/Makefile:25` says `build-web` \"Needs packages:read auth
 for npm (see forsight/web/.npmrc)\" and neither file says how to supply it;

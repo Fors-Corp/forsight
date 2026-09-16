@@ -22,8 +22,22 @@ build: build-web build-go
 # GitHub Packages, then copies the output into internal/api/webdist/ for
 # go:embed. Run this after any change under forsight/web/ or a bump of the
 # design-system pin — the diff it produces in webdist/ is expected, not a
-# mistake. Needs packages:read auth for npm (see forsight/web/.npmrc).
+# mistake. Needs packages:read auth for npm.pkg.github.com (see
+# forsight/web/.npmrc for the registry mapping): this target sources a token
+# from NODE_AUTH_TOKEN (set by CI) or, locally, `gh auth token`, and writes
+# it to a throwaway npm user config for the duration of `npm ci` — never
+# into the tree, never printed, removed on exit whether or not the build
+# succeeds.
 build-web:
+	NPM_TOKEN="$${NODE_AUTH_TOKEN:-$$(gh auth token 2>/dev/null)}"; \
+	if [ -z "$$NPM_TOKEN" ]; then \
+		echo "build-web: no npm.pkg.github.com credential — set NODE_AUTH_TOKEN (CI) or 'gh auth login' with packages:read locally" >&2; \
+		exit 1; \
+	fi; \
+	NPM_CONFIG_USERCONFIG=$$(mktemp) || exit 1; \
+	trap 'rm -f "$$NPM_CONFIG_USERCONFIG"' EXIT; \
+	echo "//npm.pkg.github.com/:_authToken=$$NPM_TOKEN" > "$$NPM_CONFIG_USERCONFIG"; \
+	export NPM_CONFIG_USERCONFIG; \
 	cd web && npm ci && npm run build
 	rm -rf internal/api/webdist/assets
 	cp -r web/dist/. internal/api/webdist/

@@ -149,6 +149,9 @@ which CI runs as the required `go` and `web` checks:
   `forsight/internal/api/webdist/`. A design-system change does not: the
   dashboard pins a published `@marcfs31/forsight` and picks a new release up
   as an ordinary dependency bump (`CLAUDE.md`, "The embed is a snapshot").
+  `make build-web` supplies its own `npm.pkg.github.com` credential —
+  `NODE_AUTH_TOKEN` if set, otherwise `gh auth token` — into a temporary npm
+  user config it removes on exit, so no local `.npmrc` setup is needed.
 - Anything that trains, scores or forecasts follows the contract in
   [`forseer/MODELS.md`](forseer/MODELS.md) — no model weights or API keys in
   this repo, `forseer` stays stdlib-only, every model bounds its state, names
