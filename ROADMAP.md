@@ -862,3 +862,11 @@ are the judges' composites.
   test** (quality-dx-1, quality-dx-9, dashboard-ux-7, design-system-2, -3, -5,
   -6, agent-collection-10, mlaas-depth-9, -10; all at or below 3.18). Low
   value, wrong shape, or no consumer. The judges' notes stand.
+
+## Shipped after the roadmap
+
+- **Fold the chart family into the DashboardRTL story** — DashboardRTL
+  already composed every chart Dashboard does, so the actual work was
+  fixing three RTL rendering bugs the story's new geometry checks caught
+  (axis labels overlapping the plot, the keyboard-cursor tooltip covering
+  its own point, TraceWaterfall reading a trace backwards), 2026-09-16, #122.
