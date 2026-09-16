@@ -456,7 +456,12 @@ can be resumed honestly; both start empty and rebuild from the first spans
 or bursts that actually arrive. Every restore is bounded by the same caps
 `Observe` already enforces — the 512-series cap, the 256-cluster/256-span-series
 caps, the hashed 4096 buckets — so a snapshot can never grow a model past
-where live traffic already keeps it.
+where live traffic already keeps it, whether that snapshot came from this
+build's own `Snapshot` or was hand-edited to carry more than any of those
+caps allow. Where the live cap evicts by recency rather than just refusing
+new entries — `log burst paging`'s per-cluster LRU — restoring an oversized
+snapshot keeps the same most-recently-trained entries a live cache would,
+not whatever subset Go's randomized map iteration happens to hand back.
 
 **Where it lives.** One file, `<data-dir>/forseer.json`, beside the Badger
 database — a top-level version for the envelope itself plus a map of each
