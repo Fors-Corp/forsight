@@ -38,7 +38,7 @@ change. Effort: S is a day or less, M is a few days, L is a week or more.
 
 ### 1. mlaas integration: export the stream, train there, proxy predictions, feed outcomes back
 
-- **Area** mlaas · **Effort** L · **Score** fixed by the brief, not judged
+- **Area** mlaas · **Effort** L · **Score** fixed by the brief, not judged · **Shipped** in #83 (2026-09-15)
 
 **Why.** Forseer's models are stdlib-only, online and bounded, which is why
 they gate on a fallback and score prequentially — and why they can never have
@@ -83,7 +83,7 @@ bundle deleted), and the docs, already written in
 
 ### 2. Forseer's model cards on the same Models page
 
-- **Area** dashboard · **Effort** M · **Score** fixed by the brief, not judged
+- **Area** dashboard · **Effort** M · **Score** fixed by the brief, not judged · **Shipped** in #83 (2026-09-15)
 
 **Why.** `forseer/MODELS.md`'s Next list carried \"a models view in the
 dashboard\": `GET /api/v1/forseer/models` served a card per model
@@ -120,7 +120,7 @@ cases go in with item 1.
 
 ### 3. Timeouts on the agent's http.Server
 
-- **Area** agent · **Effort** S · **Score** 4.47
+- **Area** agent · **Effort** S · **Score** 4.47 · **Shipped** 2026-09-16, `newHTTPServer` in `forsight/cmd/run.go`
 
 **Why.** `forsight/cmd/run.go:219` builds `&http.Server{Addr, Handler}` and
 nothing else — no `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`,

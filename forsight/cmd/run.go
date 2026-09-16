@@ -216,7 +216,7 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 	if authToken == "" && !isLoopbackListenAddr(opts.addr) {
 		logger.Warn("listening on a non-loopback address with no authentication configured; set --auth-token or FORSIGHT_AUTH_TOKEN")
 	}
-	httpServer := &http.Server{Addr: opts.addr, Handler: api.BearerAuth(authToken, server.Handler())}
+	httpServer := newHTTPServer(opts.addr, api.BearerAuth(authToken, server.Handler()))
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -391,6 +391,34 @@ func isLoopbackListenAddr(addr string) bool {
 	return strings.HasPrefix(addr, "127.0.0.1:") ||
 		strings.HasPrefix(addr, "localhost:") ||
 		strings.HasPrefix(addr, "[::1]:")
+}
+
+// newHTTPServer builds the agent's listener with every timeout set. A bare
+// &http.Server{} has none, so a client that opens a connection and never
+// finishes its headers holds a goroutine for as long as it likes; the OTLP
+// receiver caps bodies at 32 MiB but nothing caps time. The values are sized
+// so a full 32 MiB OTLP body on a slow link still fits:
+//
+//   - ReadHeaderTimeout: headers are a few hundred bytes; 10s is generous for
+//     any real client and is what frees the goroutine a stalled one holds.
+//   - ReadTimeout: the whole request including the body. 32 MiB at ~1 Mbit/s
+//     is about four and a half minutes.
+//   - WriteTimeout: Go resets it once the header is read, so for HTTP/1.x it
+//     spans reading the body plus writing the response. It must be at least
+//     ReadTimeout or a large upload is cut off mid-body. Nothing here streams
+//     (no SSE, no hijack) and the mlaas proxy bounds its own calls at 60s.
+//   - IdleTimeout: a keep-alive connection between requests.
+//   - MaxHeaderBytes: 1 MiB, the same as Go's default, made explicit.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 }
 
 // parseScrapeTargets turns --scrape values into promscrape targets. Each value
