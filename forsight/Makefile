@@ -9,7 +9,7 @@
 VERSION ?= dev
 LDFLAGS := -X github.com/marcfs31/forsight/forsight/internal/version.Version=$(VERSION)
 
-.PHONY: build build-web build-go release dev demo test lint vet clean
+.PHONY: build build-web build-go release dev demo test test-install lint vet clean
 
 # OS/arch pairs cross-compiled for a release — matches install.sh's
 # "forsight_<os>_<arch>.tar.gz" naming exactly.
@@ -47,6 +47,14 @@ demo:
 test:
 	go test ./...
 
+# install.sh's own tests (checksum verification, the systemd unit and its
+# never-overwritten env file) — bats-core, not go test, since install.sh is
+# POSIX sh with no Go runtime involved. Not part of the Go module's `test`
+# target or forsight-ci.yml's `go` job; run it directly when touching
+# install.sh. brew install bats-core (or apt-get install bats).
+test-install:
+	bats install_test.bats
+
 vet:
 	go vet ./...
 
@@ -57,9 +65,11 @@ clean:
 	rm -rf bin dist
 
 # `make release VERSION=v1.0.1` — cross-compiles the real (build-web) binary
-# for every target in RELEASE_TARGETS and tars each one up as
-# dist/forsight_<os>_<arch>.tar.gz. Upload the result with:
-#   gh release create forsight-$(VERSION) dist/*.tar.gz
+# for every target in RELEASE_TARGETS, tars each one up as
+# dist/forsight_<os>_<arch>.tar.gz, and writes dist/sha256sums.txt over all
+# of them — install.sh downloads and verifies against this file before it
+# extracts anything, so it must ship alongside the archives:
+#   gh release create forsight-$(VERSION) dist/*.tar.gz dist/sha256sums.txt
 # `.github/workflows/forsight-release.yml` runs exactly this on every
 # forsight-vX.Y.Z tag push — see forsight/README.md, Releasing.
 release: build-web
@@ -75,4 +85,10 @@ release: build-web
 		tar -czf dist/forsight_$${os}_$${arch}.tar.gz -C dist forsight; \
 		rm dist/forsight; \
 	done
+	@cd dist && \
+	if command -v sha256sum >/dev/null 2>&1; then \
+		sha256sum forsight_*.tar.gz > sha256sums.txt; \
+	else \
+		shasum -a 256 forsight_*.tar.gz > sha256sums.txt; \
+	fi
 	@ls -la dist/
