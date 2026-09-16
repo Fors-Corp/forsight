@@ -883,3 +883,5 @@ are the judges' composites.
   its own point, TraceWaterfall reading a trace backwards), 2026-09-16, #122.
 
 - **Deterministic incident grouping on the Timeline** — forseer-models-9's window-plus-shared-`Related` substitute for the label-less grouping model, folding insights within five minutes of each other into one incident event when they share a Related value or a Source, 2026-09-16, #118.
+
+- **Probe uptime strips on the Overview** — a "Probes" card renders one UptimeBar per `--probe` target from the agent's `probe.*` metrics, bucketing the selected time range into operational/degraded/outage/unknown segments and showing a TLS-expiry badge beside it, visible only once a target is configured, 2026-09-17, #128.

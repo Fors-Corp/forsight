@@ -28,6 +28,8 @@ import {
   TraceWaterfall,
   Input,
   Button,
+  UptimeBar,
+  Badge,
   type LogEntry as StreamLogEntry,
   type AlertListItem,
   type AlertSeverity,
@@ -37,6 +39,8 @@ import {
   type FilterBarFacet,
   type FilterBarOption,
   type TraceSpan,
+  type UptimeSegment,
+  type BadgeProps,
 } from "@marcfs31/forsight";
 import {
   connectionState,
@@ -62,6 +66,18 @@ import {
 } from "../api";
 
 const timeLabelFormat = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+const ONE_DAY_MS = 24 * 60 * 60_000;
+
+// Same precision as timeLabelFormat, plus the day — "14:02:10" alone is
+// ambiguous once a probe strip's segments span more than one day.
+const dayTimeLabelFormat = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
   hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",
@@ -130,6 +146,130 @@ export function offeredTimeRanges(spanMs: number | null): Array<TimeRangeOption 
     if (range.ms >= span) break;
   }
   return out;
+}
+
+/** One entry per distinct HTTP/TLS probe target — what the "Probes" card
+ *  renders. Built from the agent's probe.* metrics
+ *  (forsight/internal/collector/probe/probe.go), grouped by labels.name,
+ *  falling back to labels.url for a sample that somehow lacks a name. */
+export interface ProbeUptime {
+  name: string;
+  url: string;
+  /** oldest first, one per bucket */
+  segments: UptimeSegment[];
+  /** Newest probe.tls.days_remaining sample in the window, if the target is
+   *  probed over https and at least one such sample landed inside it. */
+  tlsDaysRemaining?: number;
+  /** Newest probe.tls.valid sample in the window, as a boolean. */
+  tlsValid?: boolean;
+}
+
+/**
+ * Tiles [since, now] into `buckets` equal-width, oldest-first buckets and
+ * summarizes each target's probe.http.up samples into one UptimeSegment per
+ * bucket: no sample is "unknown" ("no checks"), all up is "operational",
+ * none up is "outage", and a mix is "degraded" — the latter two carry a
+ * "N of M checks failed" detail. probe.tls.days_remaining/.valid are read
+ * independently of probe.http.up (per the collector's own doc comment: a
+ * probe failure and a bad certificate are different signals) and take the
+ * newest sample in the window, if any.
+ *
+ * Every probe.* metric across the whole `metrics` array — not just samples
+ * inside the window — is considered when finding the set of targets, so a
+ * target with no checks landing in the current range still shows up as an
+ * all-"unknown" strip rather than disappearing.
+ */
+export function probeUptime(
+  metrics: Metric[],
+  since: number,
+  now: number,
+  buckets = 60
+): ProbeUptime[] {
+  const targetKeyOf = (labels: Record<string, string> | undefined): string | undefined => {
+    if (!labels) return undefined;
+    return labels.name || labels.url || undefined;
+  };
+
+  const targets = new Map<string, { name: string; url: string }>();
+  for (const m of metrics) {
+    if (!m.name.startsWith("probe.")) continue;
+    const key = targetKeyOf(m.labels);
+    if (!key || targets.has(key)) continue;
+    targets.set(key, { name: key, url: m.labels?.url ?? "" });
+  }
+
+  const span = Math.max(now - since, 0);
+  const bucketMs = buckets > 0 ? span / buckets : 0;
+  const labelFormat = span > ONE_DAY_MS ? dayTimeLabelFormat : timeLabelFormat;
+
+  const bucketIndexOf = (t: number): number => {
+    if (bucketMs <= 0) return 0;
+    return Math.min(Math.max(Math.floor((t - since) / bucketMs), 0), buckets - 1);
+  };
+
+  /** Parsed timestamp, or null when unparseable or outside [since, now] —
+   *  such a sample belongs to no bucket and can't be "newest in the window". */
+  const inWindow = (timestamp: string): number | null => {
+    const t = Date.parse(timestamp);
+    return Number.isNaN(t) || t < since || t > now ? null : t;
+  };
+
+  const out: ProbeUptime[] = [];
+  for (const { name, url } of targets.values()) {
+    const perBucket = Array.from({ length: buckets }, () => ({ up: 0, total: 0 }));
+    let newestDays: { t: number; value: number } | undefined;
+    let newestValid: { t: number; value: number } | undefined;
+
+    for (const m of metrics) {
+      if (targetKeyOf(m.labels) !== name) continue;
+      const t = inWindow(m.timestamp);
+      if (t === null) continue;
+      if (m.name === "probe.http.up") {
+        const bucket = perBucket[bucketIndexOf(t)];
+        bucket.total += 1;
+        if (m.value === 1) bucket.up += 1;
+      } else if (m.name === "probe.tls.days_remaining") {
+        if (!newestDays || t > newestDays.t) newestDays = { t, value: m.value };
+      } else if (m.name === "probe.tls.valid") {
+        if (!newestValid || t > newestValid.t) newestValid = { t, value: m.value };
+      }
+    }
+
+    const segments: UptimeSegment[] = perBucket.map((bucket, i) => {
+      const label = labelFormat.format(new Date(since + i * bucketMs));
+      if (bucket.total === 0) return { label, status: "unknown", detail: "no checks" };
+      const down = bucket.total - bucket.up;
+      if (down === 0) return { label, status: "operational" };
+      return {
+        label,
+        status: bucket.up === 0 ? "outage" : "degraded",
+        detail: `${down} of ${bucket.total} checks failed`,
+      };
+    });
+
+    out.push({
+      name,
+      url,
+      segments,
+      ...(newestDays ? { tlsDaysRemaining: newestDays.value } : {}),
+      ...(newestValid ? { tlsValid: newestValid.value === 1 } : {}),
+    });
+  }
+
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Tone for the TLS badge under a probe's UptimeBar: an invalid chain is
+ *  always danger regardless of days remaining; otherwise danger at 0 or
+ *  below, warning under two weeks, and the muted default beyond that. */
+function tlsBadgeTone(
+  tlsValid: boolean | undefined,
+  daysRemaining: number
+): NonNullable<BadgeProps["variant"]> {
+  if (tlsValid === false) return "danger";
+  if (daysRemaining <= 0) return "danger";
+  if (daysRemaining < 14) return "warning";
+  return "neutral";
 }
 
 function formatPercent(v: number | undefined): string {
@@ -386,6 +526,12 @@ export default function Overview() {
   const statValues: Record<ChartMetric, number | undefined> = { cpu, memory, disk };
   const containers = containerRows(metrics);
   const processes = processRows(metrics).slice(0, 15);
+  // Absent on a deployment with no --probe target, so the card below it
+  // never renders and this page looks exactly as it did before item #128.
+  const probes = probeUptime(metrics, since, now);
+  const rangeStartLabel = (range.ms > ONE_DAY_MS ? dayTimeLabelFormat : timeLabelFormat).format(
+    new Date(since)
+  );
   const filteredLogs = useMemo(
     () => rangedLogs.filter((l) => matchesFilters(l, filters)),
     [rangedLogs, filters]
@@ -543,6 +689,39 @@ export default function Overview() {
           )}
         </CardContent>
       </Card>
+
+      {/* Only on a deployment that passed at least one --probe target — see
+          probeUptime's own doc comment. Placed right after the host stat
+          cards and chart, before Forseer/processes/containers/logs, because
+          "is this endpoint up" is a health-at-a-glance question like the
+          StatusDot above, not one of the diagnostic-detail sections below
+          it. */}
+      {probes.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Probes</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-6">
+            {probes.map((probe) => (
+              <div key={probe.name} className="flex flex-col gap-2">
+                <UptimeBar
+                  label={`${probe.name}, last ${range.label}`}
+                  segments={probe.segments}
+                  startCaption={rangeStartLabel}
+                  endCaption="Now"
+                />
+                {probe.tlsDaysRemaining !== undefined ? (
+                  <Badge variant={tlsBadgeTone(probe.tlsValid, probe.tlsDaysRemaining)}>
+                    {probe.tlsValid === false
+                      ? "TLS certificate invalid"
+                      : `TLS expires in ${Math.round(probe.tlsDaysRemaining)} days`}
+                  </Badge>
+                ) : null}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>

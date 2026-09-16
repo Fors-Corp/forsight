@@ -25,7 +25,9 @@ observability platform.
   `--collect-interval`, reporting `probe.http.up`/`.status`/`.duration_ms`
   and, for `https://` targets, `probe.tls.days_remaining` and `.valid` from
   the leaf certificate — read independently, so a certificate nearing (or
-  past) expiry never makes an otherwise-reachable site look down.
+  past) expiry never makes an otherwise-reachable site look down. The
+  Overview page shows an uptime strip per target, plus its certificate's
+  days to expiry, once at least one `--probe` is configured.
 - **StatsD / DogStatsD** — listens on `:8125` by default so a bare install
   receives them. `--disable-statsd` turns it off; a bind failure is a
   warning, not a crash.
