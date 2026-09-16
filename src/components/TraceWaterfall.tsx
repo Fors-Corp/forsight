@@ -99,7 +99,14 @@ export const TraceWaterfall = React.forwardRef<HTMLTableElement, TraceWaterfallP
                           span.status === "error" ? "bg-danger" : "bg-accent"
                         )}
                         style={{
-                          insetInlineStart: `${offset}%`,
+                          // Physical `left`, not the logical `insetInlineStart`:
+                          // a span's offset is wall-clock time, which (like
+                          // LineChart/BarChart's x-axis — see ChartFrame) reads
+                          // left-to-right in both text directions. The logical
+                          // property would mirror the whole waterfall under
+                          // `dir="rtl"`, so a span late in the trace would
+                          // render nearer the timeline's start than one early.
+                          left: `${offset}%`,
                           width: `${Math.max(width, 0.5)}%`,
                         }}
                       />
