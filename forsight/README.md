@@ -119,7 +119,10 @@ forsight run [flags]
     --statsd-addr string         StatsD/DogStatsD UDP listen address (default :8125)
     --log-file string            log file to tail into the store (repeatable)
     --auth-token string          require Authorization: Bearer <token> on every route except
-                                 GET /healthz; also read from FORSIGHT_AUTH_TOKEN (off by default)
+                                 the dashboard's static shell and GET /healthz; also read from
+                                 FORSIGHT_AUTH_TOKEN (off by default) — the dashboard itself
+                                 prompts for the token on first use and holds it in
+                                 sessionStorage, so this doesn't lock the browser out
     --tls-cert string            PEM certificate; with --tls-key, serves HTTPS instead of
                                  plaintext HTTP (off by default); also read from FORSIGHT_TLS_CERT
     --tls-key string             PEM private key matching --tls-cert;
@@ -140,7 +143,8 @@ forsight run [flags]
 forsight demo [flags]
     --addr string                address to serve the API and dashboard on (default ":8080")
     --auth-token string           require Authorization: Bearer <token> on every route except
-                                 GET /healthz; also read from FORSIGHT_AUTH_TOKEN
+                                 the dashboard's static shell and GET /healthz; also read from
+                                 FORSIGHT_AUTH_TOKEN
     --backfill duration           how much synthetic history to generate before serving, so the
                                  dashboard opens already populated (default 6h); 0 disables it
     --tick duration               spacing between synthetic samples, backfilled and live (default 10s)
@@ -182,6 +186,21 @@ swap and nothing else about `run` changes. `--data-dir` defaults to
 Badger's per-entry TTL the same way it governs MemoryStore's pruning.
 `internal/store/badger.go`'s doc comment covers the key encoding and why it's
 shaped the way it is.
+
+### The dashboard under `--auth-token`
+
+`--auth-token` protects every route except the dashboard's static shell
+(`GET`/`HEAD` on `/` and `/assets/*`) and `GET /healthz` — the shell carries
+no agent data, only the React app that then has to call the protected
+`/api/v1/*` routes itself. So the browser can always load the page; what it
+can't do without the token is see any data. The first request that comes
+back `401` opens a modal prompt (built from the design system's `Dialog` and
+`Input`) asking for the token forsight was started with; a correct one is
+kept in `sessionStorage` — never `localStorage`, and never put in a URL or a
+log line — for the rest of that tab's life, and every poll and action in
+`forsight/web/src/api.ts` attaches it via `fetchWithAuth`. A wrong guess (or
+a token that later stops matching, e.g. the agent restarted with a new one)
+clears it and reopens the same prompt with an "incorrect token" state.
 
 ### TLS (`--tls-cert`, `--tls-key`)
 

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
-import type { ForseerQueryFacet } from "./api";
+import { submitAuthToken, type ForseerQueryFacet } from "./api";
 
 type FetchResponses = Record<string, unknown>;
 
@@ -609,5 +609,90 @@ describe("Overview memory and disk charts", () => {
     expect(screen.getByRole("radio", { name: /^Host CPU/ })).toHaveAttribute("tabindex", "0");
     expect(screen.getByRole("radio", { name: /^Host memory/ })).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("radio", { name: /^Host disk/ })).toHaveAttribute("tabindex", "-1");
+  });
+});
+
+/**
+ * Item 18: forsight/internal/api/auth.go rejects every route but the
+ * dashboard's static shell with a 401 once --auth-token is set, so the page
+ * itself always loads — these tests drive the dialog that api.ts's
+ * fetchWithAuth opens once one of App's own pollers hits that 401.
+ */
+describe("Auth token gate", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    // The token store and the open/rejected prompt state are module-level
+    // in api.ts (shared by every fetchWithAuth caller), so each test must
+    // put them back or leak state into whichever test runs next.
+    submitAuthToken("");
+  });
+
+  /** 401s every endpoint until `token` has been sent as the Bearer value,
+   *  then serves emptyEndpoints — the shape a real agent gives fetchWithAuth
+   *  once the right token starts arriving. */
+  function mockFetchRequiringToken(token: string) {
+    return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const sent = new Headers(init?.headers).get("Authorization");
+      if (sent !== `Bearer ${token}`) return new Response("", { status: 401 });
+      const url = typeof input === "string" ? input : input.toString();
+      const path = url.split("?")[0];
+      if (path in emptyEndpoints) {
+        return new Response(JSON.stringify(emptyEndpoints[path]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("", { status: 404 });
+    });
+  }
+
+  it("shows the token dialog, not the page's data, when a poller 401s", async () => {
+    vi.stubGlobal("fetch", mockFetchRequiringToken("right-token"));
+    render(<App />);
+
+    expect(
+      await screen.findByRole("dialog", { name: "Access token required" })
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Access token")).toBeInTheDocument();
+    // The neutral first-load copy, not the "rejected" one.
+    expect(screen.queryByText(/was rejected/i)).not.toBeInTheDocument();
+  });
+
+  it("closes the dialog and unlocks the data once the right token is submitted", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", mockFetchRequiringToken("right-token"));
+    render(<App />);
+    await screen.findByRole("dialog", { name: "Access token required" });
+
+    await user.type(screen.getByLabelText("Access token"), "right-token");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Access token required" })
+      ).not.toBeInTheDocument()
+    );
+    expect(await screen.findByText("Host CPU over time")).toBeInTheDocument();
+  });
+
+  it("reopens the dialog as rejected when the submitted token is wrong", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", mockFetchRequiringToken("right-token"));
+    render(<App />);
+    await screen.findByRole("dialog", { name: "Access token required" });
+
+    await user.type(screen.getByLabelText("Access token"), "wrong-guess");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await screen.findByText(/that token was rejected/i);
+    expect(screen.getByLabelText("Access token")).toHaveValue("");
+  });
+
+  it("does not show the dialog at all once a poll comes back with data", async () => {
+    mockFetch(emptyEndpoints);
+    render(<App />);
+
+    await screen.findByText("Host CPU over time");
+    expect(screen.queryByRole("dialog", { name: "Access token required" })).not.toBeInTheDocument();
   });
 });

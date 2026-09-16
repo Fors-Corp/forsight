@@ -4,6 +4,9 @@ import {
   LOG_READ_LIMIT,
   TRACE_READ_LIMIT,
   connectionState,
+  fetchWithAuth,
+  submitAuthToken,
+  useAuthPrompt,
   useLogs,
   usePoll,
   useTraces,
@@ -219,6 +222,129 @@ describe("connectionState", () => {
       state: "stale",
       silentForMs: 15_001,
     });
+  });
+});
+
+describe("fetchWithAuth / auth prompt", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    // The token store and the prompt are module-level (shared across every
+    // fetchWithAuth caller on the page), so tests must reset both or leak
+    // state into whichever test runs next.
+    submitAuthToken("");
+  });
+
+  it("sends no Authorization header when no token has been entered", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ok([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWithAuth("/api/v1/metrics");
+
+    const [, init] = fetchMock.mock.calls[0] as [unknown, RequestInit];
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
+  });
+
+  it("attaches the stored token as a Bearer header once one is set", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ok([]));
+    vi.stubGlobal("fetch", fetchMock);
+    submitAuthToken("s3cret");
+
+    await fetchWithAuth("/api/v1/metrics");
+
+    const [, init] = fetchMock.mock.calls[0] as [unknown, RequestInit];
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer s3cret");
+  });
+
+  it("never puts the token in the URL", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ok([]));
+    vi.stubGlobal("fetch", fetchMock);
+    submitAuthToken("s3cret");
+
+    await fetchWithAuth("/api/v1/metrics?since=2026-01-01");
+
+    const [url] = fetchMock.mock.calls[0] as [RequestInfo | URL, unknown];
+    expect(String(url)).not.toContain("s3cret");
+  });
+
+  it("opens the prompt (not marked rejected) on a 401 with no token sent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 401 }))
+    );
+    const { result } = renderHook(() => useAuthPrompt());
+    expect(result.current).toEqual({ open: false, rejected: false });
+
+    await act(async () => {
+      await fetchWithAuth("/api/v1/metrics");
+    });
+
+    expect(result.current).toEqual({ open: true, rejected: false });
+  });
+
+  it("clears the token and reopens the prompt as rejected when a sent token 401s", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 401 }))
+    );
+    submitAuthToken("wrong");
+    const { result } = renderHook(() => useAuthPrompt());
+
+    await act(async () => {
+      await fetchWithAuth("/api/v1/metrics");
+    });
+
+    expect(result.current).toEqual({ open: true, rejected: true });
+
+    // The bad token must not be sent again on the next request.
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ok([]));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchWithAuth("/api/v1/metrics");
+    const [, init] = fetchMock.mock.calls[0] as [unknown, RequestInit];
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
+  });
+
+  it("submitAuthToken stores the token and closes the prompt", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 401 }))
+    );
+    const { result } = renderHook(() => useAuthPrompt());
+    await act(async () => {
+      await fetchWithAuth("/api/v1/metrics");
+    });
+    expect(result.current.open).toBe(true);
+
+    act(() => {
+      submitAuthToken("good-token");
+    });
+
+    expect(result.current).toEqual({ open: false, rejected: false });
+
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ok([]));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchWithAuth("/api/v1/metrics");
+    const [, init] = fetchMock.mock.calls[0] as [unknown, RequestInit];
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer good-token");
+  });
+
+  it("does not clear or reopen the prompt on a non-401 failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 500 }))
+    );
+    submitAuthToken("s3cret");
+    const { result } = renderHook(() => useAuthPrompt());
+
+    await act(async () => {
+      await fetchWithAuth("/api/v1/metrics");
+    });
+
+    expect(result.current).toEqual({ open: false, rejected: false });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ok([]));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchWithAuth("/api/v1/metrics");
+    const [, init] = fetchMock.mock.calls[0] as [unknown, RequestInit];
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer s3cret");
   });
 });
 

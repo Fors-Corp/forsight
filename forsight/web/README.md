@@ -22,4 +22,6 @@ installs, builds, and copies `dist/` into `../internal/api/webdist/` for
 `go:embed`. Run that (or `make build`) after changing anything here or
 bumping the design-system pin, and commit the refreshed `webdist/` output
 alongside your change — CI's `web` job fails the build otherwise (see
-`.github/workflows/forsight-ci.yml`'s diff check).
+`.github/workflows/forsight-ci.yml`'s diff check). `make build-web` supplies
+the `npm ci` token itself — `NODE_AUTH_TOKEN` if set, `gh auth token`
+otherwise — so it needs no `.npmrc` edits or exported variables from you.

@@ -70,7 +70,8 @@ func newRunCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&opts.addr, "addr", ":8080", "address to serve the API and dashboard on")
 	cmd.Flags().StringVar(&opts.authToken, "auth-token", "",
-		"require Authorization: Bearer <token> on every route except GET /healthz; "+
+		"require Authorization: Bearer <token> on every route except the dashboard's "+
+			"static shell and GET /healthz; "+
 			"also read from FORSIGHT_AUTH_TOKEN when the flag is empty (auth is off by default)")
 	cmd.Flags().StringVar(&opts.tlsCertFile, "tls-cert", "",
 		"path to a PEM certificate; with --tls-key, serves HTTPS instead of plaintext HTTP "+
