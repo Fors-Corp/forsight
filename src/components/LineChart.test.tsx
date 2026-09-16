@@ -228,6 +228,46 @@ describe("LineChart", () => {
     const { container } = renderChart({ series: [{ ...series[0], dashedFrom: 2 }] });
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it("fills the observed run solid and the projected run with a lighter, hatched treatment", () => {
+    const { container } = render(
+      <LineChart label="Requests" labels={labels} series={[{ ...series[0], dashedFrom: 2 }]} area />
+    );
+    // The observed run (indices 0-2) fills at the ordinary area opacity.
+    const solidArea = container.querySelector("path.opacity-20");
+    expect(solidArea).toBeInTheDocument();
+    // The projected run (indices 2-3) fills lighter still...
+    const lighterArea = container.querySelector("path.opacity-10");
+    expect(lighterArea).toBeInTheDocument();
+    // ...and shape, not just opacity, carries the distinction: a hatch
+    // pattern is defined once and referenced by a second fill path over the
+    // same projected run (CONTRIBUTING.md's data-viz rule — color, and by
+    // extension opacity alone, is never the only carrier).
+    const pattern = container.querySelector("pattern");
+    expect(pattern).toBeInTheDocument();
+    const hatchedArea = container.querySelector(`path[fill="url(#${pattern?.id})"]`);
+    expect(hatchedArea).toBeInTheDocument();
+    // Same run, drawn twice: the lighter fill and the hatch trace the same path.
+    expect(hatchedArea?.getAttribute("d")).toBe(lighterArea?.getAttribute("d"));
+    expect(container.querySelectorAll("pattern")).toHaveLength(1);
+  });
+
+  it("fills the whole run solid, with no hatch, when a series has no dashedFrom", () => {
+    const { container } = render(
+      <LineChart label="Requests" labels={labels} series={[series[0]]} area />
+    );
+    expect(container.querySelectorAll("path")).toHaveLength(2);
+    expect(container.querySelector("pattern")).not.toBeInTheDocument();
+    expect(container.querySelector('path[fill^="url("]')).not.toBeInTheDocument();
+  });
+
+  it("has no accessibility violations with a projected area series", async () => {
+    const { container } = renderChart({
+      series: [{ ...series[0], dashedFrom: 2 }],
+      area: true,
+    });
+    expect(await axe(container)).toHaveNoViolations();
+  });
 });
 
 describe("pickLabelIndices", () => {

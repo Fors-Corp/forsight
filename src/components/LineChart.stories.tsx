@@ -101,6 +101,28 @@ export const Projection: Story = {
   },
 };
 
+export const ProjectionArea: Story = {
+  name: "Projection (area)",
+  args: {
+    ...Projection.args,
+    area: true,
+    description:
+      "checkout-api — the fill under the forecast past 23:00 drops to half opacity and is hatched, so the projection reads as lighter shape, not just a lighter color.",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // Shape carries the distinction for the fill too: a hatch pattern is
+    // defined once and a second, hatched fill path traces the same
+    // projected run as the lighter-opacity one.
+    const pattern = canvasElement.querySelector("pattern");
+    await expect(pattern).toBeInTheDocument();
+    await expect(
+      canvasElement.querySelector(`path[fill="url(#${pattern?.id})"]`)
+    ).toBeInTheDocument();
+    await expect(canvas.getAllByText(/projected from 23:00/)).toHaveLength(2);
+  },
+};
+
 export const KeyboardCursor: Story = {
   name: "Keyboard cursor",
   args: { ...SingleSeries.args } as Story["args"],
