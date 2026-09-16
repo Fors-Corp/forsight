@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"bytes"
 	"math"
 	"math/rand"
 	"testing"
@@ -212,5 +213,69 @@ func TestDetector_UsesLearnedThresholdsOnceCalibrated(t *testing.T) {
 	}
 	if s.warn <= warningSigma {
 		t.Errorf("warning threshold settled at %.2f, no higher than the fixed %d it replaced", s.warn, warningSigma)
+	}
+}
+
+// TestThresholds_SnapshotRestoreRoundTrip is roadmap item 25's proof for
+// this model. Unlike severity's, there is no grading window to reset here:
+// a calibration is restored whole, n included, so a series that was already
+// calibrated stays calibrated across a restart.
+func TestThresholds_SnapshotRestoreRoundTrip(t *testing.T) {
+	m := newThresholdModel()
+	rng := rand.New(rand.NewSource(21))
+	feed(m, "host.cpu", thresholdMinSamples*2, func() float64 { return rng.NormFloat64() })
+
+	m.mu.Lock()
+	want := *m.series["host.cpu"]
+	m.mu.Unlock()
+
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	restored := newThresholdModel()
+	if err := restored.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	restored.mu.Lock()
+	got, ok := restored.series["host.cpu"]
+	restored.mu.Unlock()
+	if !ok {
+		t.Fatal("restored model has no host.cpu series")
+	}
+	if *got != want {
+		t.Fatalf("restored series = %+v, want %+v", *got, want)
+	}
+	if !restored.Card().Ready {
+		t.Fatal("restored model is not ready even though its series already had thresholdMinSamples")
+	}
+}
+
+func TestThresholds_RestoreDiscardsAVersionMismatch(t *testing.T) {
+	m := newThresholdModel()
+	feed(m, "host.cpu", thresholdMinSamples, func() float64 { return 1 })
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	data = bytes.Replace(data, []byte(`"version":1`), []byte(`"version":2`), 1)
+
+	fresh := newThresholdModel()
+	if err := fresh.Restore(data); err == nil {
+		t.Fatal("Restore accepted a payload with the wrong schema version")
+	}
+	if len(fresh.series) != 0 {
+		t.Fatalf("a discarded restore left %d series, want 0", len(fresh.series))
+	}
+}
+
+func TestThresholds_RestoreDiscardsCorruptJSON(t *testing.T) {
+	m := newThresholdModel()
+	if err := m.Restore([]byte("{not json")); err == nil {
+		t.Fatal("Restore accepted corrupt JSON")
+	}
+	if len(m.series) != 0 {
+		t.Fatalf("a discarded restore left %d series, want 0", len(m.series))
 	}
 }

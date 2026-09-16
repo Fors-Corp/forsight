@@ -126,11 +126,15 @@ func (e *Engine) ClassifySeverity(message string) (string, bool) {
 // Models reports every trained model in the engine: the job it does, the
 // inputs it reads, whether it is ready, and how it is scoring. This is the
 // only place the agent claims anything about what it has learned.
+//
+// The list itself lives in persistedModels (persist.go), which also names
+// each model's persistence key — one list to keep in sync, not two, when a
+// model is added.
 func (e *Engine) Models() []Card {
-	models := []Model{e.severity, e.det.thresholds, e.forecast, e.paging, e.spans, e.culprit, e.det.outlier}
-	cards := make([]Card, 0, len(models))
-	for _, m := range models {
-		cards = append(cards, m.Card())
+	pms := e.persistedModels()
+	cards := make([]Card, 0, len(pms))
+	for _, pm := range pms {
+		cards = append(cards, pm.model.Card())
 	}
 	return cards
 }

@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"bytes"
 	"math"
 	"math/rand"
 	"strings"
@@ -248,5 +249,68 @@ func TestFormatProjection_NeverPrintsABackwardsRange(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestForecast_SnapshotRestoreRoundTrip is roadmap item 25's proof for this
+// model: Holt's level and trend survive a restart, so a restored model
+// projects the same exhaustion a warm one would.
+func TestForecast_SnapshotRestoreRoundTrip(t *testing.T) {
+	f := burn(ramp(0, 1, 40))
+	wantSoonest, wantLatest, wantOK := f.Exhausted()
+	if !wantOK {
+		t.Fatal("no projection from a clean linear burn; nothing to prove a round trip on")
+	}
+
+	data, err := f.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	restored := newBurnForecast()
+	if err := restored.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	gotSoonest, gotLatest, gotOK := restored.Exhausted()
+	if !gotOK || gotSoonest != wantSoonest || gotLatest != wantLatest {
+		t.Fatalf("restored Exhausted() = (%s, %s, %v), want (%s, %s, %v)",
+			gotSoonest, gotLatest, gotOK, wantSoonest, wantLatest, wantOK)
+	}
+	if !restored.Card().Ready {
+		t.Fatal("restored model is not ready even though n/tick both came back")
+	}
+
+	// The head-to-head grading window is a report of recent skill, not a
+	// gate, but it must still reset: it is a claim about "recently", and it
+	// would be wrong the instant it survived a restart unchanged.
+	if restored.graded != 0 || restored.wins != 0 {
+		t.Fatalf("restored model carries a graded window (graded=%d wins=%d), want zero", restored.graded, restored.wins)
+	}
+}
+
+func TestForecast_RestoreDiscardsAVersionMismatch(t *testing.T) {
+	f := burn(ramp(0, 1, 40))
+	data, err := f.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	data = bytes.Replace(data, []byte(`"version":1`), []byte(`"version":2`), 1)
+
+	fresh := newBurnForecast()
+	if err := fresh.Restore(data); err == nil {
+		t.Fatal("Restore accepted a payload with the wrong schema version")
+	}
+	if fresh.n != 0 {
+		t.Fatalf("a discarded restore left n=%d, want 0", fresh.n)
+	}
+}
+
+func TestForecast_RestoreDiscardsCorruptJSON(t *testing.T) {
+	f := newBurnForecast()
+	if err := f.Restore([]byte("{not json")); err == nil {
+		t.Fatal("Restore accepted corrupt JSON")
+	}
+	if f.n != 0 {
+		t.Fatalf("a discarded restore left n=%d, want 0", f.n)
 	}
 }

@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sync"
@@ -182,4 +183,66 @@ func (m *thresholdModel) Card() Card {
 		FallbackAccuracy: Unmeasured,
 		Detail:           detail,
 	}
+}
+
+// thresholdSnapshotVersion is this model's own schema version — see
+// severitySnapshotVersion's comment for what that guards against.
+const thresholdSnapshotVersion = 1
+
+// thresholdSnapshot is Snapshot's JSON payload: every series' learned
+// warn/critical pair and the counts behind it.
+type thresholdSnapshot struct {
+	Version int                                `json:"version"`
+	Series  map[string]seriesThresholdSnapshot `json:"series"`
+}
+
+type seriesThresholdSnapshot struct {
+	Warn     float64 `json:"warn"`
+	Critical float64 `json:"critical"`
+	N        int     `json:"n"`
+	WarnHits int     `json:"warnHits"`
+	CritHits int     `json:"critHits"`
+}
+
+// Snapshot implements Model.
+func (m *thresholdModel) Snapshot() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snap := thresholdSnapshot{Version: thresholdSnapshotVersion, Series: make(map[string]seriesThresholdSnapshot, len(m.series))}
+	for key, s := range m.series {
+		snap.Series[key] = seriesThresholdSnapshot{Warn: s.warn, Critical: s.critical, N: s.n, WarnHits: s.warnHits, CritHits: s.critHits}
+	}
+	return json.Marshal(snap)
+}
+
+// Restore implements Model. Unlike severity's or paging's, there is no
+// prequential grading window here to reset: a calibration has no labels to
+// grade against (see Card), so every field this model holds is learned
+// state, and every field comes back — n included. That is deliberate, and
+// it is the specific problem this roadmap item names for this model:
+// thresholdMinSamples (2000) gates readiness purely on how many points a
+// series has seen, with nothing to re-earn against, so restoring n lets an
+// already-calibrated series stay calibrated across a restart instead of
+// re-walking the 2000-point Robbins-Monro climb from warningSigma/
+// criticalSigma. Bounded the same way Observe bounds it live: a snapshot
+// with more than maxSeries entries is truncated on the way in.
+func (m *thresholdModel) Restore(data []byte) error {
+	var snap thresholdSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return fmt.Errorf("thresholds snapshot: %w", err)
+	}
+	if snap.Version != thresholdSnapshotVersion {
+		return fmt.Errorf("thresholds snapshot version %d, want %d", snap.Version, thresholdSnapshotVersion)
+	}
+	series := make(map[string]*seriesThreshold, len(snap.Series))
+	for key, s := range snap.Series {
+		if len(series) >= maxSeries {
+			break
+		}
+		series[key] = &seriesThreshold{warn: s.Warn, critical: s.Critical, n: s.N, warnHits: s.WarnHits, critHits: s.CritHits}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.series = series
+	return nil
 }

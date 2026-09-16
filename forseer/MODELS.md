@@ -416,6 +416,59 @@ mlaas half.
 **Component.** **Table**, **Card**, and **Progress**, all already in the
 design system, plus **LineChart** for the mlaas forecasts.
 
+### Persisted state
+
+Every model above trains cold on every restart, which on a frequently
+restarted agent means `severityMinTrained`, `thresholdMinSamples`, and every
+other model's own warm-up never finish being paid for. `Snapshot() ([]byte,
+error)` and `Restore([]byte) error` on `Model` (`learn.go`), alongside
+`Card()`, fix that: `forsight/cmd/run.go` restores right after
+`forseer.NewEngine`, before `WithSeverityFallback` or any live data touches
+the engine, and writes a fresh snapshot on shutdown, next to the Badger
+close.
+
+**What persists, model by model.** Every payload is its own JSON document
+with its own schema version — a version this build does not recognize, or a
+payload that does not parse as that model's own shape, is a discard (a
+logged, non-fatal event), never a misread. What comes back is the learned
+state that gates readiness on sample count alone: naive-Bayes counts and the
+trained count (`log severity`), per-series warn/critical and how many points
+each has seen (`alert thresholds` — the one model whose entire state is
+exactly what a restart used to throw away, since a calibration has no
+comparison window to re-earn), Holt's level and trend (`error-budget
+forecast`), the logistic weights (`log burst paging`), each series' P²
+markers (`per-endpoint latency shape`), the mean vector and covariance
+(`host outlier`), and the two reporting counters (`culprit ranking`).
+
+What does **not** come back, on every model that grades itself against a
+named fallback (`log severity`, `log burst paging`): the prequential window
+those two accuracies are measured over. Readiness there means "beating the
+thing I replace," not "have seen enough," so restoring a stale comparison
+would let a restart open already trusted on a result from a previous run
+rather than one this run has actually earned — the same reasoning
+`error-budget forecast`'s head-to-head win rate resets for, even though
+nothing gates on it. Also reset: bookkeeping tied to a live, continuous
+stream rather than to what a model has learned — `log burst paging`'s
+in-flight bursts awaiting a label and the recent criticals that would label
+them, and `per-endpoint latency shape`'s currently-open insights and
+recent-trace buffer. A restart's own gap is of unknown length, so neither
+can be resumed honestly; both start empty and rebuild from the first spans
+or bursts that actually arrive. Every restore is bounded by the same caps
+`Observe` already enforces — the 512-series cap, the 256-cluster/256-span-series
+caps, the hashed 4096 buckets — so a snapshot can never grow a model past
+where live traffic already keeps it.
+
+**Where it lives.** One file, `<data-dir>/forseer.json`, beside the Badger
+database — a top-level version for the envelope itself plus a map of each
+model's stable name to its own payload, so restoring one model correctly
+never depends on any other model's shape. `--store memory` deployments have
+no data dir and stay cold, silently: there is nowhere durable for the
+snapshot, the same reason there is nowhere durable for the metrics/logs/
+spans MemoryStore holds either. The data directory belongs to the operator;
+nothing here lands in this repo. See
+[`forsight/README.md`](../forsight/README.md#persistent-storage---store-badger)
+for the flag.
+
 ## Served by mlaas
 
 Four more models answer to the same contract as the ones above, but they
@@ -447,22 +500,8 @@ each other in the open on the Models page, not merged into one answer.
 
 ## Next
 
-Ordered by what each one is worth against what it costs. Every row keeps the
-rules above: declared inputs, a readiness gate, a named fallback, and an
-existing Forsight component to land on.
-
-### 1. Persist what has been learned
-
-A model that resets on restart has to re-earn its readiness every deploy,
-which on a frequently-restarted agent means it is never ready. The state is
-small and JSON-serialisable; it belongs next to the Badger database under
-`--data-dir`, written on shutdown and restored on start.
-
-Two things this must get right: the snapshot is versioned, so a model whose
-shape changed discards an old snapshot rather than misreading it; and the
-data directory belongs to the operator, never to this repo.
-
-*Applies to every model.*
+Nothing queued. Persisted state (above) was the last row on this list —
+every proposal this file tracked has shipped.
 
 ## Rules
 

@@ -1,6 +1,8 @@
 package forseer
 
 import (
+	"encoding/json"
+	"fmt"
 	"math"
 	"strconv"
 	"sync"
@@ -278,6 +280,80 @@ func (f *burnForecast) Card() Card {
 		Graded:           f.graded,
 		Detail:           detail,
 	}
+}
+
+// forecastSnapshotVersion is this model's own schema version — see
+// severitySnapshotVersion's comment for what that guards against.
+const forecastSnapshotVersion = 1
+
+// forecastSnapshot is Snapshot's JSON payload: Holt's level and trend, the
+// observation count and cadence, and the two running error terms — the
+// entire fitted model. The head-to-head grading window (grades, gradePos,
+// graded, wins) is deliberately absent — see Restore.
+type forecastSnapshot struct {
+	Version        int       `json:"version"`
+	Level          float64   `json:"level"`
+	Trend          float64   `json:"trend"`
+	N              int       `json:"n"`
+	Last           float64   `json:"last"`
+	LastAt         time.Time `json:"lastAt"`
+	Tick           float64   `json:"tick"`
+	AbsErr         float64   `json:"absErr"`
+	NaiveAE        float64   `json:"naiveAE"`
+	Predicted      float64   `json:"predicted"`
+	NaivePredicted float64   `json:"naivePredicted"`
+	HavePrediction bool      `json:"havePrediction"`
+}
+
+// Snapshot implements Model.
+func (f *burnForecast) Snapshot() ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	snap := forecastSnapshot{
+		Version:        forecastSnapshotVersion,
+		Level:          f.level,
+		Trend:          f.trend,
+		N:              f.n,
+		Last:           f.last,
+		LastAt:         f.lastAt,
+		Tick:           f.tick,
+		AbsErr:         f.absErr,
+		NaiveAE:        f.naiveAE,
+		Predicted:      f.predicted,
+		NaivePredicted: f.naivePredicted,
+		HavePrediction: f.havePrediction,
+	}
+	return json.Marshal(snap)
+}
+
+// Restore implements Model. Holt's level and trend, the observation count,
+// the cadence, and the two running error terms all come back — that is the
+// entire fitted model, and readyLocked (n >= forecastMinObservations and a
+// positive tick) is gated on exactly those, not on a comparison window, so
+// a restored model can project again the moment it restarts rather than
+// waiting through forecastMinObservations fresh readings.
+//
+// What resets: the head-to-head grading window (grades, gradePos, graded,
+// wins) that Card's Accuracy is earned from. It gates nothing — unlike
+// severity's or paging's, readiness here does not depend on it — but it is
+// still a report of how often Holt has *recently* beaten persistence, and
+// the same rule holds as everywhere else in this package: a number that
+// claims to be recent is wrong the moment it survives a restart unchanged.
+func (f *burnForecast) Restore(data []byte) error {
+	var snap forecastSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return fmt.Errorf("forecast snapshot: %w", err)
+	}
+	if snap.Version != forecastSnapshotVersion {
+		return fmt.Errorf("forecast snapshot version %d, want %d", snap.Version, forecastSnapshotVersion)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.level, f.trend, f.n = snap.Level, snap.Trend, snap.N
+	f.last, f.lastAt, f.tick = snap.Last, snap.LastAt, snap.Tick
+	f.absErr, f.naiveAE = snap.AbsErr, snap.NaiveAE
+	f.predicted, f.naivePredicted, f.havePrediction = snap.Predicted, snap.NaivePredicted, snap.HavePrediction
+	return nil
 }
 
 // ewma is the running mean used for the error terms and the cadence: a

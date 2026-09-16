@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -18,10 +19,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/marcfs31/forsight/forseer"
 	"github.com/marcfs31/forsight/forsight/internal/model"
 	"github.com/marcfs31/forsight/forsight/internal/store"
 )
@@ -87,6 +90,160 @@ func TestNewBackingStore(t *testing.T) {
 func TestCloseBadgerStore_NilIsNoop(t *testing.T) {
 	if err := closeBadgerStore(nil, discardLogger()); err != nil {
 		t.Errorf("closeBadgerStore(nil, ...) = %v, want nil", err)
+	}
+}
+
+// trainSeverityForTest feeds eng's severity model enough labelled lines to
+// have a non-zero Trained count, without needing severityMinTrained worth
+// of volume — these tests are about the snapshot plumbing, not readiness.
+func trainSeverityForTest(eng *forseer.Engine) {
+	eng.ObserveLogs([]forseer.LogLine{
+		{Source: "api", Severity: "error", Message: "could not reach the database"},
+		{Source: "api", Severity: "info", Message: "request completed in 12ms"},
+	})
+}
+
+// severityCard returns the "log severity" Card from eng.Models(), failing
+// the test if it isn't there — a cheap guard against this test silently
+// checking nothing if Engine.Models ever reorders or renames it.
+func severityCard(t *testing.T, eng *forseer.Engine) forseer.Card {
+	t.Helper()
+	for _, c := range eng.Models() {
+		if c.Name == "log severity" {
+			return c
+		}
+	}
+	t.Fatal(`Engine.Models() has no "log severity" card`)
+	return forseer.Card{}
+}
+
+func TestForseerSnapshotPath(t *testing.T) {
+	if got := forseerSnapshotPath(&runOptions{storeBackend: "memory", dataDir: "./forsight-data"}); got != "" {
+		t.Errorf("memory store: path = %q, want empty (a memory deployment has nothing durable to write to)", got)
+	}
+	if got := forseerSnapshotPath(&runOptions{storeBackend: "", dataDir: "./forsight-data"}); got != "" {
+		t.Errorf("default (memory) store: path = %q, want empty", got)
+	}
+	if got := forseerSnapshotPath(&runOptions{storeBackend: "badger", dataDir: ""}); got != "" {
+		t.Errorf("badger store with no data dir: path = %q, want empty", got)
+	}
+
+	dir := t.TempDir()
+	want := filepath.Join(dir, forseerSnapshotFile)
+	if got := forseerSnapshotPath(&runOptions{storeBackend: "badger", dataDir: dir}); got != want {
+		t.Errorf("badger store: path = %q, want %q", got, want)
+	}
+}
+
+func TestRestoreForseerSnapshot_EmptyPathIsANoop(t *testing.T) {
+	eng := forseer.NewEngine()
+	var buf bytes.Buffer
+	restoreForseerSnapshot(eng, "", slog.New(slog.NewTextHandler(&buf, nil)))
+
+	if buf.Len() != 0 {
+		t.Errorf("logged %q for an empty path, want nothing", buf.String())
+	}
+	if got := severityCard(t, eng).Trained; got != 0 {
+		t.Errorf("engine trained on nothing; got Trained = %d", got)
+	}
+}
+
+func TestRestoreForseerSnapshot_MissingFileIsSilentlyCold(t *testing.T) {
+	eng := forseer.NewEngine()
+	var buf bytes.Buffer
+	path := filepath.Join(t.TempDir(), "forseer.json")
+	restoreForseerSnapshot(eng, path, slog.New(slog.NewTextHandler(&buf, nil)))
+
+	// A missing file is what every fresh data dir looks like, every run,
+	// not just the first one — it must not be logged as if something went
+	// wrong.
+	if buf.Len() != 0 {
+		t.Errorf("logged %q for a missing file, want nothing", buf.String())
+	}
+	if got := severityCard(t, eng).Trained; got != 0 {
+		t.Errorf("engine is not cold after a missing-file restore; Trained = %d", got)
+	}
+}
+
+func TestRestoreForseerSnapshot_DiscardsCorruptFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "forseer.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatalf("writing corrupt snapshot: %v", err)
+	}
+
+	eng := forseer.NewEngine()
+	var buf bytes.Buffer
+	restoreForseerSnapshot(eng, path, slog.New(slog.NewTextHandler(&buf, nil)))
+
+	if !strings.Contains(buf.String(), "discarded") {
+		t.Errorf("log output %q does not report the discard", buf.String())
+	}
+	if got := severityCard(t, eng).Trained; got != 0 {
+		t.Errorf("a discarded snapshot left the engine with Trained = %d, want 0", got)
+	}
+}
+
+func TestWriteForseerSnapshot_EmptyPathIsANoop(t *testing.T) {
+	eng := forseer.NewEngine()
+	var buf bytes.Buffer
+	writeForseerSnapshot(eng, "", slog.New(slog.NewTextHandler(&buf, nil)))
+	if buf.Len() != 0 {
+		t.Errorf("logged %q for an empty path, want nothing", buf.String())
+	}
+}
+
+func TestWriteForseerSnapshot_FailureLogsAndDoesNotPanic(t *testing.T) {
+	eng := forseer.NewEngine()
+	var buf bytes.Buffer
+	// A directory where the snapshot's file name is expected: os.WriteFile
+	// must fail (it's a directory, not a file), and writeForseerSnapshot
+	// must turn that into a log line rather than a panic or a returned
+	// error — there is nothing to return it to.
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, forseerSnapshotFile), 0o755); err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
+	path := filepath.Join(dir, forseerSnapshotFile)
+
+	writeForseerSnapshot(eng, path, slog.New(slog.NewTextHandler(&buf, nil)))
+
+	if !strings.Contains(buf.String(), "writing forseer snapshot") {
+		t.Errorf("log output %q does not report the write failure", buf.String())
+	}
+}
+
+// TestForseerSnapshot_RoundTripsThroughAFile is the run.go-level round trip
+// the roadmap item asks for: writeForseerSnapshot followed by
+// restoreForseerSnapshot on a fresh engine reproduces what the first engine
+// had learned, and the restore is logged at INFO by model name and version.
+func TestForseerSnapshot_RoundTripsThroughAFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), forseerSnapshotFile)
+
+	eng := forseer.NewEngine()
+	trainSeverityForTest(eng)
+	wantTrained := severityCard(t, eng).Trained
+	if wantTrained == 0 {
+		t.Fatal("test setup: engine never trained")
+	}
+
+	writeForseerSnapshot(eng, path, discardLogger())
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("snapshot file was not written: %v", err)
+	}
+
+	restored := forseer.NewEngine()
+	var buf bytes.Buffer
+	restoreForseerSnapshot(restored, path, slog.New(slog.NewTextHandler(&buf, nil)))
+
+	if got := severityCard(t, restored).Trained; got != wantTrained {
+		t.Errorf("restored Trained = %d, want %d", got, wantTrained)
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "forseer models restored") {
+		t.Errorf("log output %q does not report the restore", logged)
+	}
+	if !strings.Contains(logged, "severity(v1)") {
+		t.Errorf("log output %q does not name the severity model and its version", logged)
 	}
 }
 

@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 	"time"
@@ -241,5 +242,86 @@ func TestSpanWatch_Card(t *testing.T) {
 	}
 	if card.Trained != minSamples {
 		t.Fatalf("Trained = %d, want %d", card.Trained, minSamples)
+	}
+}
+
+// TestSpanWatch_SnapshotRestoreRoundTrip is roadmap item 25's proof for this
+// model: a series' P² markers survive a restart exactly, but the currently
+// open insight and the recent-trace buffer do not.
+func TestSpanWatch_SnapshotRestoreRoundTrip(t *testing.T) {
+	w := newSpanWatch()
+	warmSpanBaseline(t, w, "api", "GET /checkout")
+
+	w.mu.Lock()
+	s := w.series["api|GET /checkout"]
+	wantN, wantCusum, wantRunLen := s.n, s.cusum, s.runLen
+	wantP50, ok50 := s.p50.value()
+	wantP99, ok99 := s.p99.value()
+	w.mu.Unlock()
+	if !ok50 || !ok99 {
+		t.Fatal("test setup: baseline series has no p50/p99 value yet")
+	}
+
+	data, err := w.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	restored := newSpanWatch()
+	if err := restored.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	restored.mu.Lock()
+	rs, ok := restored.series["api|GET /checkout"]
+	restored.mu.Unlock()
+	if !ok {
+		t.Fatal("restored watch has no api|GET /checkout series")
+	}
+	if rs.n != wantN || rs.cusum != wantCusum || rs.runLen != wantRunLen {
+		t.Fatalf("restored series = {n:%d cusum:%g runLen:%d}, want {n:%d cusum:%g runLen:%d}",
+			rs.n, rs.cusum, rs.runLen, wantN, wantCusum, wantRunLen)
+	}
+	gotP50, gotOK50 := rs.p50.value()
+	gotP99, gotOK99 := rs.p99.value()
+	if !gotOK50 || !gotOK99 || gotP50 != wantP50 || gotP99 != wantP99 {
+		t.Fatalf("restored p50/p99 = (%v ok=%v)/(%v ok=%v), want %v/%v", gotP50, gotOK50, gotP99, gotOK99, wantP50, wantP99)
+	}
+
+	// The currently-open insight and the recent-trace buffer are both tied
+	// to a live, continuous stream and reset — see spanWatch.Restore.
+	if len(restored.open) != 0 || len(restored.traces) != 0 || len(restored.traceSeen) != 0 {
+		t.Fatalf("restored watch carries live state: open=%d traces=%d traceSeen=%d",
+			len(restored.open), len(restored.traces), len(restored.traceSeen))
+	}
+	if !restored.Card().Ready {
+		t.Fatal("restored series lost its warm baseline")
+	}
+}
+
+func TestSpanWatch_RestoreDiscardsAVersionMismatch(t *testing.T) {
+	w := newSpanWatch()
+	warmSpanBaseline(t, w, "api", "GET /checkout")
+	data, err := w.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	data = bytes.Replace(data, []byte(`"version":1`), []byte(`"version":2`), 1)
+
+	fresh := newSpanWatch()
+	if err := fresh.Restore(data); err == nil {
+		t.Fatal("Restore accepted a payload with the wrong schema version")
+	}
+	if len(fresh.series) != 0 {
+		t.Fatalf("a discarded restore left %d series, want 0", len(fresh.series))
+	}
+}
+
+func TestSpanWatch_RestoreDiscardsCorruptJSON(t *testing.T) {
+	w := newSpanWatch()
+	if err := w.Restore([]byte("{not json")); err == nil {
+		t.Fatal("Restore accepted corrupt JSON")
+	}
+	if len(w.series) != 0 {
+		t.Fatalf("a discarded restore left %d series, want 0", len(w.series))
 	}
 }

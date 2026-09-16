@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"bytes"
 	"testing"
 	"time"
 )
@@ -182,5 +183,87 @@ func TestPagingModel_CooccurrenceIsAFeatureOnlyBeforeTheBurst(t *testing.T) {
 	}
 	if far := pagingFeatureVector(2, 1000, false); far[1] != 1 || far[2] != 1 {
 		t.Errorf("features not clamped to [0,1]: %v", far)
+	}
+}
+
+// TestPagingModel_SnapshotRestoreRoundTrip is roadmap item 25's proof for
+// this model: the shared and per-cluster weights come back exactly, but the
+// grading window and the in-flight pending/marks bookkeeping do not.
+func TestPagingModel_SnapshotRestoreRoundTrip(t *testing.T) {
+	m, clock := newTestPagingModel()
+	for i := 0; i < 40; i++ {
+		runEpisode(m, clock, "api|timeout talking to <*>", 0.6, true, true)
+		runEpisode(m, clock, "web|debug request <*> served", 0, true, false)
+	}
+	wantTrained := m.trained
+	wantShared := m.shared
+	wantClusterW := make(map[string]pagingWeights, len(m.clusters))
+	for id, c := range m.clusters {
+		wantClusterW[id] = c.w
+	}
+
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	restored := newPagingModel()
+	if err := restored.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if restored.trained != wantTrained {
+		t.Fatalf("restored trained = %d, want %d", restored.trained, wantTrained)
+	}
+	if restored.shared != wantShared {
+		t.Fatalf("restored shared weights = %v, want %v", restored.shared, wantShared)
+	}
+	if len(restored.clusters) != len(wantClusterW) {
+		t.Fatalf("restored %d clusters, want %d", len(restored.clusters), len(wantClusterW))
+	}
+	for id, w := range wantClusterW {
+		c, ok := restored.clusters[id]
+		if !ok || c.w != w {
+			t.Errorf("cluster %q weights = %+v (ok=%v), want %v", id, c, ok, w)
+		}
+	}
+
+	// The prequential grading window gates readiness, and the in-flight
+	// pending/marks bookkeeping is tied to real wall-clock time against a
+	// live stream — both reset, so a restarted agent re-earns readiness on
+	// live bursts rather than opening already trusted.
+	if restored.graded != 0 || restored.hits != 0 || len(restored.pending) != 0 || len(restored.marks) != 0 {
+		t.Fatalf("restored model carries live state: graded=%d hits=%d pending=%d marks=%d",
+			restored.graded, restored.hits, len(restored.pending), len(restored.marks))
+	}
+	if restored.Card().Ready {
+		t.Fatal("restored model reports ready before earning it on live bursts")
+	}
+}
+
+func TestPagingModel_RestoreDiscardsAVersionMismatch(t *testing.T) {
+	m, clock := newTestPagingModel()
+	runEpisode(m, clock, "api|x", 0.5, true, true)
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	data = bytes.Replace(data, []byte(`"version":1`), []byte(`"version":2`), 1)
+
+	fresh := newPagingModel()
+	if err := fresh.Restore(data); err == nil {
+		t.Fatal("Restore accepted a payload with the wrong schema version")
+	}
+	if fresh.trained != 0 || len(fresh.clusters) != 0 {
+		t.Fatalf("a discarded restore left trained=%d clusters=%d, want 0/0", fresh.trained, len(fresh.clusters))
+	}
+}
+
+func TestPagingModel_RestoreDiscardsCorruptJSON(t *testing.T) {
+	m := newPagingModel()
+	if err := m.Restore([]byte("{not json")); err == nil {
+		t.Fatal("Restore accepted corrupt JSON")
+	}
+	if m.trained != 0 || len(m.clusters) != 0 {
+		t.Fatalf("a discarded restore left trained=%d clusters=%d, want 0/0", m.trained, len(m.clusters))
 	}
 }

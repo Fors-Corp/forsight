@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 )
@@ -127,4 +128,44 @@ func (m *culpritModel) Card() Card {
 		Graded:           0,
 		Detail:           detail,
 	}
+}
+
+// culpritSnapshotVersion is this model's own schema version — see
+// severitySnapshotVersion's comment for what that guards against.
+const culpritSnapshotVersion = 1
+
+// culpritSnapshot is Snapshot's JSON payload: the two counters Card reports
+// in Detail. This model has no weights and nothing else to persist — rank
+// is a pure function of the procSnap passed to it each call.
+type culpritSnapshot struct {
+	Version int `json:"version"`
+	Ranked  int `json:"ranked"`
+	Floored int `json:"floored"`
+}
+
+// Snapshot implements Model.
+func (m *culpritModel) Snapshot() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return json.Marshal(culpritSnapshot{Version: culpritSnapshotVersion, Ranked: m.ranked, Floored: m.floored})
+}
+
+// Restore implements Model. This model has no weights and no prequential
+// window to reset — rank is a pure function of the snapshot handed to it
+// each call, and ranked/floored exist only so Card can report honestly how
+// often each rule actually fired. Both counters come back unchanged, so
+// that reporting survives a restart the same way every other model's
+// trained count does.
+func (m *culpritModel) Restore(data []byte) error {
+	var snap culpritSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return fmt.Errorf("culprit snapshot: %w", err)
+	}
+	if snap.Version != culpritSnapshotVersion {
+		return fmt.Errorf("culprit snapshot version %d, want %d", snap.Version, culpritSnapshotVersion)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ranked, m.floored = snap.Ranked, snap.Floored
+	return nil
 }

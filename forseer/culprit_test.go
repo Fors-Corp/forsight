@@ -1,6 +1,9 @@
 package forseer
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestCulpritModel_ColdProcessFallsBackToTheFloor(t *testing.T) {
 	m := newCulpritModel()
@@ -81,5 +84,59 @@ func TestCulpritModel_Card(t *testing.T) {
 	m.rank(procSnap{name: "mover", cpu: 18, cpuZ: 3.2, cpuReady: true})
 	if card = m.Card(); !card.Ready {
 		t.Error("a model that scored a process via its own baseline should report itself ready")
+	}
+}
+
+// TestCulpritModel_SnapshotRestoreRoundTrip is roadmap item 25's proof for
+// this model: it has no weights, so the round trip is just its two
+// reporting counters.
+func TestCulpritModel_SnapshotRestoreRoundTrip(t *testing.T) {
+	m := newCulpritModel()
+	m.rank(procSnap{name: "mover", cpu: 18, cpuZ: 3.2, cpuReady: true})
+	m.rank(procSnap{name: "cold", cpu: 80})
+
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	restored := newCulpritModel()
+	if err := restored.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if restored.ranked != m.ranked || restored.floored != m.floored {
+		t.Fatalf("restored ranked=%d floored=%d, want ranked=%d floored=%d",
+			restored.ranked, restored.floored, m.ranked, m.floored)
+	}
+	if !restored.Card().Ready {
+		t.Fatal("restored model lost its ranked count")
+	}
+}
+
+func TestCulpritModel_RestoreDiscardsAVersionMismatch(t *testing.T) {
+	m := newCulpritModel()
+	m.rank(procSnap{name: "mover", cpu: 18, cpuZ: 3.2, cpuReady: true})
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	data = bytes.Replace(data, []byte(`"version":1`), []byte(`"version":2`), 1)
+
+	fresh := newCulpritModel()
+	if err := fresh.Restore(data); err == nil {
+		t.Fatal("Restore accepted a payload with the wrong schema version")
+	}
+	if fresh.ranked != 0 || fresh.floored != 0 {
+		t.Fatalf("a discarded restore left ranked=%d floored=%d, want 0/0", fresh.ranked, fresh.floored)
+	}
+}
+
+func TestCulpritModel_RestoreDiscardsCorruptJSON(t *testing.T) {
+	m := newCulpritModel()
+	if err := m.Restore([]byte("{not json")); err == nil {
+		t.Fatal("Restore accepted corrupt JSON")
+	}
+	if m.ranked != 0 || m.floored != 0 {
+		t.Fatalf("a discarded restore left ranked=%d floored=%d, want 0/0", m.ranked, m.floored)
 	}
 }
