@@ -129,12 +129,17 @@ jobs:
           # dist/sha256sums.txt is what install.sh verifies each archive
           # against before extracting (since #101); a release without it
           # makes `curl | sh` refuse to install rather than install unverified.
+          # A tag with a suffix (forsight-v1.1.0-rc1) is a pre-release, so
+          # GitHub does not mark it Latest — which is what install.sh
+          # installs when FORSIGHT_VERSION is unset.
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/*.tar.gz dist/sha256sums.txt --clobber
           else
             gh release create "$TAG" dist/*.tar.gz dist/sha256sums.txt \
               --title "forsight $VERSION" \
-              --generate-notes
+              --generate-notes $prerelease
           fi
 
       # The image the DaemonSet runs (forsight/deploy/k8s/daemonset.yaml
