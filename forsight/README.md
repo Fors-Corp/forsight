@@ -403,8 +403,8 @@ reported, not a reason to pull the pod from service.
 ```bash
 brew install go golangci-lint   # or your platform's equivalent
 make               # or `make help` — lists every target below with its description
-make build-go     # agent only — no Node needed, webdist/ falls back to a placeholder page
-make build-web    # dashboard only — rebuilds the design system, then web/, then embeds it
+make build-go     # agent only — no Node needed, embeds the webdist/ snapshot already in git
+make build-web    # dashboard only — builds web/ against the published design-system pin, then embeds it
 make build        # both
 make test         # go test ./...
 make test-install # bats install_test.bats — install.sh's checksum/systemd-unit behavior

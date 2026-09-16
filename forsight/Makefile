@@ -57,7 +57,8 @@ build-go:
 	go build -ldflags "$(LDFLAGS)" -o bin/forsight .
 
 # Runs the agent directly against whatever's currently embedded in
-# internal/api/webdist/ (the fallback page unless build-web has been run).
+# internal/api/webdist/ — the checked-in dashboard snapshot, or your own
+# fresher build if you have run build-web since.
 ## Run the agent against whatever's currently embedded in webdist/.
 dev:
 	go run . run
