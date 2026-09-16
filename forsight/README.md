@@ -49,7 +49,8 @@ observability platform.
   [`@marcfs31/forsight`](..), the design system this
   repo also publishes) served from the same process. No separate database,
   no separate frontend server. In-memory by default; add `--store badger` for
-  a store that survives a restart (see below).
+  a store that survives a restart (see below). A light/dark theme toggle
+  lives in the sidebar footer and is remembered per browser.
 
 ## Install
 
