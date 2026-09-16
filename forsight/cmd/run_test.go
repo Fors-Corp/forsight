@@ -458,6 +458,65 @@ func TestParseScrapeTargets(t *testing.T) {
 	})
 }
 
+func TestParseProbeTargets(t *testing.T) {
+	t.Run("bare URL names the target after the host", func(t *testing.T) {
+		got, err := parseProbeTargets([]string{"https://example.com/healthz"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("want 1 target, got %d", len(got))
+		}
+		if got[0].URL != "https://example.com/healthz" {
+			t.Errorf("URL = %q", got[0].URL)
+		}
+		if got[0].Name != "example.com" {
+			t.Errorf(`Name = %q, want "example.com"`, got[0].Name)
+		}
+	})
+
+	t.Run("name= prefix wins over the host default", func(t *testing.T) {
+		got, err := parseProbeTargets([]string{"checkout=https://example.com/healthz"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got[0].Name != "checkout" {
+			t.Errorf(`Name = %q, want "checkout"`, got[0].Name)
+		}
+		if got[0].URL != "https://example.com/healthz" {
+			t.Errorf("URL = %q — the prefix must not stay in the URL", got[0].URL)
+		}
+	})
+
+	t.Run("a URL containing = is not mistaken for a name prefix", func(t *testing.T) {
+		got, err := parseProbeTargets([]string{"http://host/healthz?check=1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got[0].URL != "http://host/healthz?check=1" {
+			t.Errorf("URL = %q", got[0].URL)
+		}
+		if got[0].Name != "host" {
+			t.Errorf(`Name = %q`, got[0].Name)
+		}
+	})
+
+	t.Run("rejects a value that is not an absolute URL", func(t *testing.T) {
+		for _, bad := range []string{"example.com/healthz", "name=", "/healthz"} {
+			if _, err := parseProbeTargets([]string{bad}); err == nil {
+				t.Errorf("parseProbeTargets(%q) = nil error, want one", bad)
+			}
+		}
+	})
+
+	t.Run("no targets is not an error", func(t *testing.T) {
+		got, err := parseProbeTargets(nil)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("got %v, %v", got, err)
+		}
+	})
+}
+
 // errSink always fails WriteLogs, forcing filelog.Tail to return an error
 // so retryTail's restart path runs.
 type errSink struct{ calls atomic.Int32 }
