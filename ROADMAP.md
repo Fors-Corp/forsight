@@ -424,7 +424,7 @@ per-endpoint spread view. Lands on **TraceWaterfall**.
 
 ### 13. Multivariate outlier over the host vector, stdlib, and a decision on the README's last Next row
 
-- **Area** forseer · **Effort** M · **Score** 2.72 · replaces the Isolation Forest row
+- **Area** forseer · **Effort** M · **Score** 2.72 · replaces the Isolation Forest row · **Shipped** 2026-09-16, `hostOutlierModel` in `forseer/outlier.go`
 
 **Why.** `forseer/README.md:96-100`, \"Next (stay in this folder)\", has
 exactly one row: Multivariate outlier, Isolation Forest in `python/`, scores

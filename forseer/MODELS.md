@@ -339,6 +339,63 @@ borrowing a number from a different job.
 
 **Component.** **Table** (process rows), unchanged.
 
+### Host outlier
+
+**Job.** Say whether the host's cpu, memory, disk and network look unusual
+*together*, even when no single one of them does on its own.
+
+`Next` used to list this as an Isolation Forest trained in `python/`, scored
+POSTed back over `/api/v1/*`. That was blocked twice over: mlaas's sklearn
+plugin has no IsolationForest anywhere (`plugins/sklearn/plugin.py`), and the
+agent has no ingest route for a score computed elsewhere — every
+`/api/v1/forseer` route is `GET`. Neither gap is worth opening for this: the
+judges' original doubt was that three host percentages carry little joint
+signal beyond what per-series z already tells an operator, and a stdlib
+Mahalanobis check answers that question directly, on the same stream, with
+the same contract every other model here keeps — no producer/consumer
+problem to solve in the first place.
+
+**Reads are free, almost.** `Detector.Observe` already runs a per-series
+check on `host.cpu.percent`, `host.memory.percent` and `host.disk.percent`;
+the two net inputs are the only new work, and it is arithmetic rather than a
+new collector: `host.net.bytes_sent` and `host.net.bytes_recv` are
+ever-growing counters (`host.go`), so the model reads each batch's delta
+against the previous one rather than the raw counter, which has no
+stationary distribution for a covariance to describe.
+
+**Method.** An online mean vector and 5x5 covariance matrix — Welford's
+multivariate form, the same running update the per-series check uses,
+generalised from a scalar to a matrix — scored by squared Mahalanobis
+distance. One mean and one covariance for the whole model: `forsight run` is
+one binary per host (see `host.go`'s package comment — a DaemonSet mounts one
+node's `/proc`/`/sys` into one pod), so every point a single `Engine` ever
+observes already comes from that one host. Gated at `hostOutlierMinSamples`
+(50), stricter than the per-series `minSamples` (12): a 5x5 covariance has
+fifteen free entries to estimate, not one variance, and needs more history
+before it is safe to invert. Below that, or whenever the covariance is
+singular (a run of identical values in one input, most likely early on), the
+fallback is exactly what already runs regardless: the per-series z-score
+check on each of the five inputs.
+
+Warning and critical are the chi-squared quantiles at 5 degrees of freedom
+matching the same two-tailed-normal tail probability `warningSigma` (3σ) and
+`criticalSigma` (5σ) use, so the host vector as a whole is called out only as
+rarely as a single series is. Related names the input contributing most to
+the distance — the largest term in the same decomposition that computes it —
+the way `culprit` names the process that moved most.
+
+**Measured, and the exit criterion.** Nobody labels "this combination of
+host metrics was really unusual", so the Card reports `Unmeasured`, the same
+as `culprit` and `slow_span`. What it reports instead, in Detail, is the
+number the judges' doubt actually turns on: how many times this model opened
+an insight while no per-series anomaly was open on any of the five inputs.
+If that count stays at zero over a watched period, this model is finding
+nothing the cheaper per-series checks were not already finding, and should
+be retired — the roadmap item's own exit criterion, kept on the card rather
+than in a document nobody rereads.
+
+**Component.** **AlertList**, the same severity vocabulary as `anomaly`.
+
 ### Models page
 
 The cards were already served over the API; what shipped is a page for them.
