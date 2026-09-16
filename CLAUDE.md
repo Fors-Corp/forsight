@@ -274,20 +274,8 @@ literal instruction: don't leave a fully-verified PR sitting unmerged over
 that ambiguity. If a subagent parks a verified PR for that reason, the
 orchestrating session should just arm auto-merge itself.
 
-**A known rough edge, not yet fixed**: a sandboxed agent working in an
-isolated worktree has no `packages:read` credential for GitHub Packages, so
-`make build-web` fails there whenever a PR touches `forsight/web/` (it needs
-to `npm ci` against the published `@marcfs31/forsight`). The workaround that
-has worked twice so far: build the design system from its current published
-git tag in a scratch worktree, point `forsight/web/package.json` at that
-build via a temporary `file:` link, run `make build-web`, then restore
-`package.json`/`package-lock.json` to the real registry pin via `git
-checkout` before committing — only `internal/api/webdist/` should actually
-change. Watch for a "two copies of React" hook error if you then also run
-`forsight/web`'s own test suite against that same temporary link — Node's
-module resolution can prefer the linked package's own nested
-`node_modules/react` over the hoisted one; symlinking the linked package's
-`react`/`react-dom` to `forsight/web`'s own copies (not deleting them, ESM
-resolution needs _something_ there) fixes it. This whole workaround belongs
-in tooling (a documented Makefile/CONTRIBUTING.md fallback), not repeated
-ad hoc each time — flagged here until someone does that.
+**On `make build-web` from a sandboxed agent**: it sources the GitHub
+Packages credential itself (`NODE_AUTH_TOKEN`, or `gh auth token` locally),
+writes it to a throwaway npm user config for the duration of `npm ci`, and
+fails with one clear line when neither can supply one (`forsight/Makefile`,
+since #106). No `file:` link, no React symlinks, nothing to restore.
