@@ -194,4 +194,122 @@ func runStoreConformanceTests(t *testing.T, newStore func(t *testing.T) Store) {
 			t.Fatalf("QueryLogs with Since = %+v, want only the recent entry", got)
 		}
 	})
+
+	// Limit and Before, on every record type. Ten points a minute apart,
+	// oldest written first, as the collectors write them.
+	t.Run("metrics query limit returns the newest N, oldest-first", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		base := time.Now().Add(-30 * time.Minute)
+		points := make([]model.Metric, 0, 10)
+		for i := 0; i < 10; i++ {
+			points = append(points, model.Metric{Name: "m", Value: float64(i), Timestamp: base.Add(time.Duration(i) * time.Minute)})
+		}
+		_ = s.WriteMetrics(ctx, points)
+
+		got, err := s.QueryMetrics(ctx, MetricQuery{Name: "m", Limit: 3})
+		if err != nil {
+			t.Fatalf("QueryMetrics: %v", err)
+		}
+		if len(got) != 3 || got[0].Value != 7 || got[1].Value != 8 || got[2].Value != 9 {
+			t.Fatalf("QueryMetrics with Limit 3 = %+v, want values 7, 8, 9 in that order", got)
+		}
+		// The unscoped scan takes a different path in a keyed store.
+		got, err = s.QueryMetrics(ctx, MetricQuery{Limit: 2})
+		if err != nil {
+			t.Fatalf("QueryMetrics: %v", err)
+		}
+		if len(got) != 2 || got[0].Value != 8 || got[1].Value != 9 {
+			t.Fatalf("unscoped QueryMetrics with Limit 2 = %+v, want values 8, 9", got)
+		}
+	})
+
+	t.Run("metrics query before excludes points at or after it", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		base := time.Now().Add(-30 * time.Minute)
+		_ = s.WriteMetrics(ctx, []model.Metric{
+			{Name: "m", Value: 1, Timestamp: base},
+			{Name: "m", Value: 2, Timestamp: base.Add(time.Minute)},
+			{Name: "m", Value: 3, Timestamp: base.Add(2 * time.Minute)},
+		})
+
+		got, err := s.QueryMetrics(ctx, MetricQuery{Name: "m", Before: base.Add(time.Minute)})
+		if err != nil {
+			t.Fatalf("QueryMetrics: %v", err)
+		}
+		if len(got) != 1 || got[0].Value != 1 {
+			t.Fatalf("QueryMetrics with Before = %+v, want only the point before it", got)
+		}
+	})
+
+	t.Run("metrics query since, before and limit compose as a window with a cap", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		base := time.Now().Add(-30 * time.Minute)
+		points := make([]model.Metric, 0, 10)
+		for i := 0; i < 10; i++ {
+			points = append(points, model.Metric{Name: "m", Value: float64(i), Timestamp: base.Add(time.Duration(i) * time.Minute)})
+		}
+		_ = s.WriteMetrics(ctx, points)
+
+		// Window [2, 8): values 2..7; the newest two of those are 6 and 7.
+		got, err := s.QueryMetrics(ctx, MetricQuery{
+			Name:   "m",
+			Since:  base.Add(2 * time.Minute),
+			Before: base.Add(8 * time.Minute),
+			Limit:  2,
+		})
+		if err != nil {
+			t.Fatalf("QueryMetrics: %v", err)
+		}
+		if len(got) != 2 || got[0].Value != 6 || got[1].Value != 7 {
+			t.Fatalf("QueryMetrics with Since+Before+Limit = %+v, want values 6, 7", got)
+		}
+	})
+
+	t.Run("spans query limit returns the newest N, oldest-first", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		base := time.Now().Add(-30 * time.Minute)
+		spans := make([]model.Span, 0, 5)
+		for i := 0; i < 5; i++ {
+			spans = append(spans, model.Span{TraceID: "t", SpanID: string(rune('a' + i)), Service: "svc", Name: "op", Start: base.Add(time.Duration(i) * time.Minute), Duration: time.Second})
+		}
+		_ = s.WriteSpans(ctx, spans)
+
+		got, err := s.QuerySpans(ctx, SpanQuery{Service: "svc", Limit: 2, Before: base.Add(4 * time.Minute)})
+		if err != nil {
+			t.Fatalf("QuerySpans: %v", err)
+		}
+		if len(got) != 2 || got[0].SpanID != "c" || got[1].SpanID != "d" {
+			t.Fatalf("QuerySpans with Limit 2 and Before = %+v, want spans c, d", got)
+		}
+	})
+
+	t.Run("logs query limit returns the newest N, oldest-first", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		base := time.Now().Add(-30 * time.Minute)
+		entries := make([]model.LogEntry, 0, 5)
+		for i := 0; i < 5; i++ {
+			entries = append(entries, model.LogEntry{Timestamp: base.Add(time.Duration(i) * time.Minute), Severity: model.LogSeverityInfo, Source: "a", Message: string(rune('a' + i))})
+		}
+		_ = s.WriteLogs(ctx, entries)
+
+		got, err := s.QueryLogs(ctx, LogQuery{Limit: 2})
+		if err != nil {
+			t.Fatalf("QueryLogs: %v", err)
+		}
+		if len(got) != 2 || got[0].Message != "d" || got[1].Message != "e" {
+			t.Fatalf("QueryLogs with Limit 2 = %+v, want entries d, e", got)
+		}
+		got, err = s.QueryLogs(ctx, LogQuery{Source: "a", Before: base.Add(time.Minute), Limit: 5})
+		if err != nil {
+			t.Fatalf("QueryLogs: %v", err)
+		}
+		if len(got) != 1 || got[0].Message != "a" {
+			t.Fatalf("QueryLogs with Before = %+v, want only entry a", got)
+		}
+	})
 }

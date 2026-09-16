@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -205,18 +206,76 @@ func keyTimestamp(key []byte) time.Time {
 	return time.Unix(0, int64(ns))
 }
 
-// scanBounds computes the iterator prefix and seek key for a query scoped
-// to the given name/service/source and Since. filterValue == "" means "any
-// name" — the full-keyspace-scan case described in the doc comment.
-func scanBounds(typ byte, filterValue string, since time.Time) (prefix, seek []byte) {
+// scanBounds computes the iterator prefix and the seek key a reverse
+// (newest-first) scan starts from: the largest key in the window. For a
+// scan scoped to one name/service/source that is the key at Before when it
+// is set, else the prefix followed by the highest possible timestamp and
+// sequence. filterValue == "" means "any name" — the full-keyspace-scan
+// case described in the doc comment — where the name sits between the type
+// byte and the timestamp, so time has no key order across names and the
+// seek can only be "past every key of this type": no real key has a name
+// length of 0xFFFF, so <type> 0xFF 0xFF is beyond all of them.
+func scanBounds(typ byte, filterValue string, before time.Time) (prefix, seek []byte) {
 	if filterValue == "" {
-		return []byte{typ}, []byte{typ}
+		prefix = []byte{typ}
+		return prefix, []byte{typ, 0xFF, 0xFF}
 	}
 	prefix = encodeNamePrefix(typ, filterValue)
-	if since.IsZero() {
-		return prefix, prefix
+	if before.IsZero() {
+		seek = append(append([]byte{}, prefix...), maxKeySuffix...)
+		return prefix, seek
 	}
-	return prefix, encodeKey(typ, filterValue, since, 0)
+	return prefix, encodeKey(typ, filterValue, before, 0)
+}
+
+// maxKeySuffix is the highest <timestamp><sequence> a key can carry.
+var maxKeySuffix = bytes.Repeat([]byte{0xFF}, 16)
+
+// scanNewestFirst walks one record type's keyspace backwards from the top
+// of the [since, before) window and stops at limit, so a query for the
+// newest N reads N keys and not the whole history. The result is reversed
+// on the way out, oldest-first, which is what every consumer expects. Within
+// one name the key's timestamp orders the walk, so a key older than since
+// ends the scan; across names (the unscoped case) it only skips.
+func scanNewestFirst[T any](txn *badger.Txn, typ byte, filterValue string, since, before time.Time, limit int,
+	decode func([]byte) (T, error), match func(T) bool) ([]T, error) {
+	out := make([]T, 0)
+	prefix, seek := scanBounds(typ, filterValue, before)
+	scoped := filterValue != ""
+	iopts := badger.DefaultIteratorOptions
+	iopts.Prefix = prefix
+	iopts.Reverse = true
+	it := txn.NewIterator(iopts)
+	defer it.Close()
+	for it.Seek(seek); it.ValidForPrefix(prefix); it.Next() {
+		item := it.Item()
+		ts := keyTimestamp(item.Key())
+		if !before.IsZero() && !ts.Before(before) {
+			continue
+		}
+		if !since.IsZero() && ts.Before(since) {
+			if scoped {
+				break
+			}
+			continue
+		}
+		var rec T
+		var err error
+		if verr := item.Value(func(val []byte) error { rec, err = decode(val); return err }); verr != nil {
+			return nil, verr
+		}
+		if !match(rec) {
+			continue
+		}
+		out = append(out, rec)
+		if limit > 0 && len(out) == limit {
+			break
+		}
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
 }
 
 func (s *BadgerStore) WriteMetrics(_ context.Context, metrics []model.Metric) error {
@@ -242,29 +301,23 @@ func (s *BadgerStore) WriteMetrics(_ context.Context, metrics []model.Metric) er
 }
 
 func (s *BadgerStore) QueryMetrics(_ context.Context, q MetricQuery) ([]model.Metric, error) {
-	out := make([]model.Metric, 0)
-	prefix, seek := scanBounds(metricKeyType, q.Name, q.Since)
+	var out []model.Metric
 	err := s.db.View(func(txn *badger.Txn) error {
-		iopts := badger.DefaultIteratorOptions
-		iopts.Prefix = prefix
-		it := txn.NewIterator(iopts)
-		defer it.Close()
-		for it.Seek(seek); it.ValidForPrefix(prefix); it.Next() {
-			item := it.Item()
-			if !q.Since.IsZero() && keyTimestamp(item.Key()).Before(q.Since) {
-				continue
-			}
-			var m model.Metric
-			if err := item.Value(func(val []byte) error { return json.Unmarshal(val, &m) }); err != nil {
-				return fmt.Errorf("decode metric: %w", err)
-			}
-			if !matchesMetric(m, q) {
-				continue
-			}
-			out = append(out, m)
-		}
-		return nil
+		var err error
+		out, err = scanNewestFirst(txn, metricKeyType, q.Name, q.Since, q.Before, q.Limit,
+			func(val []byte) (model.Metric, error) {
+				var rec model.Metric
+				if err := json.Unmarshal(val, &rec); err != nil {
+					return rec, fmt.Errorf("decode metric: %w", err)
+				}
+				return rec, nil
+			},
+			func(rec model.Metric) bool { return matchesMetric(rec, q) })
+		return err
 	})
+	if out == nil {
+		out = make([]model.Metric, 0)
+	}
 	return out, err
 }
 
@@ -291,29 +344,23 @@ func (s *BadgerStore) WriteSpans(_ context.Context, spans []model.Span) error {
 }
 
 func (s *BadgerStore) QuerySpans(_ context.Context, q SpanQuery) ([]model.Span, error) {
-	out := make([]model.Span, 0)
-	prefix, seek := scanBounds(spanKeyType, q.Service, q.Since)
+	var out []model.Span
 	err := s.db.View(func(txn *badger.Txn) error {
-		iopts := badger.DefaultIteratorOptions
-		iopts.Prefix = prefix
-		it := txn.NewIterator(iopts)
-		defer it.Close()
-		for it.Seek(seek); it.ValidForPrefix(prefix); it.Next() {
-			item := it.Item()
-			if !q.Since.IsZero() && keyTimestamp(item.Key()).Before(q.Since) {
-				continue
-			}
-			var sp model.Span
-			if err := item.Value(func(val []byte) error { return json.Unmarshal(val, &sp) }); err != nil {
-				return fmt.Errorf("decode span: %w", err)
-			}
-			if !matchesSpan(sp, q) {
-				continue
-			}
-			out = append(out, sp)
-		}
-		return nil
+		var err error
+		out, err = scanNewestFirst(txn, spanKeyType, q.Service, q.Since, q.Before, q.Limit,
+			func(val []byte) (model.Span, error) {
+				var rec model.Span
+				if err := json.Unmarshal(val, &rec); err != nil {
+					return rec, fmt.Errorf("decode span: %w", err)
+				}
+				return rec, nil
+			},
+			func(rec model.Span) bool { return matchesSpan(rec, q) })
+		return err
 	})
+	if out == nil {
+		out = make([]model.Span, 0)
+	}
 	return out, err
 }
 
@@ -340,28 +387,22 @@ func (s *BadgerStore) WriteLogs(_ context.Context, logs []model.LogEntry) error 
 }
 
 func (s *BadgerStore) QueryLogs(_ context.Context, q LogQuery) ([]model.LogEntry, error) {
-	out := make([]model.LogEntry, 0)
-	prefix, seek := scanBounds(logKeyType, q.Source, q.Since)
+	var out []model.LogEntry
 	err := s.db.View(func(txn *badger.Txn) error {
-		iopts := badger.DefaultIteratorOptions
-		iopts.Prefix = prefix
-		it := txn.NewIterator(iopts)
-		defer it.Close()
-		for it.Seek(seek); it.ValidForPrefix(prefix); it.Next() {
-			item := it.Item()
-			if !q.Since.IsZero() && keyTimestamp(item.Key()).Before(q.Since) {
-				continue
-			}
-			var entry model.LogEntry
-			if err := item.Value(func(val []byte) error { return json.Unmarshal(val, &entry) }); err != nil {
-				return fmt.Errorf("decode log entry: %w", err)
-			}
-			if !matchesLog(entry, q) {
-				continue
-			}
-			out = append(out, entry)
-		}
-		return nil
+		var err error
+		out, err = scanNewestFirst(txn, logKeyType, q.Source, q.Since, q.Before, q.Limit,
+			func(val []byte) (model.LogEntry, error) {
+				var rec model.LogEntry
+				if err := json.Unmarshal(val, &rec); err != nil {
+					return rec, fmt.Errorf("decode log entry: %w", err)
+				}
+				return rec, nil
+			},
+			func(rec model.LogEntry) bool { return matchesLog(rec, q) })
+		return err
 	})
+	if out == nil {
+		out = make([]model.LogEntry, 0)
+	}
 	return out, err
 }

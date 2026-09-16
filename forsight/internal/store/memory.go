@@ -77,7 +77,7 @@ func (s *MemoryStore) QueryMetrics(_ context.Context, q MetricQuery) ([]model.Me
 		}
 		out = append(out, m)
 	}
-	return out, nil
+	return newest(out, q.Limit), nil
 }
 
 func (s *MemoryStore) WriteSpans(_ context.Context, spans []model.Span) error {
@@ -99,7 +99,7 @@ func (s *MemoryStore) QuerySpans(_ context.Context, q SpanQuery) ([]model.Span, 
 		}
 		out = append(out, sp)
 	}
-	return out, nil
+	return newest(out, q.Limit), nil
 }
 
 func (s *MemoryStore) WriteLogs(_ context.Context, logs []model.LogEntry) error {
@@ -121,7 +121,7 @@ func (s *MemoryStore) QueryLogs(_ context.Context, q LogQuery) ([]model.LogEntry
 		}
 		out = append(out, entry)
 	}
-	return out, nil
+	return newest(out, q.Limit), nil
 }
 
 // pruneMetricsLocked drops points older than the retention window, then
@@ -205,11 +205,25 @@ func (s *MemoryStore) pruneLogsLocked() {
 	s.logs = capOldest(kept, s.maxElements)
 }
 
+// newest keeps the last limit records of a slice that is in write order,
+// which for this store is the order records arrived — the collectors and
+// receivers write in time order, so the tail is the newest window. Zero
+// means everything.
+func newest[T any](xs []T, limit int) []T {
+	if limit > 0 && len(xs) > limit {
+		return xs[len(xs)-limit:]
+	}
+	return xs
+}
+
 func matchesMetric(m model.Metric, q MetricQuery) bool {
 	if q.Name != "" && m.Name != q.Name {
 		return false
 	}
 	if !q.Since.IsZero() && m.Timestamp.Before(q.Since) {
+		return false
+	}
+	if !q.Before.IsZero() && !m.Timestamp.Before(q.Before) {
 		return false
 	}
 	for k, v := range q.Labels {
@@ -230,6 +244,9 @@ func matchesSpan(sp model.Span, q SpanQuery) bool {
 	if !q.Since.IsZero() && sp.Start.Before(q.Since) {
 		return false
 	}
+	if !q.Before.IsZero() && !sp.Start.Before(q.Before) {
+		return false
+	}
 	return true
 }
 
@@ -241,6 +258,9 @@ func matchesLog(entry model.LogEntry, q LogQuery) bool {
 		return false
 	}
 	if !q.Since.IsZero() && entry.Timestamp.Before(q.Since) {
+		return false
+	}
+	if !q.Before.IsZero() && !entry.Timestamp.Before(q.Before) {
 		return false
 	}
 	return true

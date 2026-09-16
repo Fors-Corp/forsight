@@ -20,6 +20,13 @@ type MetricQuery struct {
 	Name   string            // exact match; empty matches any name
 	Labels map[string]string // every pair must match (AND); nil matches any
 	Since  time.Time         // zero value means "from the oldest retained point"
+	// Before excludes records at or after this time, so [Since, Before) is
+	// the window. Zero means no upper bound.
+	Before time.Time
+	// Limit caps the result at the newest Limit records in the window; zero
+	// means no cap. The window is handed back oldest-first either way, so a
+	// consumer that never sets Limit sees no change in shape.
+	Limit int
 }
 
 // SpanQuery filters a spans read, analogous to MetricQuery.
@@ -27,11 +34,15 @@ type SpanQuery struct {
 	Service string
 	TraceID string
 	Since   time.Time
+	Before  time.Time // as MetricQuery.Before
+	Limit   int       // as MetricQuery.Limit
 }
 
 // LogQuery filters a logs read, analogous to SpanQuery.
 type LogQuery struct {
 	Since    time.Time
+	Before   time.Time         // as MetricQuery.Before
+	Limit    int               // as MetricQuery.Limit
 	Severity model.LogSeverity // empty matches any severity
 	Source   string            // exact match; empty matches any source
 }

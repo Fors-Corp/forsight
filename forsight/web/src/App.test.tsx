@@ -465,8 +465,10 @@ describe("Overview log templates", () => {
       "/api/v1/forseer/clusters": [cluster("request served", 900), cluster("timeout", 40)],
     });
     render(<App />);
-    await screen.findByText("Log templates · by volume");
-    expect(screen.getByText("900")).toBeInTheDocument();
+    // The title reads "by volume" before any cluster has arrived, so it is
+    // the count that proves the data rendered.
+    await screen.findByText("900");
+    expect(screen.getByText("Log templates · by volume")).toBeInTheDocument();
   });
 
   it("ranks templates by what a burst is worth once every cluster carries a score", async () => {

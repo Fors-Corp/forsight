@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,17 +17,15 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleMetrics serves GET /api/v1/metrics?name=&since=<RFC3339>&label.<key>=<value>
+// handleMetrics serves GET /api/v1/metrics?name=&since=<RFC3339>&before=<RFC3339>&limit=<n>&label.<key>=<value>
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	query := store.MetricQuery{Name: q.Get("name"), Labels: labelsFromQuery(q)}
 
-	since, err := parseSince(q)
-	if err != nil {
+	if err := parseWindow(q, &query.Since, &query.Before, &query.Limit); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	query.Since = since
 
 	metrics, err := s.store.QueryMetrics(r.Context(), query)
 	if err != nil {
@@ -36,17 +35,15 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, metrics)
 }
 
-// handleTraces serves GET /api/v1/traces?service=&traceId=&since=<RFC3339>
+// handleTraces serves GET /api/v1/traces?service=&traceId=&since=<RFC3339>&before=<RFC3339>&limit=<n>
 func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	query := store.SpanQuery{Service: q.Get("service"), TraceID: q.Get("traceId")}
 
-	since, err := parseSince(q)
-	if err != nil {
+	if err := parseWindow(q, &query.Since, &query.Before, &query.Limit); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	query.Since = since
 
 	spans, err := s.store.QuerySpans(r.Context(), query)
 	if err != nil {
@@ -56,7 +53,7 @@ func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, spans)
 }
 
-// handleLogs serves GET /api/v1/logs?since=<RFC3339>&source=&severity=
+// handleLogs serves GET /api/v1/logs?since=<RFC3339>&before=<RFC3339>&limit=<n>&source=&severity=
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	query := store.LogQuery{
@@ -64,12 +61,10 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		Severity: model.LogSeverity(q.Get("severity")),
 	}
 
-	since, err := parseSince(q)
-	if err != nil {
+	if err := parseWindow(q, &query.Since, &query.Before, &query.Limit); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	query.Since = since
 
 	logs, err := s.store.QueryLogs(r.Context(), query)
 	if err != nil {
@@ -79,19 +74,43 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, logs)
 }
 
-func parseSince(q url.Values) (time.Time, error) {
-	raw := q.Get("since")
+// parseWindow reads the three parameters every store query shares:
+// since and before (RFC3339, each optional) bound the window, limit (a
+// positive integer, optional) caps it at the newest N records.
+func parseWindow(q url.Values, since, before *time.Time, limit *int) error {
+	var err error
+	if *since, err = parseTime(q.Get("since"), errInvalidSince); err != nil {
+		return err
+	}
+	if *before, err = parseTime(q.Get("before"), errInvalidBefore); err != nil {
+		return err
+	}
+	if raw := q.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return errInvalidLimit
+		}
+		*limit = n
+	}
+	return nil
+}
+
+func parseTime(raw string, invalid error) (time.Time, error) {
 	if raw == "" {
 		return time.Time{}, nil
 	}
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
-		return time.Time{}, errInvalidSince
+		return time.Time{}, invalid
 	}
 	return t, nil
 }
 
-var errInvalidSince = &queryError{"invalid since: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
+var (
+	errInvalidSince  = &queryError{"invalid since: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
+	errInvalidBefore = &queryError{"invalid before: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
+	errInvalidLimit  = &queryError{"invalid limit: expected a positive integer"}
+)
 
 type queryError struct{ msg string }
 
