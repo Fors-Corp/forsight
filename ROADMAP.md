@@ -374,7 +374,7 @@ what it draws. Prerequisite for probes, rollups and anything cross-host.
 
 ### 11. Memory and disk get the chart CPU has
 
-- **Area** dashboard · **Effort** S · **Score** 3.90
+- **Area** dashboard · **Effort** S · **Score** 3.90 · **Shipped** 2026-09-16, `Overview.tsx`'s `CHART_METRICS` radio group
 
 **Why.** `Overview.tsx:315-322` renders three StatCards; only CPU is charted
 (`:326-336`). Memory growth and disk fill are the two trends an operator asks
