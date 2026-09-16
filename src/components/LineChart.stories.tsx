@@ -74,6 +74,33 @@ export const WithAnnotations: Story = {
   },
 };
 
+export const Projection: Story = {
+  name: "Projection",
+  args: {
+    label: "p95 latency, next 3 hours",
+    description: "checkout-api — dashed past 23:00 is the mlaas forecast, not a measurement.",
+    labels: [...hours, "24:00", "25:00", "26:00"],
+    series: [
+      {
+        name: "checkout-api",
+        // dashedFrom is the last real sample (index 23, "23:00" — the
+        // forecast origin). The three mlaas-predicted values after it draw
+        // dashed, sharing that boundary point so the line has no gap.
+        values: [...p95, 176, 162, 150],
+        dashedFrom: 23,
+      },
+    ],
+    valueFormat: (value) => `${value}ms`,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The dashed stroke is the sighted-only half of the signal; the hidden
+    // description (both the SVG <desc> and the sr-only table <caption>)
+    // carries the same fact for a screen reader.
+    await expect(canvas.getAllByText(/projected from 23:00/)).toHaveLength(2);
+  },
+};
+
 export const KeyboardCursor: Story = {
   name: "Keyboard cursor",
   args: { ...SingleSeries.args } as Story["args"],

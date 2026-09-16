@@ -196,6 +196,56 @@ export function splitAtGaps(
   return segments;
 }
 
+/**
+ * Splits a value series into the solid run(s) up to and including
+ * `dashedFrom` and the dashed run(s) from that same point onward — the
+ * shape (not color) that marks a projection past the last real
+ * measurement. The boundary point is shared by both runs so the stroke has
+ * no gap where it switches. Null-gap handling is the same as
+ * `splitAtGaps`: a missing sample still breaks the line rather than being
+ * interpolated through. `dashedFrom` is optional — omitted, every point
+ * comes back solid and `dashed` is empty, so a series with no projection
+ * renders exactly as `splitAtGaps` would draw it.
+ */
+export function splitAtProjection(
+  values: ReadonlyArray<number | null>,
+  dashedFrom: number | undefined,
+  toPoint: (index: number, value: number) => Point
+): { solid: Point[][]; dashed: Point[][] } {
+  const solid: Point[][] = [];
+  const dashed: Point[][] = [];
+  let current: Point[] = [];
+  let currentDashed = false;
+
+  const flush = () => {
+    if (current.length === 0) return;
+    (currentDashed ? dashed : solid).push(current);
+  };
+
+  values.forEach((value, index) => {
+    if (value === null) {
+      flush();
+      current = [];
+      currentDashed = false;
+      return;
+    }
+    const isDashed = dashedFrom !== undefined && index >= dashedFrom;
+    if (current.length > 0 && isDashed !== currentDashed) {
+      // Crossing from solid to dashed mid-run: carry the boundary point onto
+      // both runs so the stroke stays continuous where it switches.
+      current.push(toPoint(index, value));
+      flush();
+      current = [toPoint(index, value)];
+    } else {
+      current.push(toPoint(index, value));
+    }
+    currentDashed = isDashed;
+  });
+  flush();
+
+  return { solid, dashed };
+}
+
 /** The same polyline closed down to `baselineY`, for an area fill. */
 export function areaPath(points: readonly Point[], baselineY: number): string {
   if (points.length === 0) return "";
@@ -204,6 +254,30 @@ export function areaPath(points: readonly Point[], baselineY: number): string {
   return `${linePath(points)} L${round(last[0])} ${round(baselineY)} L${round(first[0])} ${round(
     baselineY
   )} Z`;
+}
+
+/**
+ * Closed band between an `upper` and `lower` bound sharing the same x
+ * positions — `upper` left to right, then `lower` right to left back to the
+ * start. For a confidence interval around a projection (a Holt band, an
+ * mlaas forecast with error bounds); only meaningful once a producer sends
+ * bounds alongside its points, which none does as of this writing — mlaas's
+ * `ForecastPoint` carries a value and no bounds, and Forseer's Holt band
+ * lives in the `ErrorBudget` caption, not as plottable points. Kept here,
+ * tested on its own, for whichever one does. Mismatched-length inputs are
+ * zipped to the shorter one rather than throwing.
+ */
+export function bandPath(upper: readonly Point[], lower: readonly Point[]): string {
+  if (upper.length === 0 || lower.length === 0) return "";
+  const n = Math.min(upper.length, lower.length);
+  const top = upper.slice(0, n);
+  const bottom = lower.slice(0, n);
+  const down = top.map(([x, y], i) => `${i === 0 ? "M" : "L"}${round(x)} ${round(y)}`).join(" ");
+  const back = [...bottom]
+    .reverse()
+    .map(([x, y]) => `L${round(x)} ${round(y)}`)
+    .join(" ");
+  return `${down} ${back} Z`;
 }
 
 /**

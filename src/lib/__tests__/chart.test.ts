@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   arcPath,
   areaPath,
+  bandPath,
   barPath,
   clamp,
   formatCompact,
@@ -15,6 +16,7 @@ import {
   seriesFill,
   seriesStroke,
   SERIES_SLOTS,
+  splitAtProjection,
   type Point,
 } from "../chart";
 
@@ -147,6 +149,102 @@ describe("path builders", () => {
     const [x, y] = polar(0, 0, 10, 0);
     expect(x).toBeCloseTo(0);
     expect(y).toBeCloseTo(-10);
+  });
+
+  it("closes a band between an upper and lower bound", () => {
+    const upper: Point[] = [
+      [0, 0],
+      [10, 5],
+    ];
+    const lower: Point[] = [
+      [0, 10],
+      [10, 15],
+    ];
+    expect(bandPath(upper, lower)).toBe("M0 0 L10 5 L10 15 L0 10 Z");
+  });
+
+  it("returns an empty band when either bound has no points", () => {
+    expect(bandPath([], [[0, 0]])).toBe("");
+    expect(bandPath([[0, 0]], [])).toBe("");
+  });
+
+  it("zips a band to the shorter bound instead of throwing", () => {
+    const upper: Point[] = [
+      [0, 0],
+      [10, 5],
+      [20, 8],
+    ];
+    const lower: Point[] = [
+      [0, 10],
+      [10, 15],
+    ];
+    expect(bandPath(upper, lower)).toBe("M0 0 L10 5 L10 15 L0 10 Z");
+  });
+});
+
+describe("splitAtProjection", () => {
+  const toPoint = (index: number, value: number): Point => [index, value];
+
+  it("keeps everything solid when there is no projection", () => {
+    const { solid, dashed } = splitAtProjection([10, 20, 30], undefined, toPoint);
+    expect(solid).toEqual([
+      [
+        [0, 10],
+        [1, 20],
+        [2, 30],
+      ],
+    ]);
+    expect(dashed).toEqual([]);
+  });
+
+  it("splits solid from dashed at the given index, sharing the boundary point", () => {
+    const { solid, dashed } = splitAtProjection([10, 20, 30, 40], 2, toPoint);
+    expect(solid).toEqual([
+      [
+        [0, 10],
+        [1, 20],
+        [2, 30],
+      ],
+    ]);
+    expect(dashed).toEqual([
+      [
+        [2, 30],
+        [3, 40],
+      ],
+    ]);
+  });
+
+  it("dashes the whole run when dashedFrom is 0", () => {
+    const { solid, dashed } = splitAtProjection([10, 20], 0, toPoint);
+    expect(solid).toEqual([]);
+    expect(dashed).toEqual([
+      [
+        [0, 10],
+        [1, 20],
+      ],
+    ]);
+  });
+
+  it("leaves everything solid when dashedFrom is past the last index", () => {
+    const { solid, dashed } = splitAtProjection([10, 20], 5, toPoint);
+    expect(solid).toEqual([
+      [
+        [0, 10],
+        [1, 20],
+      ],
+    ]);
+    expect(dashed).toEqual([]);
+  });
+
+  it("still breaks on a null gap that straddles the projection boundary", () => {
+    const { solid, dashed } = splitAtProjection([10, null, 30, 40], 2, toPoint);
+    expect(solid).toEqual([[[0, 10]]]);
+    expect(dashed).toEqual([
+      [
+        [2, 30],
+        [3, 40],
+      ],
+    ]);
   });
 });
 

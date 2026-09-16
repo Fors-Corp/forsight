@@ -519,6 +519,17 @@ const cases: Record<string, React.ReactElement> = {
       onValueChange={() => {}}
     />
   ),
+  // Appended, not interleaved with the other LineChart case above: every
+  // case before it renders `useId()`-based ids, so inserting a new one
+  // earlier in this record shifts every id after it and fails their
+  // snapshots for a reason that has nothing to do with the change.
+  "LineChart/projection": (
+    <LineChart
+      label="p95 latency"
+      labels={["12:00", "13:00", "14:00", "15:00"]}
+      series={[{ name: "checkout-api", values: [180, 210, 195, 172], dashedFrom: 2 }]}
+    />
+  ),
 };
 
 describe("DOM structure snapshots", () => {

@@ -698,7 +698,7 @@ proxy for causation, not causation, and the card must say so.
 
 ### 23. LineChart draws a projection as a projection
 
-- **Area** design system · **Effort** M · **Score** 3.50 · scoped down
+- **Area** design system · **Effort** M · **Score** 3.50 · scoped down · **Shipped** 2026-09-16, LineChart
 
 **Why.** `src/components/LineChart.tsx:28-46` has `series` and `annotations`
 only. `Models.tsx:170-188` draws each mlaas forecast as a second solid series

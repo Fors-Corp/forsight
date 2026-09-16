@@ -11,6 +11,7 @@ import {
   seriesFill,
   seriesStroke,
   splitAtGaps,
+  splitAtProjection,
   type ChartAnnotation,
 } from "../lib/chart";
 import { useChartCursor } from "../lib/chart-hooks";
@@ -23,6 +24,17 @@ export interface ChartSeries {
   name: string;
   /** One value per `labels` entry. `null` leaves a gap instead of interpolating. */
   values: Array<number | null>;
+  /**
+   * Index into `values` of the last point to draw solid — the
+   * observed/forecast boundary. The stroke from that point onward (the
+   * point itself is shared by both runs, so the line has no gap where it
+   * switches) is dashed instead of a second color, distinguishing a
+   * projection by shape rather than color (CONTRIBUTING.md's data-viz
+   * rule). The text equivalent ("<name> is projected from <label>.") is
+   * folded into `ChartFrame`'s hidden description, so the distinction is
+   * never sighted-only.
+   */
+  dashedFrom?: number;
 }
 
 export interface LineChartProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "children"> {
@@ -64,6 +76,12 @@ const PAD_BOTTOM = 22;
  * `annotations` draws SLO-threshold (`value`) or deploy-marker (`label`)
  * reference lines over the plot — their text is always folded into the
  * visually hidden description too, never sighted-only.
+ *
+ * A series' `dashedFrom` index marks a forecast or projection: the stroke
+ * past that point switches to dashed instead of a second color, so the
+ * distinction survives grayscale printing and colorblind vision. Both runs
+ * share one y-axis and domain — a projection is drawn as more of the same
+ * series, not a second one.
  */
 export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
   (
@@ -96,6 +114,12 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
       }
     }
     const scale = niceScale(dataMin, dataMax);
+
+    // Text equivalent of the dashed-stroke projection, folded into the
+    // hidden description so the distinction is never sighted-only.
+    const projectionNotes = series
+      .filter((s) => s.dashedFrom !== undefined && labels[s.dashedFrom] !== undefined)
+      .map((s) => `${s.name} is projected from ${labels[s.dashedFrom as number]}.`);
 
     const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
       const box = plotRef.current?.getBoundingClientRect();
@@ -138,6 +162,7 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
               annotations.length > 0
                 ? `Reference lines: ${annotations.map((a) => a.text).join(", ")}.`
                 : null,
+              projectionNotes.length > 0 ? projectionNotes.join(" ") : null,
               "Use arrow keys to read individual points.",
             ]
               .filter(Boolean)
@@ -198,14 +223,15 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
                   ))}
 
                   {series.map((s, seriesIndex) => {
-                    const segments = splitAtGaps(s.values, (index, value) => [
+                    const toPoint = (index: number, value: number): [number, number] => [
                       xAt(index),
                       yAt(value),
-                    ]);
+                    ];
+                    const { solid, dashed } = splitAtProjection(s.values, s.dashedFrom, toPoint);
                     return (
                       <g key={s.name}>
                         {area
-                          ? segments.map((segment, i) => (
+                          ? splitAtGaps(s.values, toPoint).map((segment, i) => (
                               <path
                                 key={`area-${i}`}
                                 d={areaPath(segment, baselineY)}
@@ -213,14 +239,26 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
                               />
                             ))
                           : null}
-                        {segments.map((segment, i) => (
+                        {solid.map((segment, i) => (
                           <path
-                            key={`line-${i}`}
+                            key={`line-solid-${i}`}
                             d={linePath(segment)}
                             fill="none"
                             strokeWidth={2}
                             strokeLinecap="round"
                             strokeLinejoin="round"
+                            className={seriesStroke(seriesIndex)}
+                          />
+                        ))}
+                        {dashed.map((segment, i) => (
+                          <path
+                            key={`line-dashed-${i}`}
+                            d={linePath(segment)}
+                            fill="none"
+                            strokeWidth={2}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeDasharray="6 4"
                             className={seriesStroke(seriesIndex)}
                           />
                         ))}
