@@ -56,6 +56,66 @@ func TestEngine_CulpritRanksHotProcess(t *testing.T) {
 	}
 }
 
+// TestEngine_CulpritRanksByChangeNotRawCPU is the scenario ROADMAP item 22
+// exists for: "a process that went from 2% to 18% during the spike is
+// dropped for one that always sits at 22%." Once each process has enough
+// history for its own baseline, the mover — a genuine jump above its own
+// normal — must be named a culprit even though its raw CPU is lower, and
+// the steady one — sitting exactly at its own normal — must not be, even
+// though its raw CPU clears the old 20% floor.
+func TestEngine_CulpritRanksByChangeNotRawCPU(t *testing.T) {
+	e := NewEngine()
+
+	for i := 0; i < minSamples; i++ {
+		e.ObserveMetrics([]Point{{Name: "host.cpu.percent", Value: 8}})
+	}
+
+	// Warm up both processes' own baselines: "mover" idles low with a
+	// little jitter, "steady" idles high with a little jitter. Neither
+	// baseline is degenerate (zero variance), which is what real readings
+	// from a real process look like and what SeriesBaseline requires to be
+	// ready at all.
+	mover := []float64{1, 2, 3, 2, 1, 3, 2, 1, 3, 2, 1, 2}
+	steady := []float64{21, 23, 21, 23, 22, 23, 21, 22, 23, 21, 22, 23}
+	if len(mover) != minSamples || len(steady) != minSamples {
+		t.Fatalf("test setup: need exactly minSamples=%d points to warm each baseline", minSamples)
+	}
+	for i := range mover {
+		e.ObserveMetrics([]Point{
+			{Name: "process.cpu.percent", Value: mover[i], Labels: map[string]string{"pid": "7", "name": "mover"}},
+			{Name: "process.cpu.percent", Value: steady[i], Labels: map[string]string{"pid": "9", "name": "steady"}},
+		})
+	}
+
+	// The host goes anomalous. "mover" jumps to 18% — a real jump above its
+	// own baseline (~2%) — while "steady" holds at 22%, squarely inside its
+	// own baseline (~22%). Raw CPU alone would rank steady over mover.
+	e.ObserveMetrics([]Point{
+		{Name: "host.cpu.percent", Value: 95},
+		{Name: "process.cpu.percent", Value: 18, Labels: map[string]string{"pid": "7", "name": "mover"}},
+		{Name: "process.cpu.percent", Value: 22, Labels: map[string]string{"pid": "9", "name": "steady"}},
+	})
+
+	var sawMover, sawSteady bool
+	for _, ins := range e.Insights() {
+		if ins.Kind != KindCulprit {
+			continue
+		}
+		switch ins.Source {
+		case "mover":
+			sawMover = true
+		case "steady":
+			sawSteady = true
+		}
+	}
+	if !sawMover {
+		t.Fatalf("mover (2%%->18%%, a real jump off its own baseline) was not ranked a culprit: %+v", e.Insights())
+	}
+	if sawSteady {
+		t.Fatalf("steady (sitting at its own normal 22%%) was ranked a culprit merely for a high raw CPU: %+v", e.Insights())
+	}
+}
+
 // TestEngine_PrunesStaleProcesses guards against the same unbounded-growth
 // bug PR #44 fixed on the OTLP ingest path, recurring here: unlike
 // e.culprits, e.processes was never evicted, and pid resource attributes

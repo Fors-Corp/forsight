@@ -18,6 +18,7 @@ type Engine struct {
 	severity *severityModel
 	forecast *burnForecast
 	paging   *pagingModel
+	culprit  *culpritModel
 
 	mu        sync.Mutex
 	processes map[string]procSnap
@@ -31,6 +32,16 @@ type procSnap struct {
 	cpu      float64
 	rss      float64
 	lastSeen time.Time
+
+	// cpuZ/rssZ are this process's latest deviation from its own rolling
+	// baseline (Detector.SeriesBaseline), in standard deviations, signed —
+	// negative means below its own normal. The *Ready pair is false until
+	// that series has minSamples of history, in which case the ranker falls
+	// back to the raw floor instead of trusting a value that isn't there.
+	cpuZ     float64
+	cpuReady bool
+	rssZ     float64
+	rssReady bool
 }
 
 // NewEngine builds a live engine. Statistical detection is always on;
@@ -44,6 +55,7 @@ func NewEngine() *Engine {
 		severity:  newSeverityModel(),
 		forecast:  newBurnForecast(),
 		paging:    newPagingModel(),
+		culprit:   newCulpritModel(),
 		processes: make(map[string]procSnap),
 		culprits:  make(map[string]Insight),
 		now:       now,
@@ -115,7 +127,7 @@ func (e *Engine) ClassifySeverity(message string) (string, bool) {
 // inputs it reads, whether it is ready, and how it is scoring. This is the
 // only place the agent claims anything about what it has learned.
 func (e *Engine) Models() []Card {
-	models := []Model{e.severity, e.det.thresholds, e.forecast, e.paging, e.spans}
+	models := []Model{e.severity, e.det.thresholds, e.forecast, e.paging, e.spans, e.culprit}
 	cards := make([]Card, 0, len(models))
 	for _, m := range models {
 		cards = append(cards, m.Card())
@@ -166,8 +178,16 @@ func (e *Engine) trackProcesses(points []Point) {
 		switch p.Name {
 		case "process.cpu.percent":
 			snap.cpu = p.Value
+			snap.cpuZ, snap.cpuReady = 0, false
+			if mean, stddev, ready := e.det.SeriesBaseline(p.Name, p.Labels); ready {
+				snap.cpuZ, snap.cpuReady = (p.Value-mean)/stddev, true
+			}
 		case "process.memory.rss_bytes":
 			snap.rss = p.Value
+			snap.rssZ, snap.rssReady = 0, false
+			if mean, stddev, ready := e.det.SeriesBaseline(p.Name, p.Labels); ready {
+				snap.rssZ, snap.rssReady = (p.Value-mean)/stddev, true
+			}
 		}
 		snap.lastSeen = now
 		e.processes[pid] = snap
@@ -184,34 +204,55 @@ func (e *Engine) trackProcesses(points []Point) {
 		return
 	}
 	type ranked struct {
-		pid  string
-		snap procSnap
+		pid    string
+		snap   procSnap
+		score  float64
+		metric string
+		raw    float64
 	}
-	top := make([]ranked, 0, len(e.processes))
+	// changed holds processes whose own baseline says they moved; floored
+	// holds ones too new to have a baseline, judged by the raw floor
+	// instead. changed always outranks floored — a real baseline is better
+	// evidence than the rule it replaces, never merely tied with it.
+	var changed, floored []ranked
 	for pid, snap := range e.processes {
-		if snap.cpu <= 0 {
+		score, changeBased, metric, raw, ok := e.culprit.rank(snap)
+		if !ok {
 			continue
 		}
-		top = append(top, ranked{pid, snap})
+		r := ranked{pid, snap, score, metric, raw}
+		if changeBased {
+			changed = append(changed, r)
+		} else {
+			floored = append(floored, r)
+		}
 	}
-	sort.Slice(top, func(i, j int) bool { return top[i].snap.cpu > top[j].snap.cpu })
+	sort.Slice(changed, func(i, j int) bool { return changed[i].score > changed[j].score })
+	sort.Slice(floored, func(i, j int) bool { return floored[i].score > floored[j].score })
+	top := append(changed, floored...)
 	if len(top) > 3 {
 		top = top[:3]
 	}
 	for _, r := range top {
-		if r.snap.cpu < 20 {
-			continue
+		title := fmt.Sprintf("%s is using %.0f%% CPU while the host is anomalous", r.snap.name, r.snap.cpu)
+		desc := "process ranked as a likely contributor to the host CPU spike"
+		if r.metric == "process.memory.rss_bytes" {
+			title = fmt.Sprintf("%s's memory rose %.1fσ above its own baseline while the host is anomalous", r.snap.name, r.score)
+			desc = "process's own rss moved off its baseline; ranked as a likely contributor to the host CPU spike"
+		} else if r.metric == "process.cpu.percent" && r.snap.cpuReady {
+			title = fmt.Sprintf("%s's cpu rose %.1fσ above its own baseline while the host is anomalous", r.snap.name, r.score)
+			desc = "process's own cpu moved off its baseline; ranked as a likely contributor to the host CPU spike"
 		}
 		related := []string{r.snap.name, "pid=" + r.pid}
 		e.culprits[r.pid] = Insight{
 			ID:          "culprit:" + r.pid,
 			Kind:        KindCulprit,
 			Severity:    SeverityWarning,
-			Title:       fmt.Sprintf("%s is using %.0f%% CPU while the host is anomalous", r.snap.name, r.snap.cpu),
-			Description: "process ranked as a likely contributor to the host CPU spike",
+			Title:       title,
+			Description: desc,
 			Source:      r.snap.name,
-			Metric:      "process.cpu.percent",
-			Value:       r.snap.cpu,
+			Metric:      r.metric,
+			Value:       r.raw,
 			Time:        now,
 			Related:     related,
 		}
