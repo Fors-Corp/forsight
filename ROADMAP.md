@@ -867,4 +867,10 @@ are the judges' composites.
 
 - **HTTP and TLS-expiry probe collector** — a repeatable `--probe <url>` GETs each target on the agent's collect interval, reporting `probe.http.up`/`.status`/`.duration_ms` and, for `https://` targets, `probe.tls.days_remaining`/`.valid` from the leaf certificate, read independently so an expiring or already-expired cert never flips an otherwise-reachable site's up metric, 2026-09-16, #120.
 
+- **Fold the chart family into the DashboardRTL story** — DashboardRTL
+  already composed every chart Dashboard does, so the actual work was
+  fixing three RTL rendering bugs the story's new geometry checks caught
+  (axis labels overlapping the plot, the keyboard-cursor tooltip covering
+  its own point, TraceWaterfall reading a trace backwards), 2026-09-16, #122.
+
 - **Deterministic incident grouping on the Timeline** — forseer-models-9's window-plus-shared-`Related` substitute for the label-less grouping model, folding insights within five minutes of each other into one incident event when they share a Related value or a Source, 2026-09-16, #118.
