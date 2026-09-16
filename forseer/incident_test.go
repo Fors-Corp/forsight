@@ -46,6 +46,24 @@ func TestGroupIncidents_UnrelatedInsightsInTheSameWindowDoNotGroup(t *testing.T)
 	}
 }
 
+// The Detector stamps every metric finding with the literal Source
+// "forseer"; two of them in the same window about different series are not
+// one incident unless a Related value says so.
+func TestGroupIncidents_TheDetectorFamilySourceIsNotALink(t *testing.T) {
+	cpu := Insight{ID: "cpu", Kind: KindAnomaly, Severity: SeverityWarning, Title: "host.cpu.percent is 4.1σ from its baseline", Source: "forseer", Time: incidentBase, Related: []string{"host.cpu.percent"}}
+	disk := Insight{ID: "disk", Kind: KindChangepoint, Severity: SeverityWarning, Title: "host.disk.percent shifted", Source: "forseer", Time: incidentBase.Add(time.Minute), Related: []string{"host.disk.percent"}}
+	events := groupIncidents([]Insight{cpu, disk})
+	if len(events) != 2 {
+		t.Fatalf("two unrelated detector findings grouped into %d event(s): %+v", len(events), events)
+	}
+	// A specific source still links: two findings from the same service.
+	x := Insight{ID: "x", Kind: KindSlowSpan, Severity: SeverityWarning, Title: "X", Source: "checkout", Time: incidentBase}
+	y := Insight{ID: "y", Kind: KindLogBurst, Severity: SeverityWarning, Title: "Y", Source: "checkout", Time: incidentBase.Add(time.Minute)}
+	if events := groupIncidents([]Insight{x, y}); len(events) != 1 {
+		t.Fatalf("two findings from the same service did not group: %+v", events)
+	}
+}
+
 func TestGroupIncidents_OutsideTheWindowDoesNotGroupDespiteSharedRelated(t *testing.T) {
 	a := Insight{ID: "a", Kind: KindAnomaly, Severity: SeverityWarning, Title: "A", Source: "forseer", Time: incidentBase, Related: []string{"payment-service"}}
 	b := Insight{ID: "b", Kind: KindSlowSpan, Severity: SeverityCritical, Title: "B", Source: "envoy", Time: incidentBase.Add(11 * time.Minute), Related: []string{"payment-service"}}

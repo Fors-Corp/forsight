@@ -94,10 +94,13 @@ func clusterInsights(insights []Insight) [][]Insight {
 }
 
 // linked is the pairwise test groupIncidents' spec names: within
-// incidentWindow of each other, and sharing a Related value or a Source. An
-// empty Source never counts as a match on its own — every real Source is
-// either a literal ("forseer") or emptySource's "unknown" fallback, so a
-// blank string here only shows up in a test that did not set one.
+// incidentWindow of each other, and sharing a Related value or a Source.
+// Only a specific Source counts — a service, a host, a log source. The
+// Detector stamps every metric anomaly, changepoint and host outlier with
+// the literal "forseer", and emptySource falls back to "unknown", so either
+// of those (or a blank) would fold every finding of that kind inside the
+// window into one incident regardless of what it was about; those are the
+// findings whose Related values carry the real link.
 func linked(a, b Insight) bool {
 	diff := a.Time.Sub(b.Time)
 	if diff < 0 {
@@ -106,7 +109,7 @@ func linked(a, b Insight) bool {
 	if diff > incidentWindow {
 		return false
 	}
-	if a.Source != "" && a.Source == b.Source {
+	if specificSource(a.Source) && a.Source == b.Source {
 		return true
 	}
 	for _, ra := range a.Related {
@@ -117,6 +120,16 @@ func linked(a, b Insight) bool {
 		}
 	}
 	return false
+}
+
+// specificSource reports whether a Source names one thing rather than the
+// detector family or the "unknown" fallback.
+func specificSource(source string) bool {
+	switch source {
+	case "", "forseer", "unknown":
+		return false
+	}
+	return true
 }
 
 // incidentEvent builds one Timeline event from a connected component of two
