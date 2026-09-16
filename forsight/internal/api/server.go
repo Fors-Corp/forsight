@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcfs31/forsight/forseer"
+	"github.com/marcfs31/forsight/forsight/internal/collector"
 	"github.com/marcfs31/forsight/forsight/internal/logsafe"
 	"github.com/marcfs31/forsight/forsight/internal/store"
 )
@@ -26,8 +27,9 @@ type Server struct {
 	otlp      OTLPHandler  // nil is valid: OTLP ingest simply isn't mounted
 	dashboard http.Handler // nil is valid: falls back to a plain 404 at "/"
 	logger    *slog.Logger
-	forseer   *forseer.Engine // nil: /api/v1/forseer/* returns empty/disabled
-	mlaas     MlaasService    // nil: /api/v1/mlaas/* reports not-configured
+	forseer   *forseer.Engine     // nil: /api/v1/forseer/* returns empty/disabled
+	mlaas     MlaasService        // nil: /api/v1/mlaas/* reports not-configured
+	registry  *collector.Registry // nil: /readyz reports the store only, no collectors
 }
 
 // NewServer builds a Server. dashboard may be nil (see dashboard.go for the
@@ -46,10 +48,20 @@ func (s *Server) WithForseer(e *forseer.Engine) *Server {
 	return s
 }
 
+// WithRegistry attaches the collector registry, so /readyz can report each
+// collector's last error alongside the store's own health. Leaving it unset
+// (a nil r) is valid: cmd/demo has no real collectors to report on, and
+// /readyz then reflects only the store.
+func (s *Server) WithRegistry(r *collector.Registry) *Server {
+	s.registry = r
+	return s
+}
+
 // Handler builds the full routed http.Handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /api/v1/metrics", s.handleMetrics)
 	mux.HandleFunc("GET /api/v1/traces", s.handleTraces)
 	mux.HandleFunc("GET /api/v1/logs", s.handleLogs)

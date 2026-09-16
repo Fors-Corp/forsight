@@ -231,3 +231,24 @@ func TestBadgerStore_WriteEmptyBatchIsNoop(t *testing.T) {
 		t.Errorf("WriteLogs(nil): %v", err)
 	}
 }
+
+// TestBadgerStore_PingFailsAfterClose is BadgerStore's half of Ping's
+// contract: the conformance suite (store_conformance_test.go) already
+// proves Ping succeeds on a healthy store; a closed database is the one
+// failure mode BadgerStore actually has, and it's what /readyz (see
+// internal/api's handleReadyz) exists to catch.
+func TestBadgerStore_PingFailsAfterClose(t *testing.T) {
+	s, err := NewBadgerStore(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatalf("NewBadgerStore: %v", err)
+	}
+	if err := s.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping before Close: %v, want nil", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := s.Ping(context.Background()); err == nil {
+		t.Error("Ping after Close = nil, want an error")
+	}
+}
