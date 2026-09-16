@@ -484,3 +484,45 @@ describe("Overview log templates", () => {
     expect(screen.queryByText("900")).not.toBeInTheDocument();
   });
 });
+
+describe("Overview time range", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const errorLog = (minutesAgo: number, message: string) => ({
+    timestamp: ago(minutesAgo),
+    severity: "error",
+    message,
+    source: "api",
+  });
+
+  it("offers only the ranges the store holds, defaults to 1h, and widens on request", async () => {
+    const user = userEvent.setup();
+    mockFetch({
+      ...emptyEndpoints,
+      "/api/v1/logs": [errorLog(5, "recent failure"), errorLog(180, "old failure")],
+    });
+    render(<App />);
+
+    await screen.findByText("1 error log in the current window.");
+    expect(screen.getByRole("radio", { name: "Last 1 hour" })).toBeChecked();
+    // Three hours of data: 6h is the first option that covers it all, so
+    // 24h and 7d would change nothing and are not offered.
+    expect(screen.getByRole("radio", { name: "Last 6 hours" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Last 24 hours" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Last 7 days" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Last 6 hours" }));
+    await screen.findByText("2 error logs in the current window.");
+  });
+
+  it("offers 15m and 1h before anything has arrived", async () => {
+    mockFetch(emptyEndpoints);
+    render(<App />);
+    await screen.findByRole("radio", { name: "Last 1 hour" });
+    expect(screen.getByRole("radio", { name: "Last 15 minutes" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Last 6 hours" })).not.toBeInTheDocument();
+  });
+});

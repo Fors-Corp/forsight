@@ -314,7 +314,7 @@ wrong place for it.
 
 ### 9. Time range on the Overview, via the unused TimeRange
 
-- **Area** dashboard · **Effort** S · **Score** 3.98
+- **Area** dashboard · **Effort** S · **Score** 3.98 · **Shipped** 2026-09-16, `offeredTimeRanges` in `forsight/web/src/pages/Overview.tsx`
 
 **Why.** **TimeRange** is exported by the design system and never imported in
 `forsight/web`. `useMetrics`/`useLogs` return the whole retention window on
