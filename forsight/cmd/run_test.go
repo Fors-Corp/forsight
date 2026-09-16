@@ -376,6 +376,9 @@ func TestResolveTLSConfig(t *testing.T) {
 		if cfg.ClientAuth != tls.NoClientCert {
 			t.Errorf("ClientAuth = %v, want NoClientCert without --tls-client-ca", cfg.ClientAuth)
 		}
+		if cfg.MinVersion != tls.VersionTLS12 {
+			t.Errorf("MinVersion = %#x, want TLS 1.2", cfg.MinVersion)
+		}
 		if cfg.ClientCAs != nil {
 			t.Error("ClientCAs is set without --tls-client-ca")
 		}

@@ -396,7 +396,9 @@ func resolveTLSConfig(opts *runOptions) (*tls.Config, bool, error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("loading --tls-cert/--tls-key: %w", err)
 	}
-	cfg := &tls.Config{Certificates: []tls.Certificate{cert}}
+	// TLS 1.2 is the floor, stated rather than inherited from whatever the
+	// runtime's default happens to be in the Go version that built this.
+	cfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 
 	if caFile := resolveFlagOrEnv(opts.tlsClientCAFile, "FORSIGHT_TLS_CLIENT_CA"); caFile != "" {
 		caPEM, err := os.ReadFile(caFile)
