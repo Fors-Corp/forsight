@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   Heading,
   Text,
@@ -54,6 +54,7 @@ import {
   latestValue,
   containerRows,
   processRows,
+  type Metric,
   type LogEntry,
   type ForseerInsight,
   type ForseerEvent,
@@ -88,6 +89,16 @@ const TIME_RANGES: Array<TimeRangeOption & { ms: number }> = [
   { value: "7d", label: "7d", description: "Last 7 days", ms: 7 * 24 * 60 * 60_000 },
 ];
 const DEFAULT_TIME_RANGE = "1h";
+
+// The three host stats CPU already got a chart for (item 9). Memory and disk
+// get the same treatment here: a Sparkline on the StatCard, and a click that
+// repoints the one big LineChart at that metric's history instead of CPU's.
+type ChartMetric = "cpu" | "memory" | "disk";
+const CHART_METRICS: Array<{ key: ChartMetric; metricName: string; label: string }> = [
+  { key: "cpu", metricName: "host.cpu.percent", label: "Host CPU" },
+  { key: "memory", metricName: "host.memory.percent", label: "Host memory" },
+  { key: "disk", metricName: "host.disk.percent", label: "Host disk" },
+];
 
 /** In range, or undated — a record with no parseable timestamp is kept
  *  rather than silently dropped by a filter it cannot be judged against. */
@@ -205,7 +216,10 @@ function matchesFilters(entry: LogEntry, filters: FilterBarFacet[]): boolean {
   });
 }
 
-function errorHeatmap(logs: LogEntry[]): { columns: string[]; rows: { label: string; values: Array<number | null> }[] } {
+function errorHeatmap(logs: LogEntry[]): {
+  columns: string[];
+  rows: { label: string; values: Array<number | null> }[];
+} {
   const columns = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
   const sources = [...new Set(logs.map((l) => l.source || "unknown"))].sort();
   const rows = sources.map((source) => {
@@ -318,8 +332,49 @@ export default function Overview() {
     offeredRanges.find((r) => r.value === rangeValue) ?? offeredRanges[offeredRanges.length - 1];
   const since = now - range.ms;
 
-  const cpuHistory = historyFor(metrics, "host.cpu.percent").filter((m) => sinceOrUndated(m.timestamp, since));
-  const cpuLabels = cpuHistory.map((m) => timeLabelFormat.format(new Date(m.timestamp)));
+  // One ranged history per stat, keyed the same way as CHART_METRICS so the
+  // StatCard row and the chart below can both index into it by key.
+  const metricHistories = useMemo(() => {
+    const out = {} as Record<ChartMetric, Metric[]>;
+    for (const { key, metricName } of CHART_METRICS) {
+      out[key] = historyFor(metrics, metricName).filter((m) => sinceOrUndated(m.timestamp, since));
+    }
+    return out;
+  }, [metrics, since]);
+
+  const [chartMetric, setChartMetric] = useState<ChartMetric>("cpu");
+  // Roving tab stop across the three StatCards, same model as TimeRange:
+  // one stop for the group, arrows move (and select) inside it.
+  const chartMetricRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const moveChartMetric = (index: number) => {
+    const next = CHART_METRICS[(index + CHART_METRICS.length) % CHART_METRICS.length];
+    setChartMetric(next.key);
+    chartMetricRefs.current[CHART_METRICS.indexOf(next)]?.focus();
+  };
+  const handleChartMetricKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        event.preventDefault();
+        return moveChartMetric(index + 1);
+      case "ArrowLeft":
+      case "ArrowUp":
+        event.preventDefault();
+        return moveChartMetric(index - 1);
+      case "Home":
+        event.preventDefault();
+        return moveChartMetric(0);
+      case "End":
+        event.preventDefault();
+        return moveChartMetric(CHART_METRICS.length - 1);
+      default:
+        return;
+    }
+  };
+
+  const chartHistory = metricHistories[chartMetric];
+  const chartLabels = chartHistory.map((m) => timeLabelFormat.format(new Date(m.timestamp)));
+  const chartMetricLabel = CHART_METRICS.find((m) => m.key === chartMetric)?.label ?? "Host CPU";
   const rangedLogs = useMemo(
     () => logs.filter((l) => sinceOrUndated(l.timestamp, since)),
     [logs, since]
@@ -328,6 +383,7 @@ export default function Overview() {
   const cpu = latestValue(metrics, "host.cpu.percent");
   const memory = latestValue(metrics, "host.memory.percent");
   const disk = latestValue(metrics, "host.disk.percent");
+  const statValues: Record<ChartMetric, number | undefined> = { cpu, memory, disk };
   const containers = containerRows(metrics);
   const processes = processRows(metrics).slice(0, 15);
   const filteredLogs = useMemo(
@@ -394,7 +450,9 @@ export default function Overview() {
             ? "Forseer: warning"
             : "Receiving data";
   const sloLabel = formatSLO(budget.slo);
-  const budgetLabel = sloLabel ? `${budget.label || "Error-log budget"} · ${sloLabel}` : budget.label || "Error-log budget";
+  const budgetLabel = sloLabel
+    ? `${budget.label || "Error-log budget"} · ${sloLabel}`
+    : budget.label || "Error-log budget";
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
@@ -404,8 +462,8 @@ export default function Overview() {
             forsight
           </Heading>
           <Text tone="secondary">
-            Collects host, process, Docker, OTLP, StatsD, and local Prometheus — Forseer
-            watches the stream
+            Collects host, process, Docker, OTLP, StatsD, and local Prometheus — Forseer watches the
+            stream
           </Text>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -419,27 +477,62 @@ export default function Overview() {
               region only announces additions to its list, so a status change
               is announced once, here. */}
           <div role="status" aria-live="polite" aria-label="Agent connection" className="shrink-0">
-            <StatusDot status={status} label={connectionLabel} pulse={connection.state === "live"} />
+            <StatusDot
+              status={status}
+              label={connectionLabel}
+              pulse={connection.state === "live"}
+            />
           </div>
         </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard label="Host CPU" value={formatPercent(cpu)} unit="%" status="operational" />
-        <StatCard label="Host memory" value={formatPercent(memory)} unit="%" status="operational" />
-        <StatCard label="Host disk" value={formatPercent(disk)} unit="%" status="operational" />
+      {/* A real ARIA radio group, same model as TimeRange above: exactly one
+          stat is charted, Arrow/Home/End move between them (and select as
+          they go — a StatCard is a div, not a button, so there is no native
+          Enter/Space activation to lean on), only the selected card is in
+          the tab order, and a plain click selects too. */}
+      <div
+        role="radiogroup"
+        aria-label="Chart metric"
+        className="grid grid-cols-1 gap-4 sm:grid-cols-3"
+      >
+        {CHART_METRICS.map(({ key, label }, index) => {
+          const selected = chartMetric === key;
+          return (
+            <StatCard
+              key={key}
+              ref={(node) => {
+                chartMetricRefs.current[index] = node;
+              }}
+              label={label}
+              value={formatPercent(statValues[key])}
+              unit="%"
+              status="operational"
+              trend={metricHistories[key].map((m) => m.value)}
+              trendTone={selected ? "accent" : "neutral"}
+              role="radio"
+              aria-checked={selected}
+              tabIndex={selected ? 0 : -1}
+              className={`cursor-pointer transition-colors focus-visible:outline-none focus-visible:shadow-focus-ring ${
+                selected ? "border-accent" : ""
+              }`}
+              onClick={() => setChartMetric(key)}
+              onKeyDown={(event) => handleChartMetricKeyDown(event, index)}
+            />
+          );
+        })}
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Host CPU over time</CardTitle>
+          <CardTitle>{chartMetricLabel} over time</CardTitle>
         </CardHeader>
         <CardContent>
-          {cpuHistory.length > 1 ? (
+          {chartHistory.length > 1 ? (
             <LineChart
-              label="Host CPU percent over time"
-              labels={cpuLabels}
-              series={[{ name: "CPU %", values: cpuHistory.map((m) => m.value) }]}
+              label={`${chartMetricLabel} percent over time`}
+              labels={chartLabels}
+              series={[{ name: `${chartMetricLabel} %`, values: chartHistory.map((m) => m.value) }]}
               area
             />
           ) : (
@@ -457,7 +550,9 @@ export default function Overview() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {summary.enabled ? (
-            summary.summary ? <Text>{summary.summary}</Text> : null
+            summary.summary ? (
+              <Text>{summary.summary}</Text>
+            ) : null
           ) : (
             <Text tone="muted" size="sm">
               AI narrative disabled — set XAI_API_KEY to enable
@@ -571,28 +666,28 @@ export default function Overview() {
             />
           ) : (
             <div className="w-full overflow-x-auto">
-<Table>
-              <caption className="sr-only">Running containers with CPU and memory usage</caption>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Container</TableHead>
-                  <TableHead>Image</TableHead>
-                  <TableHead>CPU %</TableHead>
-                  <TableHead>Memory %</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {containers.map((c) => (
-                  <TableRow key={c.id}>
-                    <TableCell>{c.name}</TableCell>
-                    <TableCell className="text-fg-secondary">{c.image}</TableCell>
-                    <TableCell>{formatPercent(c.cpuPercent)}</TableCell>
-                    <TableCell>{formatPercent(c.memoryPercent)}</TableCell>
+              <Table>
+                <caption className="sr-only">Running containers with CPU and memory usage</caption>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Container</TableHead>
+                    <TableHead>Image</TableHead>
+                    <TableHead>CPU %</TableHead>
+                    <TableHead>Memory %</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-</div>
+                </TableHeader>
+                <TableBody>
+                  {containers.map((c) => (
+                    <TableRow key={c.id}>
+                      <TableCell>{c.name}</TableCell>
+                      <TableCell className="text-fg-secondary">{c.image}</TableCell>
+                      <TableCell>{formatPercent(c.cpuPercent)}</TableCell>
+                      <TableCell>{formatPercent(c.memoryPercent)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -644,9 +739,16 @@ export default function Overview() {
         </CardHeader>
         <CardContent>
           {heatmap.rows.length === 0 ? (
-            <EmptyState title="No error logs" description="Sources show up here once error lines land." />
+            <EmptyState
+              title="No error logs"
+              description="Sources show up here once error lines land."
+            />
           ) : (
-            <Heatmap label="Error logs by source and hour" columns={heatmap.columns} rows={heatmap.rows} />
+            <Heatmap
+              label="Error logs by source and hour"
+              columns={heatmap.columns}
+              rows={heatmap.rows}
+            />
           )}
         </CardContent>
       </Card>
