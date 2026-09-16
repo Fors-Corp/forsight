@@ -257,30 +257,6 @@ export function areaPath(points: readonly Point[], baselineY: number): string {
 }
 
 /**
- * Closed band between an `upper` and `lower` bound sharing the same x
- * positions — `upper` left to right, then `lower` right to left back to the
- * start. For a confidence interval around a projection (a Holt band, an
- * mlaas forecast with error bounds); only meaningful once a producer sends
- * bounds alongside its points, which none does as of this writing — mlaas's
- * `ForecastPoint` carries a value and no bounds, and Forseer's Holt band
- * lives in the `ErrorBudget` caption, not as plottable points. Kept here,
- * tested on its own, for whichever one does. Mismatched-length inputs are
- * zipped to the shorter one rather than throwing.
- */
-export function bandPath(upper: readonly Point[], lower: readonly Point[]): string {
-  if (upper.length === 0 || lower.length === 0) return "";
-  const n = Math.min(upper.length, lower.length);
-  const top = upper.slice(0, n);
-  const bottom = lower.slice(0, n);
-  const down = top.map(([x, y], i) => `${i === 0 ? "M" : "L"}${round(x)} ${round(y)}`).join(" ");
-  const back = [...bottom]
-    .reverse()
-    .map(([x, y]) => `L${round(x)} ${round(y)}`)
-    .join(" ");
-  return `${down} ${back} Z`;
-}
-
-/**
  * Bar with rounded corners at the data end only — the baseline end stays square
  * so bars sit flush on the axis and a stacked segment meets its neighbour flat.
  * `height` may be 0 (a zero-value bar draws nothing).

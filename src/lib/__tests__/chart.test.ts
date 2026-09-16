@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   arcPath,
   areaPath,
-  bandPath,
   barPath,
   clamp,
   formatCompact,
@@ -149,36 +148,6 @@ describe("path builders", () => {
     const [x, y] = polar(0, 0, 10, 0);
     expect(x).toBeCloseTo(0);
     expect(y).toBeCloseTo(-10);
-  });
-
-  it("closes a band between an upper and lower bound", () => {
-    const upper: Point[] = [
-      [0, 0],
-      [10, 5],
-    ];
-    const lower: Point[] = [
-      [0, 10],
-      [10, 15],
-    ];
-    expect(bandPath(upper, lower)).toBe("M0 0 L10 5 L10 15 L0 10 Z");
-  });
-
-  it("returns an empty band when either bound has no points", () => {
-    expect(bandPath([], [[0, 0]])).toBe("");
-    expect(bandPath([[0, 0]], [])).toBe("");
-  });
-
-  it("zips a band to the shorter bound instead of throwing", () => {
-    const upper: Point[] = [
-      [0, 0],
-      [10, 5],
-      [20, 8],
-    ];
-    const lower: Point[] = [
-      [0, 10],
-      [10, 15],
-    ];
-    expect(bandPath(upper, lower)).toBe("M0 0 L10 5 L10 15 L0 10 Z");
   });
 });
 

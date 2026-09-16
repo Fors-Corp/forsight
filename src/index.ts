@@ -255,7 +255,6 @@ export {
   ANNOTATION_TONE_CLASSES,
   arcPath,
   areaPath,
-  bandPath,
   barPath,
   clamp,
   formatCompact,
