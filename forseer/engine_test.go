@@ -105,21 +105,42 @@ func TestEngine_PrunesStaleProcesses(t *testing.T) {
 
 func TestEngine_SlowSpan(t *testing.T) {
 	e := NewEngine()
-	for i := 0; i < minSamples; i++ {
-		e.ObserveSpans([]SpanSample{{Name: "GET /checkout", Service: "api", DurationMs: 20}})
+	// A little jitter, not a single repeated value: a zero-spread baseline
+	// makes the very first outlier redefine the interquartile spread too,
+	// which is a degenerate case of its own and not what this test is for.
+	baseline := []float64{18, 19, 20, 21, 22, 20, 19, 21, 18, 22, 20, 19}
+	if len(baseline) != minSamples {
+		t.Fatalf("test setup: baseline has %d points, want minSamples=%d", len(baseline), minSamples)
 	}
-	e.ObserveSpans([]SpanSample{{Name: "GET /checkout", Service: "api", DurationMs: 400, TraceID: "abc", Status: "error"}})
+	for _, d := range baseline {
+		e.ObserveSpans([]SpanSample{{Name: "GET /checkout", Service: "api", DurationMs: d}})
+	}
+
+	// p99 fires on about one span in a hundred by construction, so a single
+	// exceedance must not open anything — it takes a run.
+	for i := 0; i < spanExceedRun-1; i++ {
+		e.ObserveSpans([]SpanSample{{Name: "GET /checkout", Service: "api", DurationMs: 23, TraceID: "abc"}})
+	}
+	for _, ins := range e.Insights() {
+		if ins.Kind == KindSlowSpan {
+			t.Fatalf("slow_span opened after only %d of %d exceedances: %+v", spanExceedRun-1, spanExceedRun, ins)
+		}
+	}
+
+	// The span that completes the run opens it, and an error status on that
+	// span escalates it straight to critical.
+	e.ObserveSpans([]SpanSample{{Name: "GET /checkout", Service: "api", DurationMs: 23, TraceID: "abc", Status: "error"}})
 	found := false
 	for _, ins := range e.Insights() {
 		if ins.Kind == KindSlowSpan {
 			found = true
 			if ins.Severity != SeverityCritical {
-				t.Errorf("severity = %q, want critical (error status + huge z)", ins.Severity)
+				t.Errorf("severity = %q, want critical (error status on the span that completed the run)", ins.Severity)
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("expected slow_span: %+v", e.Insights())
+		t.Fatalf("expected slow_span after a run of %d exceedances: %+v", spanExceedRun, e.Insights())
 	}
 }
 

@@ -392,7 +392,8 @@ call.
 
 ### 12. Per-endpoint latency shape: a P2 quantile instead of a z-score
 
-- **Area** forseer · **Effort** M · **Score** 3.87 · corrected
+- **Area** forseer · **Effort** M · **Score** 3.87 · corrected · **Shipped**
+  2026-09-16, `forseer/p2.go` (`p2Estimator`), `spanWatch` in `forseer/spans.go`
 
 **Why.** `forseer/spans.go:71-99` keeps Welford mean and variance per
 `(service, span name)` and opens `slow_span` on
