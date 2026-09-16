@@ -24,7 +24,8 @@ WORKDIR /src
 
 # Dependencies first, so an edit to application code doesn't invalidate the
 # module cache layer.
-COPY forseer/go.mod forseer/go.sum forseer/
+# forseer is stdlib-only (see forseer/MODELS.md), so it has no go.sum.
+COPY forseer/go.mod forseer/
 COPY forsight/go.mod forsight/go.sum forsight/
 WORKDIR /src/forsight
 RUN --mount=type=cache,target=/root/go/pkg/mod \
