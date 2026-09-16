@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"encoding/json"
@@ -18,15 +18,22 @@ import (
 
 // TestBootRealBinary is the end-to-end check ROADMAP.md's "Left out" section
 // asked for: it `go build`s the actual forsight binary — the same command
-// the go job and a real release run — and boots it, so a break in what a
-// user actually runs (wiring in main.go/cmd, the embedded dashboard build
-// under internal/api/webdist/, graceful shutdown) fails a test even though
-// every one of those pieces already has its own unit tests that pass in
+// the go job and a real release run use — and boots it, so a break in what a
+// user actually runs (main.go's wiring, the embedded dashboard build under
+// internal/api/webdist/, graceful shutdown) fails a test even though every
+// one of those pieces already has its own unit tests that pass in
 // isolation. It was left out until now because there was nothing to wait on
 // short of a timing guess: roadmap item 24 added /readyz, and the dashboard
 // embed stopped being a stub once the real build landed in webdist/ (see
 // internal/api/dashboard.go), so a plain `go build` already produces the
 // real thing with no Node involved.
+//
+// It lives in this package rather than as forsight/boot_test.go (package
+// main, next to main.go) so that touching it lands under
+// forsight/cmd/ — the path .github/workflows/forsight-ci.yml's own change
+// detection greps for to decide whether the go job does real work. A
+// top-level boot_test.go would not match that pattern and the job would
+// silently "skip" (still green, never run) on any PR that only touched it.
 //
 // Kept to one boot: building the binary and starting it dominate the run
 // time, so every HTTP assertion below shares the one process rather than
@@ -37,8 +44,14 @@ func TestBootRealBinary(t *testing.T) {
 		t.Skip("go toolchain not on PATH: cannot build the binary to boot")
 	}
 
+	// This test's package directory is forsight/cmd; the module root (where
+	// `go build .` produces the "forsight" binary main.go describes) is its
+	// parent.
+	moduleRoot := ".."
+
 	binPath := filepath.Join(t.TempDir(), "forsight")
 	build := exec.Command(goBin, "build", "-o", binPath, ".")
+	build.Dir = moduleRoot
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
@@ -46,7 +59,7 @@ func TestBootRealBinary(t *testing.T) {
 	addr := freeLoopbackAddr(t)
 	baseURL := "http://" + addr
 
-	cmd := exec.Command(binPath, "run",
+	runCmd := exec.Command(binPath, "run",
 		"--addr", addr,
 		"--store", "memory",
 		"--disable-docker",
@@ -54,27 +67,27 @@ func TestBootRealBinary(t *testing.T) {
 		"--disable-autoscrape",
 	)
 	var output syncBuffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-	if err := cmd.Start(); err != nil {
+	runCmd.Stdout = &output
+	runCmd.Stderr = &output
+	if err := runCmd.Start(); err != nil {
 		t.Fatalf("starting forsight: %v", err)
 	}
 
 	// done closes after Wait returns, carrying waitErr with it — the
 	// channel close is what makes reading waitErr (written on the goroutine
-	// below, read from the test goroutine after SIGINT) and cmd.ProcessState
-	// safe without a mutex of their own.
+	// below, read from the test goroutine after SIGINT) and
+	// runCmd.ProcessState safe without a mutex of their own.
 	done := make(chan struct{})
 	var waitErr error
 	go func() {
-		waitErr = cmd.Wait()
+		waitErr = runCmd.Wait()
 		close(done)
 	}()
 	t.Cleanup(func() {
 		select {
 		case <-done:
 		default:
-			_ = cmd.Process.Kill()
+			_ = runCmd.Process.Kill()
 			<-done
 		}
 	})
@@ -114,7 +127,7 @@ func TestBootRealBinary(t *testing.T) {
 		}
 	})
 
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+	if err := runCmd.Process.Signal(os.Interrupt); err != nil {
 		t.Fatalf("sending SIGINT: %v", err)
 	}
 	select {
@@ -126,9 +139,9 @@ func TestBootRealBinary(t *testing.T) {
 			t.Errorf("Wait: %v\n--- forsight output ---\n%s", waitErr, output.String())
 		}
 	case <-time.After(7 * time.Second):
-		// run's own shutdown budget (see cmd/run.go) is 5s; 7s gives it
-		// margin before this test calls it a hang rather than a slow box.
-		_ = cmd.Process.Kill()
+		// run's own shutdown budget (see run.go) is 5s; 7s gives it margin
+		// before this test calls it a hang rather than a slow box.
+		_ = runCmd.Process.Kill()
 		t.Fatalf("did not exit within the 5s shutdown budget after SIGINT\n--- forsight output ---\n%s", output.String())
 	}
 }
