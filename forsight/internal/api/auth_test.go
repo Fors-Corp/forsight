@@ -42,11 +42,13 @@ func TestBearerAuth_ReadyzOpenWithoutHeader(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /readyz status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
-	// The browser asks for this on its own; a 401 there is only console noise.
+	// The browser asks for this on its own. There is no favicon to serve,
+	// so the answer is the mux's 404 — the point is that it is not the auth
+	// layer's 401, which was only console noise.
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /favicon.ico status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatalf("GET /favicon.ico status = 401; the auth layer should let it through")
 	}
 }
 
