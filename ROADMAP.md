@@ -487,7 +487,7 @@ large conntrack table degrades only that one metric.
 
 ### 15. install.sh verifies what it runs, and stops resetting the unit
 
-- **Area** ops · **Effort** M · **Score** 3.78 · merges the install.sh half of agent-collection-8
+- **Area** ops · **Effort** M · **Score** 3.78 · merges the install.sh half of agent-collection-8 · **Shipped** 2026-09-16, install.sh
 
 **Why.** `.github/workflows/forsight-release.yml:136-139` uploads
 `dist/*.tar.gz` and nothing else; `forsight/install.sh:45-46` curls and untars
