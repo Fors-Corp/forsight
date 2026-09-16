@@ -48,6 +48,37 @@ func TestCollect_EmitsRSSAlwaysAndCPUOnSecondSighting(t *testing.T) {
 	}
 }
 
+func TestCollect_EmitsFDCountAlways(t *testing.T) {
+	c := &Collector{
+		limit: 10,
+		seen:  map[int32]struct{}{},
+		list: func(context.Context) ([]sample, error) {
+			return []sample{
+				{PID: 7, Name: "forsight", CPUPercent: 12.5, RSS: 40 << 20, FDCount: 42},
+				{PID: 9, Name: "idle", CPUPercent: 0.1, RSS: 1 << 20, FDCount: 3},
+			}, nil
+		},
+	}
+
+	got, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countByName(got, "process.fd.count") != 2 {
+		t.Fatalf("fd.count = %d, want 2 (emitted like rss, no prior sample needed): %+v",
+			countByName(got, "process.fd.count"), got)
+	}
+	var fd model.Metric
+	for _, m := range got {
+		if m.Name == "process.fd.count" && m.Labels["name"] == "forsight" {
+			fd = m
+		}
+	}
+	if fd.Value != 42 {
+		t.Errorf("forsight fd.count = %v, want 42", fd.Value)
+	}
+}
+
 func TestCollect_RespectsLimit(t *testing.T) {
 	c := &Collector{
 		limit: 1,

@@ -1,6 +1,6 @@
-// Package proc collects per-process CPU and memory so a default
-// `forsight run` sees what is actually running on the box, not just
-// host-level totals.
+// Package proc collects per-process CPU, memory, and open file descriptors
+// so a default `forsight run` sees what is actually running on the box, not
+// just host-level totals.
 package proc
 
 import (
@@ -23,15 +23,16 @@ type sample struct {
 	Name       string
 	CPUPercent float64
 	RSS        uint64
+	FDCount    int32
 }
 
 // lister is injectable so tests do not need a live process table.
 type lister func(ctx context.Context) ([]sample, error)
 
-// Collector emits process.cpu.percent and process.memory.rss_bytes for the
-// busiest processes (by CPU, then RSS). The first tick for a pid has no CPU
-// percent — gopsutil needs two samples to diff, the same shape as the Docker
-// collector.
+// Collector emits process.cpu.percent, process.memory.rss_bytes, and
+// process.fd.count for the busiest processes (by CPU, then RSS). The first
+// tick for a pid has no CPU percent — gopsutil needs two samples to diff,
+// the same shape as the Docker collector.
 type Collector struct {
 	list  lister
 	limit int
@@ -78,6 +79,9 @@ func (c *Collector) Collect(ctx context.Context) ([]model.Metric, error) {
 		metrics = append(metrics, model.Metric{
 			Name: "process.memory.rss_bytes", Value: float64(s.RSS), Timestamp: now, Labels: labels,
 		})
+		metrics = append(metrics, model.Metric{
+			Name: "process.fd.count", Value: float64(s.FDCount), Timestamp: now, Labels: labels,
+		})
 		if _, ok := prev[s.PID]; ok {
 			metrics = append(metrics, model.Metric{
 				Name: "process.cpu.percent", Value: s.CPUPercent, Timestamp: now, Labels: labels,
@@ -108,7 +112,8 @@ func listLive(ctx context.Context) ([]sample, error) {
 		if err == nil && mem != nil {
 			rss = mem.RSS
 		}
-		out = append(out, sample{PID: p.Pid, Name: name, CPUPercent: cpu, RSS: rss})
+		fds, _ := p.NumFDsWithContext(ctx)
+		out = append(out, sample{PID: p.Pid, Name: name, CPUPercent: cpu, RSS: rss, FDCount: fds})
 	}
 	return out, nil
 }
