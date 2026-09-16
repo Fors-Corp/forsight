@@ -862,3 +862,7 @@ are the judges' composites.
   test** (quality-dx-1, quality-dx-9, dashboard-ux-7, design-system-2, -3, -5,
   -6, agent-collection-10, mlaas-depth-9, -10; all at or below 3.18). Low
   value, wrong shape, or no consumer. The judges' notes stand.
+
+## Shipped after the roadmap
+
+- **End-to-end boot test of the real binary** — `forsight/boot_test.go` `go build`s the actual binary and boots it against `--store memory`, waiting on `/readyz` before asserting the embedded dashboard, `/api/v1/metrics`, `/healthz`, and a clean SIGINT shutdown, 2026-09-16, PR TBD.
