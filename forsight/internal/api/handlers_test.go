@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/marcfs31/forsight/forseer"
+	"github.com/marcfs31/forsight/forsight/internal/collector"
 	"github.com/marcfs31/forsight/forsight/internal/model"
 	"github.com/marcfs31/forsight/forsight/internal/store"
 )
@@ -502,5 +504,109 @@ func TestForseerModels_EmptyWithoutAnEngine(t *testing.T) {
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "[]" {
 		t.Errorf("body %q, want []", body)
+	}
+}
+
+// pingFailingStore wraps a real Store so handleReadyz's 503 path can be
+// exercised without needing a real failure mode of a concrete store — only
+// Ping's result differs from the store it wraps (BadgerStore's own genuine
+// failure, a closed database, is covered by
+// internal/store's TestBadgerStore_PingFailsAfterClose).
+type pingFailingStore struct {
+	store.Store
+	err error
+}
+
+func (s pingFailingStore) Ping(context.Context) error { return s.err }
+
+// fakeCollector is a minimal collector.Collector for exercising
+// handleReadyz's registry-attached path without pulling in a real one.
+type fakeCollector struct{ name string }
+
+func (c fakeCollector) Name() string { return c.name }
+func (c fakeCollector) Collect(context.Context) ([]model.Metric, error) {
+	return nil, nil
+}
+
+func TestHandleReadyz_ReadyWhenStoreIsHealthy(t *testing.T) {
+	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body readyzResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if body.Status != "ready" {
+		t.Errorf("status = %q, want ready", body.Status)
+	}
+	if body.StoreError != "" {
+		t.Errorf("storeError = %q, want empty", body.StoreError)
+	}
+}
+
+func TestHandleReadyz_UnavailableWhenStorePingFails(t *testing.T) {
+	failing := pingFailingStore{Store: store.NewMemoryStore(time.Hour), err: errors.New("disk full")}
+	s := NewServer(failing, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body readyzResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if body.Status != "unavailable" {
+		t.Errorf("status = %q, want unavailable", body.Status)
+	}
+	if body.StoreError != "disk full" {
+		t.Errorf("storeError = %q, want %q", body.StoreError, "disk full")
+	}
+}
+
+// TestHandleReadyz_CollectorErrorDoesNotFailTheProbe is the regression test
+// for the Why in ROADMAP.md item 24: a collector's own error (a missing
+// Docker socket, say) must never turn /readyz's 200 into a 503 — only the
+// store's own Ping does that. Reporting it is still expected, just not as a
+// failure.
+func TestHandleReadyz_CollectorErrorDoesNotFailTheProbe(t *testing.T) {
+	st := store.NewMemoryStore(time.Hour)
+	registry := collector.NewRegistry(st, time.Hour, nil, fakeCollector{name: "docker"})
+	s := NewServer(st, nil, nil, nil).WithRegistry(registry)
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body readyzResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if len(body.Collectors) != 1 || body.Collectors[0].Name != "docker" {
+		t.Errorf("collectors = %+v, want one entry named docker", body.Collectors)
+	}
+}
+
+// TestHandleReadyz_OmitsCollectorsWithoutARegistry covers cmd/demo's
+// wiring: no Registry means nothing meaningful to report, so the field is
+// left out of the body entirely rather than an empty array.
+func TestHandleReadyz_OmitsCollectorsWithoutARegistry(t *testing.T) {
+	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if _, ok := raw["collectors"]; ok {
+		t.Errorf("body has a collectors field with no registry attached: %s", rec.Body.String())
 	}
 }

@@ -31,12 +31,30 @@ type Sink interface {
 	WriteMetrics(ctx context.Context, metrics []model.Metric) error
 }
 
+// CollectorStatus is one collector's most recent outcome: whether its last
+// tick (Collect, or the sink write that followed it) succeeded, and when
+// that tick ran. /readyz (see internal/api's handleReadyz) reports these
+// alongside the store's own health, which is what lets a missing Docker
+// socket show up in the probe's response without ever failing the probe —
+// see Registry.Statuses.
+type CollectorStatus struct {
+	Name string `json:"name"`
+	// LastError is empty when the collector's last tick succeeded, or it
+	// hasn't run one yet.
+	LastError string `json:"lastError,omitempty"`
+	// LastRunAt is the zero time until the collector's first tick completes.
+	LastRunAt time.Time `json:"lastRunAt"`
+}
+
 // Registry runs a fixed set of collectors on independent tickers.
 type Registry struct {
 	collectors []Collector
 	interval   time.Duration
 	sink       Sink
 	logger     *slog.Logger
+
+	mu       sync.Mutex
+	statuses map[string]CollectorStatus
 }
 
 // NewRegistry builds a Registry. interval applies to every collector; a
@@ -46,7 +64,37 @@ func NewRegistry(sink Sink, interval time.Duration, logger *slog.Logger, collect
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Registry{collectors: collectors, interval: interval, sink: sink, logger: logger}
+	statuses := make(map[string]CollectorStatus, len(collectors))
+	for _, c := range collectors {
+		statuses[c.Name()] = CollectorStatus{Name: c.Name()}
+	}
+	return &Registry{collectors: collectors, interval: interval, sink: sink, logger: logger, statuses: statuses}
+}
+
+// Statuses returns every collector's most recent outcome, in the same order
+// the collectors were registered. Safe to call concurrently with Run — it is
+// meant to be called from an HTTP handler goroutine while Run's own
+// goroutines keep ticking.
+func (r *Registry) Statuses() []CollectorStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]CollectorStatus, 0, len(r.collectors))
+	for _, c := range r.collectors {
+		out = append(out, r.statuses[c.Name()])
+	}
+	return out
+}
+
+// setStatus records the outcome of a collector's tick for Statuses to
+// report. err is nil on success.
+func (r *Registry) setStatus(name string, err error) {
+	st := CollectorStatus{Name: name, LastRunAt: time.Now()}
+	if err != nil {
+		st.LastError = err.Error()
+	}
+	r.mu.Lock()
+	r.statuses[name] = st
+	r.mu.Unlock()
 }
 
 // Run starts every collector on its own goroutine/ticker and blocks until ctx
@@ -82,12 +130,17 @@ func (r *Registry) collectOnce(ctx context.Context, c Collector) {
 	metrics, err := c.Collect(ctx)
 	if err != nil {
 		r.logger.Warn("collector failed", "collector", c.Name(), "error", err)
+		r.setStatus(c.Name(), err)
 		return
 	}
 	if len(metrics) == 0 {
+		r.setStatus(c.Name(), nil)
 		return
 	}
 	if err := r.sink.WriteMetrics(ctx, metrics); err != nil {
 		r.logger.Warn("failed to write collected metrics", "collector", c.Name(), "error", err)
+		r.setStatus(c.Name(), err)
+		return
 	}
+	r.setStatus(c.Name(), nil)
 }

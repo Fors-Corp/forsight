@@ -640,7 +640,7 @@ to learn. `make demo` runs it against the memory store.
 
 ### 21. Drift as a Badge with a not-measured state
 
-- **Area** mlaas · **Effort** S · **Score** 3.33 · corrected
+- **Area** mlaas · **Effort** S · **Score** 3.33 · corrected · **Shipped** 2026-09-16, `buildModelsLocked` in `forsight/internal/mlaas/sync.go`
 
 **Why.** `Models.tsx:388` renders `model.driftMax.toFixed(2)`;
 `types.go:144`'s `DriftMax` is a plain `float64` copied at `sync.go:685` from
@@ -674,7 +674,8 @@ gains a check with `drift` and one without. Still S.
 
 ### 22. Culprits ranked by change, not raw CPU, with a card
 
-- **Area** forseer · **Effort** M · **Score** 2.98 · reframed
+- **Area** forseer · **Effort** M · **Score** 2.98 · reframed · **Shipped**
+  2026-09-16, `culpritModel` in `forseer/culprit.go`
 
 **Why.** `forseer/engine.go:176-181` sorts processes by raw CPU, keeps three,
 and drops any under 20%. A process that went from 2% to 18% during the spike
@@ -724,7 +725,7 @@ then `forsight/web/src/pages/Models.tsx`.
 
 ### 24. A DaemonSet that can actually run: image, probes, `/readyz`
 
-- **Area** ops · **Effort** M · **Score** 3.52 · merges agent-collection-9
+- **Area** ops · **Effort** M · **Score** 3.52 · merges agent-collection-9 · **Shipped** 2026-09-16, `handleReadyz` in `forsight/internal/api/handlers.go`
 
 **Why.** `forsight/deploy/k8s/daemonset.yaml:53` pins
 `ghcr.io/marcfs31/forsight:latest`; there is no Dockerfile in the repo and no

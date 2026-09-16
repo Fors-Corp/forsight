@@ -59,4 +59,12 @@ type Store interface {
 
 	WriteLogs(ctx context.Context, logs []model.LogEntry) error
 	QueryLogs(ctx context.Context, q LogQuery) ([]model.LogEntry, error)
+
+	// Ping reports whether the store can currently serve requests. It exists
+	// for /readyz (see internal/api's handleReadyz): a query method can
+	// succeed against an empty window even when the underlying resource
+	// (a closed Badger database, say) is failing every real read, so
+	// readiness needs its own cheap, always-attempted check rather than
+	// inferring health from whatever the last query happened to return.
+	Ping(ctx context.Context) error
 }
