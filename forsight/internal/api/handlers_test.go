@@ -103,9 +103,34 @@ func TestHandleMetrics_LimitAndBefore(t *testing.T) {
 	}
 }
 
+func TestHandleMetrics_PerName(t *testing.T) {
+	st := store.NewMemoryStore(time.Hour)
+	base := time.Now().Add(-30 * time.Minute)
+	_ = st.WriteMetrics(context.Background(), []model.Metric{
+		{Name: "busy", Value: 1, Timestamp: base},
+		{Name: "quiet", Value: 10, Timestamp: base.Add(30 * time.Second)},
+		{Name: "busy", Value: 2, Timestamp: base.Add(time.Minute)},
+		{Name: "busy", Value: 3, Timestamp: base.Add(2 * time.Minute)},
+	})
+	s := NewServer(st, nil, nil, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics?per_name=1", nil)
+	s.Handler().ServeHTTP(rec, req)
+	var got []model.Metric
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	// The newest of each name, oldest-first: quiet's only point, then busy's
+	// third. A plain limit=2 would have answered busy's last two instead.
+	if len(got) != 2 || got[0].Name != "quiet" || got[0].Value != 10 || got[1].Name != "busy" || got[1].Value != 3 {
+		t.Fatalf("per_name=1 returned %+v, want the newest point of each name", got)
+	}
+}
+
 func TestHandleMetrics_RejectsInvalidLimitAndBefore(t *testing.T) {
 	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil)
-	for _, query := range []string{"limit=abc", "limit=0", "limit=-5", "before=not-a-date"} {
+	for _, query := range []string{"limit=abc", "limit=0", "limit=-5", "before=not-a-date", "per_name=abc", "per_name=0", "per_name=-1"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics?"+query, nil)
 		s.Handler().ServeHTTP(rec, req)

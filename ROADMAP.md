@@ -337,7 +337,7 @@ retention.
 
 ### 10. Limit and Before on every store query, walking newest-first
 
-- **Area** agent · **Effort** M · **Score** 3.93 · corrected · **Shipped** 2026-09-16, `scanNewestFirst` in `forsight/internal/store/badger.go`; metrics reads stay uncapped until there is a per-name history read
+- **Area** agent · **Effort** M · **Score** 3.93 · corrected · **Shipped** 2026-09-16, `scanNewestFirst` in `forsight/internal/store/badger.go`; the per-name cap (`MetricQuery.PerName`, `?per_name=`) followed on 2026-09-17, so an unscoped metrics read is bounded per name instead of uncapped
 
 **Why.** `forsight/internal/store/store.go:19-37`: `MetricQuery`, `SpanQuery`
 and `LogQuery` carry Name, Labels and Since and nothing that bounds the
