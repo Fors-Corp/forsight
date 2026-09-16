@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcfs31/forsight/forsight/internal/logsafe"
 	"github.com/marcfs31/forsight/forsight/internal/model"
 	"github.com/marcfs31/forsight/forsight/internal/store"
 )
@@ -270,7 +271,7 @@ func (s *Syncer) pass(ctx context.Context) {
 	}
 
 	if err := s.client.Healthz(ctx); err != nil {
-		s.logger.Warn("mlaas unreachable; skipping sync pass", "url", s.displayURL, "err", err)
+		s.logger.Warn("mlaas unreachable; skipping sync pass", "url", s.displayURL, "err", logsafe.Err(err))
 		note(err)
 		s.markUnreachable(err)
 		finish()
@@ -278,7 +279,7 @@ func (s *Syncer) pass(ctx context.Context) {
 	}
 	datasets, err := s.client.ListDatasets(ctx)
 	if err != nil {
-		s.logger.Warn("mlaas: list datasets", "err", err)
+		s.logger.Warn("mlaas: list datasets", "err", logsafe.Err(err))
 		note(err)
 		s.markUnreachable(err)
 		finish()
@@ -286,7 +287,7 @@ func (s *Syncer) pass(ctx context.Context) {
 	}
 	models, err := s.client.ListModels(ctx)
 	if err != nil {
-		s.logger.Warn("mlaas: list models", "err", err)
+		s.logger.Warn("mlaas: list models", "err", logsafe.Err(err))
 		note(err)
 		s.markUnreachable(err)
 		finish()
@@ -351,7 +352,7 @@ func (s *Syncer) pass(ctx context.Context) {
 				continue
 			}
 			if _, err := s.client.UploadDataset(ctx, ds, csvBytes); err != nil {
-				s.logger.Warn("mlaas: upload dataset", "dataset", ds, "err", err)
+				s.logger.Warn("mlaas: upload dataset", "dataset", logsafe.String(ds), "err", logsafe.Err(err))
 				note(err)
 				continue
 			}
@@ -382,13 +383,13 @@ func (s *Syncer) pass(ctx context.Context) {
 				// instead of sending it and having the whole batch refused.
 				got, err := s.client.GetModel(ctx, name)
 				if err != nil {
-					s.logger.Warn("mlaas: get model", "model", name, "err", err)
+					s.logger.Warn("mlaas: get model", "model", logsafe.String(name), "err", logsafe.Err(err))
 					note(err)
 					continue
 				}
 				wm = got
 			default:
-				s.logger.Warn("mlaas: create model", "model", name, "err", err)
+				s.logger.Warn("mlaas: create model", "model", logsafe.String(name), "err", logsafe.Err(err))
 				note(err)
 				continue
 			}
@@ -396,7 +397,7 @@ func (s *Syncer) pass(ctx context.Context) {
 			// be one behind a 409) and whether a job is already running.
 			h, err := s.client.GetHealth(ctx, name)
 			if err != nil {
-				s.logger.Warn("mlaas: model health", "model", name, "err", err)
+				s.logger.Warn("mlaas: model health", "model", logsafe.String(name), "err", logsafe.Err(err))
 				note(err)
 				continue
 			}
@@ -408,7 +409,7 @@ func (s *Syncer) pass(ctx context.Context) {
 			if health == nil {
 				h, err := s.client.GetHealth(ctx, name)
 				if err != nil {
-					s.logger.Warn("mlaas: model health", "model", name, "err", err)
+					s.logger.Warn("mlaas: model health", "model", logsafe.String(name), "err", logsafe.Err(err))
 					note(err)
 					continue
 				}
@@ -417,7 +418,7 @@ func (s *Syncer) pass(ctx context.Context) {
 			if !health.ActiveJob {
 				ref, err := s.client.Train(ctx, name)
 				if err != nil {
-					s.logger.Warn("mlaas: train", "model", name, "err", err)
+					s.logger.Warn("mlaas: train", "model", logsafe.String(name), "err", logsafe.Err(err))
 					note(err)
 					continue
 				}
@@ -505,7 +506,7 @@ func (s *Syncer) forecast(ctx context.Context, m managedModel, rows []row) error
 	origin := rows[len(rows)-1].at
 	var firstErr error
 	if _, err := s.client.Actual(ctx, name, origin); err != nil {
-		s.logger.Warn("mlaas: actual", "model", name, "err", err)
+		s.logger.Warn("mlaas: actual", "model", logsafe.String(name), "err", logsafe.Err(err))
 		firstErr = err
 	}
 	predRows := make([]map[string]any, len(forecastHorizons))
@@ -531,7 +532,7 @@ func (s *Syncer) forecast(ctx context.Context, m managedModel, rows []row) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
-		s.logger.Warn("mlaas: predict", "model", name, "err", err)
+		s.logger.Warn("mlaas: predict", "model", logsafe.String(name), "err", logsafe.Err(err))
 		delete(s.forecasts, name)
 		if firstErr == nil {
 			firstErr = err
@@ -580,7 +581,7 @@ func (s *Syncer) feedback(ctx context.Context, m managedModel, classes []string,
 	}
 	resp, err := s.client.Predict(ctx, name, rows)
 	if err != nil {
-		s.logger.Warn("mlaas: predict", "model", name, "err", err)
+		s.logger.Warn("mlaas: predict", "model", logsafe.String(name), "err", logsafe.Err(err))
 		return err
 	}
 	if len(resp.Predictions) != len(rows) {
@@ -614,7 +615,7 @@ func (s *Syncer) feedback(ctx context.Context, m managedModel, classes []string,
 	var feedbackErr error
 	if len(labels) > 0 {
 		if _, err := s.client.Feedback(ctx, labels); err != nil {
-			s.logger.Warn("mlaas: feedback", "model", name, "err", err)
+			s.logger.Warn("mlaas: feedback", "model", logsafe.String(name), "err", logsafe.Err(err))
 			feedbackErr = err
 		}
 	}
