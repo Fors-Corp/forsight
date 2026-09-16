@@ -26,6 +26,7 @@ import (
 	"github.com/marcfs31/forsight/forsight/internal/collector/filelog"
 	hostcollector "github.com/marcfs31/forsight/forsight/internal/collector/host"
 	"github.com/marcfs31/forsight/forsight/internal/collector/otlp"
+	"github.com/marcfs31/forsight/forsight/internal/collector/probe"
 	proccollector "github.com/marcfs31/forsight/forsight/internal/collector/proc"
 	"github.com/marcfs31/forsight/forsight/internal/collector/promscrape"
 	"github.com/marcfs31/forsight/forsight/internal/collector/statsd"
@@ -48,6 +49,7 @@ type runOptions struct {
 	disableStatsd     bool
 	disableAutoscrape bool
 	scrapeTargets     []string
+	probeTargets      []string
 	statsdAddr        string
 	logFiles          []string
 	errorSLO          float64
@@ -94,6 +96,10 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.scrapeTargets, "scrape", nil,
 		"Prometheus exposition endpoint to scrape on --collect-interval; repeatable. "+
 			"Optionally prefix a job name: --scrape node=http://localhost:9100/metrics")
+	cmd.Flags().StringArrayVar(&opts.probeTargets, "probe", nil,
+		"HTTP(S) URL to GET on --collect-interval, reporting up/status/latency and, for "+
+			"https, certificate expiry; repeatable. Optionally prefix a name: "+
+			"--probe checkout=https://example.com/healthz")
 	cmd.Flags().StringVar(&opts.statsdAddr, "statsd-addr", ":8125",
 		"listen for StatsD/DogStatsD metrics over UDP (default :8125 so a bare install receives them; --disable-statsd turns it off)")
 	cmd.Flags().StringArrayVar(&opts.logFiles, "log-file", nil,
@@ -130,6 +136,10 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 	// Validated up front, before the store (possibly a Badger database) is
 	// opened, so a bad --scrape value fails fast with nothing to clean up.
 	targets, err := parseScrapeTargets(opts.scrapeTargets)
+	if err != nil {
+		return err
+	}
+	probeTargets, err := parseProbeTargets(opts.probeTargets)
 	if err != nil {
 		return err
 	}
@@ -193,6 +203,13 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 		collectors = append(collectors, promscrape.New(targets))
 		for _, t := range targets {
 			logger.Info("scraping Prometheus target", "url", t.URL, "job", t.Labels["job"])
+		}
+	}
+
+	if len(probeTargets) > 0 {
+		collectors = append(collectors, probe.New(probeTargets, opts.collectInterval))
+		for _, t := range probeTargets {
+			logger.Info("probing target", "url", t.URL, "name", t.Name)
 		}
 	}
 
@@ -651,6 +668,29 @@ func parseScrapeTargets(values []string) ([]promscrape.Target, error) {
 			job = u.Host
 		}
 		targets = append(targets, promscrape.Target{URL: raw, Labels: map[string]string{"job": job}})
+	}
+	return targets, nil
+}
+
+// parseProbeTargets turns --probe values into probe targets, the same
+// optional "name=" prefix convention as --scrape's "job=" (see
+// parseScrapeTargets above): a bare URL is named after its host, and a
+// prefix wins.
+func parseProbeTargets(values []string) ([]probe.Target, error) {
+	targets := make([]probe.Target, 0, len(values))
+	for _, v := range values {
+		name, raw := "", v
+		if prefix, rest, found := strings.Cut(v, "="); found && !strings.Contains(prefix, "/") {
+			name, raw = prefix, rest
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return nil, fmt.Errorf("--probe %q: want an absolute URL like https://host/healthz, optionally prefixed name=", v)
+		}
+		if name == "" {
+			name = u.Host
+		}
+		targets = append(targets, probe.Target{URL: raw, Name: name})
 	}
 	return targets, nil
 }
