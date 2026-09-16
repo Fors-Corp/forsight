@@ -63,7 +63,8 @@ func newDemoCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&opts.addr, "addr", ":8080", "address to serve the API and dashboard on")
 	cmd.Flags().StringVar(&opts.authToken, "auth-token", "",
-		"require Authorization: Bearer <token> on every route except GET /healthz; "+
+		"require Authorization: Bearer <token> on every route except the dashboard's "+
+			"static shell and GET /healthz; "+
 			"also read from FORSIGHT_AUTH_TOKEN when the flag is empty (auth is off by default)")
 	cmd.Flags().DurationVar(&opts.backfill, "backfill", 6*time.Hour,
 		"how much synthetic history to generate before serving, so the dashboard opens already "+

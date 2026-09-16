@@ -1,4 +1,115 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+
+// ---------------------------------------------------------------------------
+// Auth: forsight/internal/api/auth.go rejects every route but the
+// dashboard's own static shell once --auth-token is set, so every fetch in
+// this file goes through fetchWithAuth below instead of calling the global
+// fetch directly. The token lives only in sessionStorage (cleared when the
+// tab closes — never localStorage, which would outlive it) and the
+// Authorization header; it is never put in a URL, a query string, or a log
+// line, and this module never lets a caller print it either.
+// ---------------------------------------------------------------------------
+
+const AUTH_TOKEN_KEY = "forsight.authToken";
+
+/** What App renders the token dialog from. `rejected` distinguishes "no
+ *  token has been entered yet" (first load under --auth-token) from "the
+ *  one that was just tried came back 401" (a wrong guess), so the dialog
+ *  can show an error only in the second case. */
+export interface AuthPromptState {
+  open: boolean;
+  rejected: boolean;
+}
+
+const NO_PROMPT: AuthPromptState = { open: false, rejected: false };
+
+// Fired whenever submitAuthToken runs, so every usePoll loop on the page
+// (Overview and Models each mount several) retries immediately instead of
+// leaving stale "unauthorized" data on screen until its own next scheduled
+// tick — which, for the slower pollers, is tens of seconds away.
+const AUTH_TOKEN_SUBMITTED_EVENT = "forsight:auth-token-submitted";
+
+let authPrompt: AuthPromptState = NO_PROMPT;
+const authListeners = new Set<() => void>();
+
+function setAuthPrompt(next: AuthPromptState) {
+  authPrompt = next;
+  for (const listener of authListeners) listener();
+}
+
+function subscribeAuthPrompt(listener: () => void): () => void {
+  authListeners.add(listener);
+  return () => {
+    authListeners.delete(listener);
+  };
+}
+
+/** The token dialog's state, live: opens the moment any fetchWithAuth call
+ *  gets a 401, closes the moment submitAuthToken runs. */
+export function useAuthPrompt(): AuthPromptState {
+  return useSyncExternalStore(
+    subscribeAuthPrompt,
+    () => authPrompt,
+    () => NO_PROMPT
+  );
+}
+
+function readStoredToken(): string {
+  try {
+    return sessionStorage.getItem(AUTH_TOKEN_KEY) ?? "";
+  } catch {
+    // Private browsing, or sessionStorage disabled entirely: fall back to
+    // sending no token, same as if the user hadn't typed one in yet.
+    return "";
+  }
+}
+
+function storeToken(token: string) {
+  try {
+    if (token) sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+    else sessionStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch {
+    // Nothing to persist to, but fetchWithAuth still reads the in-memory
+    // `token` argument's effect for the rest of this tab's life — it just
+    // won't survive a reload.
+  }
+}
+
+/** The token dialog's submit handler calls this. Closes the prompt
+ *  optimistically, and wakes every mounted usePoll loop so the page's data
+ *  arrives right away instead of waiting for each poller's own next tick.
+ *  A wrong guess reopens the prompt (this time with `rejected: true`) as
+ *  soon as the retried request 401s. */
+export function submitAuthToken(token: string): void {
+  storeToken(token);
+  setAuthPrompt(NO_PROMPT);
+  window.dispatchEvent(new Event(AUTH_TOKEN_SUBMITTED_EVENT));
+}
+
+/**
+ * `fetch`, but with the stored bearer token attached whenever one is on
+ * hand, and the token dialog opened the moment a response comes back 401 —
+ * every call in this file uses this instead of the global `fetch` so no
+ * poll or action can silently skip the header. A 401 also clears the
+ * stored token, since it's now known bad (either never set, or rejected):
+ * leaving it in place would just 401 again on the next poll with no way for
+ * the dialog to tell "still waiting for the first token" from "reopened
+ * after a rejection".
+ */
+export async function fetchWithAuth(
+  input: RequestInfo | URL,
+  init: RequestInit = {}
+): Promise<Response> {
+  const token = readStoredToken();
+  const headers = new Headers(init.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(input, { ...init, headers });
+  if (res.status === 401) {
+    storeToken("");
+    setAuthPrompt({ open: true, rejected: token !== "" });
+  }
+  return res;
+}
 
 export interface Metric {
   name: string;
@@ -89,7 +200,7 @@ export function usePoll<T>(
       try {
         const current = pathRef.current;
         const url = typeof current === "function" ? current() : current;
-        const res = await fetch(url, { signal: controller.signal });
+        const res = await fetchWithAuth(url, { signal: controller.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = parseRef.current(await res.json());
         if (!disposed) {
@@ -119,14 +230,24 @@ export function usePoll<T>(
       if (!document.hidden) void poll();
     }
 
+    // A submitted token means the last request that just 401'd is worth
+    // retrying now rather than on this poller's own next scheduled tick,
+    // which for a 30s/60s poller would otherwise leave a stale
+    // "unauthorized" snapshot on screen well after the dialog closes.
+    function onAuthTokenSubmitted() {
+      if (!document.hidden) void poll();
+    }
+
     if (!document.hidden) void poll();
     schedule();
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener(AUTH_TOKEN_SUBMITTED_EVENT, onAuthTokenSubmitted);
     return () => {
       disposed = true;
       clearTimeout(timer);
       inFlight?.controller.abort();
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener(AUTH_TOKEN_SUBMITTED_EVENT, onAuthTokenSubmitted);
     };
   }, [pathKey, intervalMs]);
 
@@ -363,7 +484,7 @@ export interface ForseerQueryResult {
 }
 
 export async function queryForseer(q: string): Promise<ForseerQueryResult> {
-  const res = await fetch("/api/v1/forseer/query?q=" + encodeURIComponent(q));
+  const res = await fetchWithAuth("/api/v1/forseer/query?q=" + encodeURIComponent(q));
   if (!res.ok) return { facets: [], matched: false };
   const data = (await res.json()) as Partial<ForseerQueryResult>;
   return {
@@ -555,7 +676,7 @@ async function errorFrom(res: Response): Promise<string> {
 
 async function postJob(path: string): Promise<({ ok: true } & MlaasJobRef) | ApiFailure> {
   try {
-    const res = await fetch(path, { method: "POST" });
+    const res = await fetchWithAuth(path, { method: "POST" });
     if (!res.ok) return { ok: false, error: await errorFrom(res) };
     const data = (await res.json()) as Partial<MlaasJobRef>;
     return { ok: true, jobId: Number(data.jobId ?? 0), alreadyQueued: Boolean(data.alreadyQueued) };
@@ -580,7 +701,7 @@ export async function predictMlaas(
   rows: Array<Record<string, unknown>>
 ): Promise<({ ok: true } & PredictResult) | ApiFailure> {
   try {
-    const res = await fetch(`/api/v1/mlaas/models/${encodeURIComponent(name)}/predict`, {
+    const res = await fetchWithAuth(`/api/v1/mlaas/models/${encodeURIComponent(name)}/predict`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ rows }),
@@ -604,7 +725,9 @@ export async function classifyForseer(
   message: string
 ): Promise<({ ok: true } & ClassifyResult) | ApiFailure> {
   try {
-    const res = await fetch("/api/v1/forseer/classify?message=" + encodeURIComponent(message));
+    const res = await fetchWithAuth(
+      "/api/v1/forseer/classify?message=" + encodeURIComponent(message)
+    );
     if (!res.ok) return { ok: false, error: await errorFrom(res) };
     const data = (await res.json()) as Partial<ClassifyResult>;
     return {
