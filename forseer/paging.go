@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 )
@@ -415,7 +416,10 @@ func (m *pagingModel) Snapshot() ([]byte, error) {
 // logistic model itself. Bounded the same way clusterLocked keeps it
 // bounded live: a snapshot with more than maxClusters entries is truncated
 // on the way in, never grown past the cap the running model itself never
-// exceeds.
+// exceeds — and the entries kept are the maxClusters most recently trained
+// ones (by each cluster's own Last), the same LRU order clusterLocked itself
+// evicts by when it is the running model doing the evicting, rather than an
+// arbitrary subset picked by Go's randomized map iteration order.
 //
 // What does not come back:
 //   - The prequential grading window (grades, fallbackGrade, gradePos,
@@ -440,11 +444,26 @@ func (m *pagingModel) Restore(data []byte) error {
 	if snap.Version != pagingSnapshotVersion {
 		return fmt.Errorf("paging snapshot version %d, want %d", snap.Version, pagingSnapshotVersion)
 	}
-	clusters := make(map[string]*pagingCluster, len(snap.Clusters))
-	for id, c := range snap.Clusters {
-		if len(clusters) >= maxClusters {
-			break
+	ids := make([]string, 0, len(snap.Clusters))
+	for id := range snap.Clusters {
+		ids = append(ids, id)
+	}
+	// Newest Last first, so truncating to maxClusters below drops the
+	// oldest-trained clusters — the same ones clusterLocked would have
+	// evicted live — rather than a map-iteration-order-dependent subset.
+	sort.Slice(ids, func(i, j int) bool {
+		li, lj := snap.Clusters[ids[i]].Last, snap.Clusters[ids[j]].Last
+		if !li.Equal(lj) {
+			return li.After(lj)
 		}
+		return ids[i] < ids[j]
+	})
+	if len(ids) > maxClusters {
+		ids = ids[:maxClusters]
+	}
+	clusters := make(map[string]*pagingCluster, len(ids))
+	for _, id := range ids {
+		c := snap.Clusters[id]
 		clusters[id] = &pagingCluster{w: c.W, trained: c.Trained, last: c.Last}
 	}
 	m.mu.Lock()
