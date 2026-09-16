@@ -40,17 +40,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - language: actions # the workflows in .github/workflows
+          - language: actions
             build-mode: none
           - language: javascript-typescript
             build-mode: none
+          - language: go
+            build-mode: manual
     steps:
       - uses: actions/checkout@v7
+      - if: matrix.language == 'go'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: forsight/go.mod
       - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: security-and-quality
+      - if: matrix.language == 'go'
+        run: go build ./...
+        working-directory: forsight
       - uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
