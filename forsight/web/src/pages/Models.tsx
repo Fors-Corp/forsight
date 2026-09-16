@@ -517,7 +517,7 @@ function ForecastsCard({ forecasts, metrics }: { forecasts: MlaasForecast[]; met
  * so there's no reason to pull the server's entire retained window every
  * poll just to throw most of it away. */
 function ForecastsSection({ forecasts }: { forecasts: MlaasForecast[] }) {
-  const metrics = useMetrics(10000, { sinceMinutes: 60 });
+  const metrics = useMetrics(10000, { sinceMinutes: 60 }).data;
   return <ForecastsCard forecasts={forecasts} metrics={metrics} />;
 }
 
@@ -787,8 +787,8 @@ function JobsCard({ jobs }: { jobs: MlaasJob[] }) {
  * job (log severity) and see the forecasts the agent cannot make on its own.
  */
 export default function Models() {
-  const cards = useForseerModels(10000);
-  const status = useMlaasStatus(10000);
+  const cards = useForseerModels(10000).data;
+  const status = useMlaasStatus(10000).data;
   const forecasts = status?.forecasts ?? [];
 
   return (

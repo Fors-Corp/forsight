@@ -184,7 +184,7 @@ secret (Marc).
 
 ### 5. One `usePoll` helper with a real connection state
 
-- **Area** dashboard · **Effort** M · **Score** 4.12 · merges dashboard-ux-9, dashboard-ux-10
+- **Area** dashboard · **Effort** M · **Score** 4.12 · merges dashboard-ux-9, dashboard-ux-10 · **Shipped** 2026-09-16, `usePoll` and `connectionState` in `forsight/web/src/api.ts`
 
 **Why.** `Overview.tsx:286` computes
 `connected = metrics.length > 0 || logs.length > 0`, and every hook in

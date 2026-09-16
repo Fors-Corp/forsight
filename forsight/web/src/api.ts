@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface Metric {
   name: string;
@@ -26,72 +26,166 @@ export interface UseMetricsOptions {
   sinceMinutes?: number;
 }
 
+export interface PollState<T> {
+  /** The last successful response, or the hook's initial value until one lands. */
+  data: T;
+  /** Wall-clock time (ms) of the last 2xx response; null until the first. */
+  lastSuccessAt: number | null;
+  /** Wall-clock time (ms) of the last failed poll — a non-2xx status, a
+   *  network error, a body the hook could not parse, or a request that
+   *  outlived two intervals and was abandoned. Null until one happens, and
+   *  not cleared by a later success, so `lastErrorAt > lastSuccessAt` reads
+   *  as "failing right now". */
+  lastErrorAt: number | null;
+}
+
+/**
+ * Polls `path` every `intervalMs` and keeps the last good snapshot across
+ * failures. Every hook below is one line over this.
+ *
+ * - The first poll is immediate. Later ones fire on the interval's wall-clock
+ *   boundary (`Date.now() % intervalMs`), so every poller on the page with
+ *   the same interval fires together instead of drifting apart.
+ * - Nothing is fetched while the tab is hidden; a poll fires the moment it
+ *   becomes visible again.
+ * - One request in flight at a time. A request that has outlived two full
+ *   intervals is aborted and counted as a failure, so a hung agent still
+ *   advances `lastErrorAt` — the page's connection state depends on that
+ *   re-render. Unmount aborts whatever is in flight.
+ * - `path` may be a function, for a URL that carries the time of the
+ *   request (`?since=`). It is read fresh on every poll, so a caller may
+ *   change it without remounting the hook.
+ * - `parse` normalizes the JSON body; throwing from it counts as a failure
+ *   and keeps the previous snapshot.
+ */
+export function usePoll<T>(
+  path: string | (() => string),
+  intervalMs: number,
+  initial: T,
+  parse: (raw: unknown) => T = (raw) => raw as T
+): PollState<T> {
+  const [state, setState] = useState<PollState<T>>({
+    data: initial,
+    lastSuccessAt: null,
+    lastErrorAt: null,
+  });
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  const parseRef = useRef(parse);
+  parseRef.current = parse;
+  // A function path never restarts the loop; a string path does when it changes.
+  const pathKey = typeof path === "string" ? path : null;
+
+  useEffect(() => {
+    let disposed = false;
+    let inFlight: { controller: AbortController; startedAt: number } | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function poll() {
+      if (disposed || inFlight) return;
+      const controller = new AbortController();
+      const request = { controller, startedAt: Date.now() };
+      inFlight = request;
+      try {
+        const current = pathRef.current;
+        const url = typeof current === "function" ? current() : current;
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = parseRef.current(await res.json());
+        if (!disposed) {
+          setState((prev) => ({ data, lastSuccessAt: Date.now(), lastErrorAt: prev.lastErrorAt }));
+        }
+      } catch {
+        if (!disposed) setState((prev) => ({ ...prev, lastErrorAt: Date.now() }));
+      } finally {
+        if (inFlight === request) inFlight = null;
+      }
+    }
+
+    function schedule() {
+      timer = setTimeout(tick, intervalMs - (Date.now() % intervalMs));
+    }
+
+    function tick() {
+      if (inFlight && Date.now() - inFlight.startedAt >= 2 * intervalMs) {
+        inFlight.controller.abort();
+        inFlight = null;
+      }
+      if (!document.hidden) void poll();
+      schedule();
+    }
+
+    function onVisibility() {
+      if (!document.hidden) void poll();
+    }
+
+    if (!document.hidden) void poll();
+    schedule();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+      inFlight?.controller.abort();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [pathKey, intervalMs]);
+
+  return state;
+}
+
+export interface ConnectionState {
+  /** `waiting` until any poller has succeeded once; `live` while the newest
+   *  success is within three intervals; `stale` after that, however many
+   *  snapshots are still on screen. */
+  state: "waiting" | "live" | "stale";
+  /** Milliseconds since the newest success; null while waiting. */
+  silentForMs: number | null;
+}
+
+/** Derives a page's connection to the agent from the pollers it mounts. Pass
+ * the ones that share `intervalMs`; a slower poller would only make the
+ * answer look fresher than it is. */
+export function connectionState(
+  polls: ReadonlyArray<PollState<unknown>>,
+  intervalMs: number,
+  now: number = Date.now()
+): ConnectionState {
+  let newest: number | null = null;
+  for (const poll of polls) {
+    if (poll.lastSuccessAt !== null && (newest === null || poll.lastSuccessAt > newest)) {
+      newest = poll.lastSuccessAt;
+    }
+  }
+  if (newest === null) return { state: "waiting", silentForMs: null };
+  const silentForMs = now - newest;
+  return { state: silentForMs > 3 * intervalMs ? "stale" : "live", silentForMs };
+}
+
+function asArray<T>(raw: unknown): T[] {
+  return Array.isArray(raw) ? (raw as T[]) : [];
+}
+
 /** Polls /api/v1/metrics every `intervalMs` — the server's own MemoryStore
  * already retains the whole window, so with no `sinceMinutes` one fetch
  * returns full history for every metric name, not just the latest point. */
-export function useMetrics(intervalMs: number, options?: UseMetricsOptions): Metric[] {
-  const [metrics, setMetrics] = useState<Metric[]>([]);
+export function useMetrics(intervalMs: number, options?: UseMetricsOptions): PollState<Metric[]> {
   const sinceMinutes = options?.sinceMinutes;
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const url =
-          sinceMinutes === undefined
-            ? "/api/v1/metrics"
-            : `/api/v1/metrics?since=${encodeURIComponent(
-                new Date(Date.now() - sinceMinutes * 60000).toISOString()
-              )}`;
-        const res = await fetch(url);
-        if (!res.ok) return;
-        const data: Metric[] = await res.json();
-        if (!cancelled) setMetrics(data);
-      } catch {
-        // Transient fetch failure — keep showing the last good snapshot
-        // rather than clearing the dashboard to empty.
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [intervalMs, sinceMinutes]);
-
-  return metrics;
+  return usePoll<Metric[]>(
+    sinceMinutes === undefined
+      ? "/api/v1/metrics"
+      : () =>
+          `/api/v1/metrics?since=${encodeURIComponent(
+            new Date(Date.now() - sinceMinutes * 60000).toISOString()
+          )}`,
+    intervalMs,
+    [],
+    asArray
+  );
 }
 
 /** Polls /api/v1/logs every `intervalMs` — same retention window as metrics. */
-export function useLogs(intervalMs: number): LogEntry[] {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await fetch("/api/v1/logs");
-        if (!res.ok) return;
-        const data: LogEntry[] = await res.json();
-        if (!cancelled) setLogs(data);
-      } catch {
-        // Keep the last good snapshot on transient failure.
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [intervalMs]);
-
-  return logs;
+export function useLogs(intervalMs: number): PollState<LogEntry[]> {
+  return usePoll<LogEntry[]>("/api/v1/logs", intervalMs, [], asArray);
 }
 
 /** Every point for one metric name, oldest first (LineChart expects that order). */
@@ -177,60 +271,12 @@ export interface ForseerCluster {
   sample: string;
 }
 
-export function useInsights(intervalMs: number): ForseerInsight[] {
-  const [items, setItems] = useState<ForseerInsight[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await fetch("/api/v1/forseer/insights");
-        if (!res.ok) return;
-        const data: ForseerInsight[] = await res.json();
-        if (!cancelled) setItems(Array.isArray(data) ? data : []);
-      } catch {
-        // keep last snapshot
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [intervalMs]);
-
-  return items;
+export function useInsights(intervalMs: number): PollState<ForseerInsight[]> {
+  return usePoll<ForseerInsight[]>("/api/v1/forseer/insights", intervalMs, [], asArray);
 }
 
-export function useClusters(intervalMs: number): ForseerCluster[] {
-  const [items, setItems] = useState<ForseerCluster[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await fetch("/api/v1/forseer/clusters");
-        if (!res.ok) return;
-        const data: ForseerCluster[] = await res.json();
-        if (!cancelled) setItems(Array.isArray(data) ? data : []);
-      } catch {
-        // keep last snapshot
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [intervalMs]);
-
-  return items;
+export function useClusters(intervalMs: number): PollState<ForseerCluster[]> {
+  return usePoll<ForseerCluster[]>("/api/v1/forseer/clusters", intervalMs, [], asArray);
 }
 
 export interface Span {
@@ -244,32 +290,8 @@ export interface Span {
   status: string;
 }
 
-export function useTraces(intervalMs: number): Span[] {
-  const [items, setItems] = useState<Span[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await fetch("/api/v1/traces");
-        if (!res.ok) return;
-        const data: Span[] = await res.json();
-        if (!cancelled) setItems(Array.isArray(data) ? data : []);
-      } catch {
-        // keep last snapshot
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [intervalMs]);
-
-  return items;
+export function useTraces(intervalMs: number): PollState<Span[]> {
+  return usePoll<Span[]>("/api/v1/traces", intervalMs, [], asArray);
 }
 
 export interface ForseerBudget {
@@ -289,32 +311,13 @@ export interface ForseerBudget {
   dangerAt?: number;
 }
 
-export function useBudget(intervalMs: number): ForseerBudget {
-  const [state, setState] = useState<ForseerBudget>({ label: "Error-log budget", consumed: 0 });
+const EMPTY_BUDGET: ForseerBudget = { label: "Error-log budget", consumed: 0 };
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await fetch("/api/v1/forseer/budget");
-        if (!res.ok) return;
-        const data = (await res.json()) as ForseerBudget;
-        if (!cancelled && data) setState(data);
-      } catch {
-        // keep last snapshot
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [intervalMs]);
-
-  return state;
+export function useBudget(intervalMs: number): PollState<ForseerBudget> {
+  return usePoll<ForseerBudget>("/api/v1/forseer/budget", intervalMs, EMPTY_BUDGET, (raw) => {
+    if (!raw) throw new Error("empty budget body");
+    return raw as ForseerBudget;
+  });
 }
 
 export interface ForseerEvent {
@@ -325,32 +328,8 @@ export interface ForseerEvent {
   tone?: string;
 }
 
-export function useTimeline(intervalMs: number): ForseerEvent[] {
-  const [items, setItems] = useState<ForseerEvent[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await fetch("/api/v1/forseer/timeline");
-        if (!res.ok) return;
-        const data: ForseerEvent[] = await res.json();
-        if (!cancelled) setItems(Array.isArray(data) ? data : []);
-      } catch {
-        // keep last snapshot
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [intervalMs]);
-
-  return items;
+export function useTimeline(intervalMs: number): PollState<ForseerEvent[]> {
+  return usePoll<ForseerEvent[]>("/api/v1/forseer/timeline", intervalMs, [], asArray);
 }
 
 export interface ForseerQueryFacet {
@@ -378,34 +357,11 @@ export async function queryForseer(q: string): Promise<ForseerQueryResult> {
   };
 }
 
-export function useSummary(intervalMs: number): { enabled: boolean; summary: string } {
-  const [state, setState] = useState({ enabled: false, summary: "" });
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await fetch("/api/v1/forseer/summary");
-        if (!res.ok) return;
-        const data = (await res.json()) as { enabled?: boolean; summary?: string };
-        if (!cancelled) {
-          setState({ enabled: Boolean(data.enabled), summary: data.summary ?? "" });
-        }
-      } catch {
-        // keep last snapshot
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [intervalMs]);
-
-  return state;
+export function useSummary(intervalMs: number): PollState<{ enabled: boolean; summary: string }> {
+  return usePoll("/api/v1/forseer/summary", intervalMs, { enabled: false, summary: "" }, (raw) => {
+    const data = raw as { enabled?: boolean; summary?: string } | null;
+    return { enabled: Boolean(data?.enabled), summary: data?.summary ?? "" };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -537,32 +493,8 @@ const EMPTY_MLAAS_STATUS: Omit<MlaasStatus, "configured" | "reachable"> = {
 
 /** Polls /api/v1/forseer/models — same shape as the other hooks: a failed
  * poll keeps the last snapshot rather than blanking the page. */
-export function useForseerModels(intervalMs: number): ForseerCard[] {
-  const [items, setItems] = useState<ForseerCard[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await fetch("/api/v1/forseer/models");
-        if (!res.ok) return;
-        const data: ForseerCard[] = await res.json();
-        if (!cancelled) setItems(Array.isArray(data) ? data : []);
-      } catch {
-        // keep last snapshot
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [intervalMs]);
-
-  return items;
+export function useForseerModels(intervalMs: number): PollState<ForseerCard[]> {
+  return usePoll<ForseerCard[]>("/api/v1/forseer/models", intervalMs, [], asArray);
 }
 
 /** Polls /api/v1/mlaas/status. Returns `null` until the first successful
@@ -572,43 +504,21 @@ export function useForseerModels(intervalMs: number): ForseerCard[] {
  * (same as every other hook here) rather than reverting to `null`. The
  * slices are normalized to arrays so the page can map over them without
  * null checks whatever the server sent. */
-export function useMlaasStatus(intervalMs: number): MlaasStatus | null {
-  const [state, setState] = useState<MlaasStatus | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await fetch("/api/v1/mlaas/status");
-        if (!res.ok) return;
-        const data = (await res.json()) as Partial<MlaasStatus> | null;
-        if (!cancelled && data) {
-          setState({
-            ...EMPTY_MLAAS_STATUS,
-            ...data,
-            configured: Boolean(data.configured),
-            reachable: Boolean(data.reachable),
-            models: Array.isArray(data.models) ? data.models : [],
-            forecasts: Array.isArray(data.forecasts) ? data.forecasts : [],
-            predictions: Array.isArray(data.predictions) ? data.predictions : [],
-            jobs: Array.isArray(data.jobs) ? data.jobs : [],
-          });
-        }
-      } catch {
-        // keep last snapshot
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
+export function useMlaasStatus(intervalMs: number): PollState<MlaasStatus | null> {
+  return usePoll<MlaasStatus | null>("/api/v1/mlaas/status", intervalMs, null, (raw) => {
+    const data = raw as Partial<MlaasStatus> | null;
+    if (!data) throw new Error("empty mlaas status body");
+    return {
+      ...EMPTY_MLAAS_STATUS,
+      ...data,
+      configured: Boolean(data.configured),
+      reachable: Boolean(data.reachable),
+      models: Array.isArray(data.models) ? data.models : [],
+      forecasts: Array.isArray(data.forecasts) ? data.forecasts : [],
+      predictions: Array.isArray(data.predictions) ? data.predictions : [],
+      jobs: Array.isArray(data.jobs) ? data.jobs : [],
     };
-  }, [intervalMs]);
-
-  return state;
+  });
 }
 
 /** A failed call, with the server's `{"error": ...}` message when it sent
