@@ -2,7 +2,7 @@
   "name": "forsight-web",
   "private": true,
   "type": "module",
-  "description": "forsight's dashboard — a small React app built on @marcfs31/forsight, the same design system this repo publishes. Built once via `vite build`; its static output is embedded into the Go binary (see internal/api/dashboard_embed.go).",
+  "description": "forsight's dashboard \u2014 a small React app built on @marcfs31/forsight, the same design system this repo publishes. Built once via `vite build`; its static output is embedded into the Go binary (see internal/api/dashboard_embed.go).",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -24,7 +24,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "jsdom": "^30.0.1",
     "tailwindcss": "^4",
-    "typescript": "^5.5.4",
+    "typescript": "^7.0.2",
     "vite": "^8.2.2",
     "vitest": "^4.1.11"
   }
