@@ -388,7 +388,7 @@ func TestNewDemoCmd_Flags(t *testing.T) {
 }
 
 func TestDemoProcessMetrics_CarryTheTickTimestamp(t *testing.T) {
-	g := newDemoGenerator(1)
+	g := newDemoGenerator(1, 0)
 	ts := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
 	for _, m := range g.processMetrics(ts, 0) {
 		if !m.Timestamp.Equal(ts) {
