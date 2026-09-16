@@ -788,7 +788,12 @@ func (s *Syncer) buildModelsLocked(rowsByDataset map[string]int, byName map[stri
 			ms.Live = c.WindowMetric
 			ms.LiveWindow = c.WindowN
 			ms.NewLabels = c.NewLabels
-			ms.DriftMax = c.DriftMax
+			ms.DriftThreshold = wm.Spec.Retrain.DriftThreshold
+			if c.Drift != nil {
+				dm := c.DriftMax
+				ms.DriftMax = &dm
+				ms.DriftFeature = c.DriftFeature
+			}
 			ms.Note = c.Note
 			ms.ActiveJob = h.ActiveJob
 			ms.PredictionsLogged = h.PredictionsLogged

@@ -421,7 +421,14 @@ export interface MlaasModel {
   live?: number;
   liveWindow: number;
   newLabels: number;
-  driftMax: number;
+  /** Largest per-feature drift (PSI) mlaas measured against the training
+   * profile. Absent until mlaas has enough recent predictions to compare —
+   * never a flattering 0 for "hasn't looked yet". */
+  driftMax?: number;
+  /** The feature driftMax came from. Absent whenever driftMax is. */
+  driftFeature?: string;
+  /** mlaas's own retrain.drift_threshold — what driftMax is judged against. */
+  driftThreshold: number;
   activeJob: boolean;
   predictionsLogged: number;
   lastRetrainAt?: string;

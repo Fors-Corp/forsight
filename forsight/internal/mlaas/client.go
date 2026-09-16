@@ -98,6 +98,11 @@ type wireRetrain struct {
 	MinNewLabels    int `json:"min_new_labels,omitempty"`
 	CooldownMinutes int `json:"cooldown_minutes,omitempty"`
 	ScheduleMinutes int `json:"schedule_minutes,omitempty"`
+	// DriftThreshold is never set by this agent (omitempty leaves it out
+	// of POST /models so mlaas applies its own default); it is read back
+	// off a listed or created model's spec, since it is the value mlaas
+	// itself retrains on (store.go's RetrainPolicy, default 0.2).
+	DriftThreshold float64 `json:"drift_threshold,omitempty"`
 }
 
 // wireSpec is store.Spec: what POST /models takes and what a listed model
@@ -171,8 +176,17 @@ type wireCheck struct {
 	WindowN       int       `json:"window_n"`
 	WindowMetric  *float64  `json:"window_metric,omitempty"`
 	HoldoutMetric *float64  `json:"holdout_metric,omitempty"`
-	DriftMax      float64   `json:"drift_max"`
-	Note          string    `json:"note,omitempty"`
+	// Drift is nil whenever mlaas had too few recent predictions to
+	// compare against the training profile (loop.go's MinWindow gate) —
+	// the same "measured or not" split the health note itself is graded
+	// on. DriftMax is a plain float64 on the wire and always present
+	// (0 when unmeasured), which is exactly the flattering zero this
+	// item exists to stop passing through: only trust it when Drift is
+	// non-nil.
+	Drift        map[string]float64 `json:"drift,omitempty"`
+	DriftFeature string             `json:"drift_feature,omitempty"`
+	DriftMax     float64            `json:"drift_max"`
+	Note         string             `json:"note,omitempty"`
 }
 
 // wireHealth is GET /models/{name}/health.
