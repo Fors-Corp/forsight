@@ -100,6 +100,15 @@ forsight run [flags]
                                  (--scrape node=http://localhost:9100/metrics)
     --statsd-addr string         StatsD/DogStatsD UDP listen address (default :8125)
     --log-file string            log file to tail into the store (repeatable)
+    --auth-token string          require Authorization: Bearer <token> on every route except
+                                 GET /healthz; also read from FORSIGHT_AUTH_TOKEN (off by default)
+    --tls-cert string            PEM certificate; with --tls-key, serves HTTPS instead of
+                                 plaintext HTTP (off by default); also read from FORSIGHT_TLS_CERT
+    --tls-key string             PEM private key matching --tls-cert;
+                                 also read from FORSIGHT_TLS_KEY
+    --tls-client-ca string       PEM CA bundle; with --tls-cert/--tls-key, requires and verifies
+                                 a client certificate signed by it on every connection (mTLS);
+                                 also read from FORSIGHT_TLS_CLIENT_CA
     --mlaas-url string           base URL of a running mlaas ML service; empty (the
                                  default) disables the integration; also read from MLAAS_URL
     --mlaas-api-key-file string  path to a file holding the mlaas API key;
@@ -155,6 +164,24 @@ swap and nothing else about `run` changes. `--data-dir` defaults to
 Badger's per-entry TTL the same way it governs MemoryStore's pruning.
 `internal/store/badger.go`'s doc comment covers the key encoding and why it's
 shaped the way it is.
+
+### TLS (`--tls-cert`, `--tls-key`)
+
+By default `forsight run` serves plain HTTP. On a loopback `--addr` that's
+fine; on any other address — a DaemonSet's, most often — every payload and
+the `--auth-token` bearer token itself cross the network in cleartext. Set
+`--tls-cert` and `--tls-key` (PEM, env fallbacks `FORSIGHT_TLS_CERT` and
+`FORSIGHT_TLS_KEY`) to switch the listener to HTTPS; a missing file, an
+unreadable one, or a certificate that doesn't match the key fails at
+startup and never falls back to plaintext. Add `--tls-client-ca` (a PEM CA
+bundle, env `FORSIGHT_TLS_CLIENT_CA`) to also require and verify a client
+certificate signed by it on every connection (mTLS) — useful when the agent
+sits behind nothing but the network itself, as in the DaemonSet. All three
+flags use `crypto/tls` and `crypto/x509` from the standard library, so
+`forsight` stays one static binary. `--auth-token` set without TLS on a
+non-loopback address logs a warning at startup; running one without the
+other is still allowed, since a reverse proxy or service mesh may already
+be terminating TLS in front of the agent.
 
 ## mlaas integration
 
