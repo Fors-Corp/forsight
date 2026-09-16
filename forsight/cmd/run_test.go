@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -192,6 +193,42 @@ func TestIsLoopbackListenAddr(t *testing.T) {
 		if got := isLoopbackListenAddr(tc.addr); got != tc.want {
 			t.Errorf("isLoopbackListenAddr(%q) = %v, want %v", tc.addr, got, tc.want)
 		}
+	}
+}
+
+// TestNewHTTPServer_SetsEveryTimeout guards against the listener quietly
+// going back to a bare &http.Server{}: with no timeouts a client that never
+// finishes its headers holds a goroutine forever. WriteTimeout must cover
+// ReadTimeout because Go starts it once the header is read, so it spans the
+// body too.
+func TestNewHTTPServer_SetsEveryTimeout(t *testing.T) {
+	handler := http.NewServeMux()
+	srv := newHTTPServer("127.0.0.1:0", handler)
+
+	if srv.Addr != "127.0.0.1:0" {
+		t.Errorf("Addr = %q, want 127.0.0.1:0", srv.Addr)
+	}
+	if srv.Handler != handler {
+		t.Error("Handler was not the one passed in")
+	}
+	for name, d := range map[string]time.Duration{
+		"ReadHeaderTimeout": srv.ReadHeaderTimeout,
+		"ReadTimeout":       srv.ReadTimeout,
+		"WriteTimeout":      srv.WriteTimeout,
+		"IdleTimeout":       srv.IdleTimeout,
+	} {
+		if d <= 0 {
+			t.Errorf("%s = %v, want > 0", name, d)
+		}
+	}
+	if srv.ReadHeaderTimeout > srv.ReadTimeout {
+		t.Errorf("ReadHeaderTimeout %v exceeds ReadTimeout %v", srv.ReadHeaderTimeout, srv.ReadTimeout)
+	}
+	if srv.WriteTimeout < srv.ReadTimeout {
+		t.Errorf("WriteTimeout %v is shorter than ReadTimeout %v; a large OTLP upload would be cut off mid-body", srv.WriteTimeout, srv.ReadTimeout)
+	}
+	if srv.MaxHeaderBytes <= 0 {
+		t.Errorf("MaxHeaderBytes = %d, want > 0", srv.MaxHeaderBytes)
 	}
 }
 
