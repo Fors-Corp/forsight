@@ -1,5 +1,62 @@
 # @marcfs31/fors-observability-design-system
 
+## 4.1.1
+
+### Patch Changes
+
+- adc6953: Fix the keyboard-cursor tooltip's side under `dir="rtl"` in `ComboChart`,
+  `BoxPlot` and `Histogram`, so it no longer covers the slot it is reading.
+
+  The three charts parked the readout on the side opposite the active slot
+  with a logical `start-2`/`end-2` class, but a slot's x position is a
+  physical pixel — the plot never mirrors under RTL (see `ChartFrame`) — so
+  under `dir="rtl"` the class resolved to the same side as the mark it was
+  meant to avoid. Now the physical `left-2`/`right-2`, the same fix
+  `LineChart` and `BarChart` got from the `DashboardRTL` coverage; these
+  three were flagged there as the follow-up because `Dashboard` does not
+  compose them, so no story exercised them under RTL. Each now has an "RTL"
+  story that renders the chart under both directions, drives the cursor to
+  each end of the axis, and checks the tooltip's rendered position against
+  the active mark (`getBoundingClientRect`, not `toHaveClass`), per
+  `Switch.stories.tsx`'s "RTL" story pattern.
+
+- 08f7db5: Fix the chart family's RTL rendering: axis-value labels no longer land on
+  top of the plot, the keyboard-cursor tooltip no longer covers the point it
+  is reading, and `TraceWaterfall` no longer reads a trace backwards.
+
+  SVG resolves `text-anchor="start"/"end"` against the inherited CSS
+  `direction`, not a fixed physical side, so under `dir="rtl"` every
+  `LineChart`/`BarChart` axis-value and annotation label flipped onto the
+  wrong edge — `ChartFrame`'s `<svg>` now pins its own direction to `ltr`,
+  matching the "time flows left-to-right in both text directions" contract
+  its own comment already stated. The two charts' keyboard-cursor tooltip
+  used a logical `start-2`/`end-2` class to park on the side opposite the
+  active point, which is a physical question (the plot never mirrors under
+  RTL) — now `left-2`/`right-2`. `TraceWaterfall`'s span bars used the
+  logical `insetInlineStart`, which mirrored the whole waterfall under RTL —
+  now the physical `left`, so a span's position always reads its wall-clock
+  offset left-to-right.
+
+  Caught by folding the whole chart family — `LineChart` (x2), `BarChart`,
+  `DonutChart`, `BarList`, `Heatmap`, `TraceWaterfall`, and `Sparkline` (via
+  `StatCard`) — into the `Forsight/Overview` → `DashboardRTL` story, which
+  already composed `Dashboard`'s exact tree under `dir="rtl"`; the gap was
+  that nothing there checked rendered geometry. `DashboardRTL`'s `play` now
+  does, verified by real `getBoundingClientRect` position per
+  `Switch.stories.tsx`'s "RTL" story pattern, not `toHaveClass`.
+
+- d68be72: Make `LineChart`'s area fill respect `dashedFrom` too.
+
+  Previously a series with both `area` and `dashedFrom` filled the whole run
+  the same way, so the projected tail read as a second solid measurement
+  under its own dashed stroke. The fill now splits at the same boundary as
+  the stroke: the observed run keeps the plain area tint, and the projected
+  run's fill drops to half that opacity and is overlaid with a diagonal hatch
+  — shape, not color or opacity alone, carries the distinction, as
+  CONTRIBUTING.md's data-viz rule requires. The hatch is one `<pattern>`
+  per chart, referenced by every series' projected fill, not redeclared per
+  series or per segment.
+
 ## 4.1.0
 
 ### Minor Changes
