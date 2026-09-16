@@ -862,3 +862,7 @@ are the judges' composites.
   test** (quality-dx-1, quality-dx-9, dashboard-ux-7, design-system-2, -3, -5,
   -6, agent-collection-10, mlaas-depth-9, -10; all at or below 3.18). Low
   value, wrong shape, or no consumer. The judges' notes stand.
+
+## Shipped after the roadmap
+
+- **forsight/CHANGELOG.md and make help** — added a Keep a Changelog `forsight/CHANGELOG.md` (1.1.0 Unreleased, derived from every commit since `forsight-v1.0.0`, plus 1.0.0) and a self-generating `make help`/default-goal target sourced from `##` comments above each Makefile target, 2026-09-16, #PENDING.
