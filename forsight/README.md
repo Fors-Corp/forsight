@@ -60,6 +60,10 @@ control the install location and version.
 
 Then open `http://localhost:8080` for the dashboard.
 
+**No infrastructure handy?** `forsight demo` (or `make demo`) serves the same
+dashboard against a bounded, clearly-labelled synthetic stream instead of
+real collectors — see "forsight demo" below.
+
 ## Why Go
 
 Every product this agent is modeled on is written in Go: Prometheus and
@@ -115,8 +119,38 @@ forsight run [flags]
     --mlaas-prefix string        names everything this agent creates in mlaas,
                                  so several agents can share one server (default "forsight")
 
+forsight demo [flags]
+    --addr string                address to serve the API and dashboard on (default ":8080")
+    --auth-token string           require Authorization: Bearer <token> on every route except
+                                 GET /healthz; also read from FORSIGHT_AUTH_TOKEN
+    --backfill duration           how much synthetic history to generate before serving, so the
+                                 dashboard opens already populated (default 6h); 0 disables it
+    --tick duration               spacing between synthetic samples, backfilled and live (default 10s)
+    --retention duration          how long the store keeps synthetic data; 0 (the default)
+                                 picks --backfill plus a two-hour margin
+    --seed uint                   seed for the synthetic generator; the same seed always
+                                 produces the same demo data (default 1)
+
 forsight version
 ```
+
+### `forsight demo`
+
+Runs the same API/dashboard server as `forsight run`, but instead of real
+collectors it feeds a bounded, clearly-labelled synthetic stream through the
+same `Engine.Observe*` and store paths a real deployment uses: host and
+process metrics with a daily cycle and one CPU spike attributed to a named
+culprit process, a handful of log templates (a mix of declared and inferred
+severities, plus one correlated error-log burst), and a couple of traces
+with one deliberately slow child span. Every point carries a `host` label
+(or, for logs, a `demo.*` source) of `forsight-demo` or similar, so nothing
+it writes can be mistaken for a real host, process, or service. With the
+default `--backfill 6h` the time-range picker and Forseer's own models
+(`/api/v1/forseer/models`) have a trend to show from the first request
+instead of a blank chart; `--backfill 0` starts from an empty stream and
+lets the spike, burst, and slow trace arrive live instead. There is no
+Docker collector or OTLP ingest in demo mode — the Containers panel stays
+empty, as it would with no Docker daemon reachable.
 
 ### Persistent storage (`--store badger`)
 
