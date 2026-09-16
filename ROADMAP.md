@@ -674,7 +674,8 @@ gains a check with `drift` and one without. Still S.
 
 ### 22. Culprits ranked by change, not raw CPU, with a card
 
-- **Area** forseer · **Effort** M · **Score** 2.98 · reframed
+- **Area** forseer · **Effort** M · **Score** 2.98 · reframed · **Shipped**
+  2026-09-16, `culpritModel` in `forseer/culprit.go`
 
 **Why.** `forseer/engine.go:176-181` sorts processes by raw CPU, keeps three,
 and drops any under 20%. A process that went from 2% to 18% during the spike

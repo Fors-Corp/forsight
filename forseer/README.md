@@ -62,7 +62,7 @@ exists for that shape of answer. Forseer never invents a new widget.
 | `changepoint` | CUSUM on the same z-scores | Catches a *shift* that a single spike detector misses (disk filling, leak) | **Timeline** |
 | `log_burst` | Drain-lite templates (UUID/IP/number → `<*>`) + short-window volume | Turns a firehose into "this pattern just exploded" | **BarList** (ranked templates) + **LogStream** (raw lines) |
 | `slow_span` | Per `(service, span name)` P² p50/p99, opened on a run past p99 | "This endpoint is slow *for itself*", not vs a global 200ms SLO, and not a mean/sigma test on a long-tailed shape. See [MODELS.md](MODELS.md) | **TraceWaterfall** (related trace id) |
-| `culprit` | Join a `host.cpu` anomaly with `process.cpu.percent` | Answers *which process* when the host is hot | **Table** (process rows) |
+| `culprit` | Rank processes open during a `host.cpu` anomaly by how far each has risen above its own rolling `process.cpu`/`process.memory.rss` baseline (free from the same Welford stats the Detector runs on them), raw CPU over a 20% floor only while a process's own series is still cold | Raw usage cannot tell a process that jumped from 2% to 18% from one that always idles at 22%; its own baseline can. See [MODELS.md](MODELS.md) | **Table** (process rows) |
 | Grok narrative | SpaceXAI `grok-4.5` | Stitches the above into four sentences an on-call can read | **Card** + **Text** |
 | error-log budget | error/total vs 1% SLO | **ErrorBudget** |
 | incident stitch | insights + related critical path | **Timeline** |
