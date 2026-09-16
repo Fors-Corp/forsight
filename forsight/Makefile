@@ -9,13 +9,21 @@
 VERSION ?= dev
 LDFLAGS := -X github.com/marcfs31/forsight/forsight/internal/version.Version=$(VERSION)
 
-.PHONY: build build-web build-go release dev demo test test-install lint vet clean
+.PHONY: help build build-web build-go release dev demo test test-install lint vet clean
+
+.DEFAULT_GOAL := help
 
 # OS/arch pairs cross-compiled for a release — matches install.sh's
 # "forsight_<os>_<arch>.tar.gz" naming exactly.
 RELEASE_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
-# Full release build: real dashboard + the agent binary.
+## Show this help: one line per target, from the '##' comment above it.
+help:
+	@awk '/^## / { desc = substr($$0, 4); next } \
+		/^[a-zA-Z_][a-zA-Z0-9_.-]*:/ { if (desc != "") { name = $$1; sub(/:$$/, "", name); printf "  %-14s %s\n", name, desc; desc = "" }; next } \
+		{ desc = "" }' $(MAKEFILE_LIST)
+
+## Full release build: real dashboard + the agent binary.
 build: build-web build-go
 
 # Builds forsight/web against the pinned published @marcfs31/forsight from
@@ -28,6 +36,7 @@ build: build-web build-go
 # it to a throwaway npm user config for the duration of `npm ci` — never
 # into the tree, never printed, removed on exit whether or not the build
 # succeeds.
+## Build the dashboard against the published design system and refresh webdist/.
 build-web:
 	NPM_TOKEN="$${NODE_AUTH_TOKEN:-$$(gh auth token 2>/dev/null)}"; \
 	if [ -z "$$NPM_TOKEN" ]; then \
@@ -42,12 +51,14 @@ build-web:
 	rm -rf internal/api/webdist/assets
 	cp -r web/dist/. internal/api/webdist/
 
+## Build just the agent binary (no Node, no dashboard rebuild) into bin/.
 build-go:
 	mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o bin/forsight .
 
 # Runs the agent directly against whatever's currently embedded in
 # internal/api/webdist/ (the fallback page unless build-web has been run).
+## Run the agent against whatever's currently embedded in webdist/.
 dev:
 	go run . run
 
@@ -55,9 +66,11 @@ dev:
 # collectors — a populated dashboard with no infrastructure to point it at.
 # See cmd/demo.go and README.md's CLI section for the flags (--backfill,
 # --tick, --seed, ...).
+## Run the agent against a synthetic stream, so the dashboard is never empty.
 demo:
 	go run . demo
 
+## Run the Go test suite.
 test:
 	go test ./...
 
@@ -66,15 +79,19 @@ test:
 # POSIX sh with no Go runtime involved. Not part of the Go module's `test`
 # target or forsight-ci.yml's `go` job; run it directly when touching
 # install.sh. brew install bats-core (or apt-get install bats).
+## Run install.sh's own bats-core test suite.
 test-install:
 	bats install_test.bats
 
+## Run go vet.
 vet:
 	go vet ./...
 
+## Run golangci-lint.
 lint:
 	golangci-lint run ./...
 
+## Remove build output (bin/, dist/).
 clean:
 	rm -rf bin dist
 
@@ -86,6 +103,7 @@ clean:
 #   gh release create forsight-$(VERSION) dist/*.tar.gz dist/sha256sums.txt
 # `.github/workflows/forsight-release.yml` runs exactly this on every
 # forsight-vX.Y.Z tag push — see forsight/README.md, Releasing.
+## Cross-compile every RELEASE_TARGETS entry and write dist/sha256sums.txt.
 release: build-web
 	@if [ "$(VERSION)" = "dev" ]; then \
 		echo "release: pass an explicit VERSION, e.g. make release VERSION=v1.0.1" >&2; \
