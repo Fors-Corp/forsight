@@ -869,6 +869,10 @@ are the judges' composites.
   `dashedFrom` now fills the projected run lighter and hatched instead of as
   a second solid measurement, 2026-09-16, #121.
 
+- **forsight/CHANGELOG.md and make help** — added a Keep a Changelog `forsight/CHANGELOG.md` (1.1.0 Unreleased, derived from every commit since `forsight-v1.0.0`, plus 1.0.0) and a self-generating `make help`/default-goal target sourced from `##` comments above each Makefile target, 2026-09-16, #119.
+
+- **End-to-end boot test of the real binary** — `forsight/cmd/boot_test.go` `go build`s the actual binary and boots it against `--store memory`, waiting on `/readyz` before asserting the embedded dashboard, `/api/v1/metrics`, `/healthz`, and a clean SIGINT shutdown, 2026-09-16, PR #117.
+
 - **Fold the chart family into the DashboardRTL story** — DashboardRTL
   already composed every chart Dashboard does, so the actual work was
   fixing three RTL rendering bugs the story's new geometry checks caught
