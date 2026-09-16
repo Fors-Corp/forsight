@@ -2,6 +2,8 @@ package forseer
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"testing"
@@ -277,5 +279,58 @@ func TestThresholds_RestoreDiscardsCorruptJSON(t *testing.T) {
 	}
 	if len(m.series) != 0 {
 		t.Fatalf("a discarded restore left %d series, want 0", len(m.series))
+	}
+}
+
+// TestThresholds_RestoreBoundsAnOversizedSnapshot builds a snapshot payload
+// (the same thresholdSnapshot shape Snapshot itself produces, not something
+// Observe could ever create live — Observe refuses a new series outright
+// once len(m.series) reaches maxSeries) with far more than maxSeries
+// entries, the way a hand-edited or stale forseer.json could arrive on
+// boot. Live, Observe never evicts an already-tracked series once
+// established; it only refuses a *new* one once the cap is full, so unlike
+// paging's LRU cache there is no recency order for Restore to reproduce.
+// The invariant Restore must still uphold is the cap itself, plus that
+// whatever it keeps is exactly what the snapshot said for that key, never
+// corrupted by the truncation.
+func TestThresholds_RestoreBoundsAnOversizedSnapshot(t *testing.T) {
+	const extra = 50
+	const total = maxSeries + extra
+	snap := thresholdSnapshot{
+		Version: thresholdSnapshotVersion,
+		Series:  make(map[string]seriesThresholdSnapshot, total),
+	}
+	for i := 0; i < total; i++ {
+		key := fmt.Sprintf("series-%04d", i)
+		snap.Series[key] = seriesThresholdSnapshot{
+			Warn:     3 + float64(i)*0.001,
+			Critical: 5 + float64(i)*0.001,
+			N:        thresholdMinSamples + i,
+			WarnHits: i,
+			CritHits: i / 2,
+		}
+	}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal test snapshot: %v", err)
+	}
+
+	m := newThresholdModel()
+	if err := m.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	if len(m.series) != maxSeries {
+		t.Fatalf("restored %d series, want exactly the cap %d", len(m.series), maxSeries)
+	}
+	for key, got := range m.series {
+		want, ok := snap.Series[key]
+		if !ok {
+			t.Fatalf("restored series %q was never in the snapshot", key)
+		}
+		if got.warn != want.Warn || got.critical != want.Critical || got.n != want.N ||
+			got.warnHits != want.WarnHits || got.critHits != want.CritHits {
+			t.Errorf("series %q = %+v, want %+v", key, *got, want)
+		}
 	}
 }

@@ -90,11 +90,19 @@ export function submitAuthToken(token: string): void {
  * `fetch`, but with the stored bearer token attached whenever one is on
  * hand, and the token dialog opened the moment a response comes back 401 —
  * every call in this file uses this instead of the global `fetch` so no
- * poll or action can silently skip the header. A 401 also clears the
- * stored token, since it's now known bad (either never set, or rejected):
- * leaving it in place would just 401 again on the next poll with no way for
- * the dialog to tell "still waiting for the first token" from "reopened
- * after a rejection".
+ * poll or action can silently skip the header.
+ *
+ * A 401 is evidence about the token this request was sent with, nothing
+ * more. If that token is still the stored one it is now known bad: clear
+ * it (leaving it would just 401 again on the next poll) and reopen the
+ * dialog as rejected. If the stored token has changed since — the user
+ * submitted a new one while this request was in flight — the response is
+ * stale and says nothing about the new token, which its own requests will
+ * judge. A token-less 401 opens the dialog if it is closed and otherwise
+ * leaves it alone: several pollers 401 at once, and the ones after the
+ * first must not rewrite "that token was rejected" back into the
+ * first-load wording — nor may the next scheduled poll, which after a
+ * rejection goes out with no token too.
  */
 export async function fetchWithAuth(
   input: RequestInfo | URL,
@@ -104,9 +112,13 @@ export async function fetchWithAuth(
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const res = await fetch(input, { ...init, headers });
-  if (res.status === 401) {
-    storeToken("");
-    setAuthPrompt({ open: true, rejected: token !== "" });
+  if (res.status === 401 && readStoredToken() === token) {
+    if (token !== "") {
+      storeToken("");
+      setAuthPrompt({ open: true, rejected: true });
+    } else if (!authPrompt.open) {
+      setAuthPrompt({ open: true, rejected: false });
+    }
   }
   return res;
 }

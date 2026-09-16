@@ -551,7 +551,8 @@ describe("Overview memory and disk charts", () => {
     render(<App />);
     await screen.findByText("Host CPU over time");
 
-    expect(screen.getByRole("img", { name: /^Host CPU trend:/ })).toBeInTheDocument();
+    // The title renders before any poll answers; the sparklines do not.
+    expect(await screen.findByRole("img", { name: /^Host CPU trend:/ })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: /^Host memory trend:/ })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: /^Host disk trend:/ })).toBeInTheDocument();
   });
@@ -565,7 +566,10 @@ describe("Overview memory and disk charts", () => {
     expect(screen.getByRole("radio", { name: /^Host CPU/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: /^Host memory/ })).not.toBeChecked();
     expect(screen.getByRole("radio", { name: /^Host disk/ })).not.toBeChecked();
-    expect(screen.getByRole("img", { name: "Host CPU percent over time" })).toBeInTheDocument();
+    // The chart draws once its history poll has answered, not with the title.
+    expect(
+      await screen.findByRole("img", { name: "Host CPU percent over time" })
+    ).toBeInTheDocument();
   });
 
   it("clicking the Host memory stat repoints the chart at memory's history", async () => {
@@ -578,7 +582,9 @@ describe("Overview memory and disk charts", () => {
 
     expect(await screen.findByText("Host memory over time")).toBeInTheDocument();
     expect(screen.queryByText("Host CPU over time")).not.toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Host memory percent over time" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("img", { name: "Host memory percent over time" })
+    ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /^Host memory/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: /^Host CPU/ })).not.toBeChecked();
   });
@@ -728,6 +734,39 @@ describe("Auth token gate", () => {
 
     await screen.findByText(/that token was rejected/i);
     expect(screen.getByLabelText("Access token")).toHaveValue("");
+  });
+
+  it("keeps the rejection on screen when the next scheduled poll 401s without a token", async () => {
+    // Testing Library's async wrapper (under every user-event call) ends by
+    // awaiting a setTimeout(0) that it only auto-advances for Jest's fake
+    // timers; letting vitest's clock track real time is what fires it here.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ delay: null });
+      vi.stubGlobal("fetch", mockFetchRequiringToken("right-token"));
+      render(<App />);
+      await act(async () => {
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      });
+      expect(screen.getByRole("dialog", { name: "Access token required" })).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText("Access token"), "wrong-guess");
+      await user.click(screen.getByRole("button", { name: "Continue" }));
+      await act(async () => {
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      });
+      expect(screen.getByText(/that token was rejected/i)).toBeInTheDocument();
+
+      // The rejected token was cleared, so the next scheduled poll goes out
+      // with no token and 401s again. That is not news about anything the
+      // user did, and must not revert the dialog to its first-load wording.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(screen.getByText(/that token was rejected/i)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not show the dialog at all once a poll comes back with data", async () => {
