@@ -58,6 +58,15 @@ func (s *MemoryStore) SetMaxElements(n int) {
 	s.pruneLogsLocked()
 }
 
+// Ping always succeeds: a MemoryStore is a mutex-protected slice living in
+// this process's own memory, so it has no external resource (a disk, a
+// connection) that Ping could find unavailable while the process itself is
+// still up. It exists only so MemoryStore satisfies Store the same way
+// BadgerStore does, whose Ping can fail.
+func (s *MemoryStore) Ping(_ context.Context) error {
+	return nil
+}
+
 func (s *MemoryStore) WriteMetrics(_ context.Context, metrics []model.Metric) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

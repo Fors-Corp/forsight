@@ -218,7 +218,7 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 		otlpHandler = otlp.NewHandler(st, st, st)
 	}
 
-	server := api.NewServer(st, otlpHandler, api.DashboardHandler(), logger).WithForseer(eng)
+	server := api.NewServer(st, otlpHandler, api.DashboardHandler(), logger).WithForseer(eng).WithRegistry(registry)
 
 	// mlaas is opt-in: with a URL, the agent exports its own stream there,
 	// trains the managed models, and proxies what it learned to the
