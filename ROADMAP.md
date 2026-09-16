@@ -806,9 +806,10 @@ are the judges' composites.
   already sums sigma-normalised z, so the constant is scale-free, and a
   changepoints-per-week budget converges too slowly for Robbins-Monro — the
   trap `thresholds.go` documents. Not proven enough to schedule.
-- **End-to-end boot test** (quality-dx-2, 3.22). The go CI job never builds
-  the real dashboard, so it could only assert the fallback page. Revisit after
-  item 24's `/readyz` gives it something to wait on.
+- **End-to-end boot test** (quality-dx-2, 3.22). Deferred while the go CI
+  job could only assert a fallback page; the embed has since become the real
+  dashboard build, and the test shipped as #117 (see "Shipped after the
+  roadmap").
 - **TLS-expiry and HTTP probe collectors** (agent-collection-2 and -3, 3.40
   and 3.03). One probe collector is the right shape and UptimeBar is waiting
   for it, but reconstructing segments from raw points needs item 10 first.
