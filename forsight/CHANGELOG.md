@@ -5,7 +5,8 @@ directory, embedding `forseer/` and the dashboard) are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This changelog tracks `forsight-vX.Y.Z` release tags — a separate version
 line from `@marcfs31/forsight`'s own `vX.Y.Z` tags for the design system;
-see this file's Releasing section for how the two relate.
+see `forsight/README.md`'s Releasing section for how the two relate and how
+this file fits into cutting a release.
 
 ## [1.1.0] - Unreleased
 
