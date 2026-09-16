@@ -530,6 +530,17 @@ const cases: Record<string, React.ReactElement> = {
       series={[{ name: "checkout-api", values: [180, 210, 195, 172], dashedFrom: 2 }]}
     />
   ),
+  // Also appended, for the same reason: covers the hatch `<pattern>` and the
+  // lighter, hatched area fill that a projected run gets under `area` —
+  // the observed run's fill stays the plain opacity-20 tint.
+  "LineChart/projection-area": (
+    <LineChart
+      label="p95 latency"
+      labels={["12:00", "13:00", "14:00", "15:00"]}
+      series={[{ name: "checkout-api", values: [180, 210, 195, 172], dashedFrom: 2 }]}
+      area
+    />
+  ),
 };
 
 describe("DOM structure snapshots", () => {
