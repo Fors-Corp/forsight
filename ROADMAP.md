@@ -867,4 +867,10 @@ are the judges' composites.
 
 - **End-to-end boot test of the real binary** — `forsight/cmd/boot_test.go` `go build`s the actual binary and boots it against `--store memory`, waiting on `/readyz` before asserting the embedded dashboard, `/api/v1/metrics`, `/healthz`, and a clean SIGINT shutdown, 2026-09-16, PR #117.
 
+- **Fold the chart family into the DashboardRTL story** — DashboardRTL
+  already composed every chart Dashboard does, so the actual work was
+  fixing three RTL rendering bugs the story's new geometry checks caught
+  (axis labels overlapping the plot, the keyboard-cursor tooltip covering
+  its own point, TraceWaterfall reading a trace backwards), 2026-09-16, #122.
+
 - **Deterministic incident grouping on the Timeline** — forseer-models-9's window-plus-shared-`Related` substitute for the label-less grouping model, folding insights within five minutes of each other into one incident event when they share a Related value or a Source, 2026-09-16, #118.
