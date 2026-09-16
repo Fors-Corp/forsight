@@ -7,28 +7,28 @@ This repo ships **two independently versioned artifacts** from one tree:
 | `@marcfs31/forsight` — the design system (npm, GitHub Packages)                  | `src/`, `dist/` | `npm run build` | Changesets → `vX.Y.Z` tags |
 | `forsight` — the observability agent (one Go binary with the dashboard embedded) | `forsight/`     | `make build`    | `forsight-vX.Y.Z` tags     |
 
-The dashboard under `forsight/web/` consumes the design system through a
-`file:../..` link, and its build output is checked in at
-`forsight/internal/api/webdist/` so a bare `go build` never needs Node. The
-`web` CI job rebuilds and diffs against that embed.
+The dashboard under `forsight/web/` depends on the _published_
+`@marcfs31/forsight` (a caret pin in `forsight/web/package.json`, resolved
+from GitHub Packages — no `file:` link), and its build output is checked in
+at `forsight/internal/api/webdist/` so a bare `go build` never needs Node.
+The `web` CI job rebuilds and diffs against that embed.
 
 **The embed is a snapshot, refreshed deliberately.** The `web` check runs on
 changes to `forsight/web/` and to the embed itself — deliberately NOT on the
-design system's own `src/` or dependencies. Because of the `file:` link, every
-root dependency bump re-hashes the dashboard bundle, so gating on it would
-make every Dependabot PR permanently red with no fix Dependabot could apply.
-So: a change to `forsight/web/` must ship its refreshed embed on the same PR
-(`make build-web` in `forsight/`), while a design-system change flows into the
-dashboard the next time the dashboard is rebuilt. Do not "fix" a stale embed
-by widening that trigger.
+design system's own `src/` or dependencies, which cannot re-hash this bundle
+because the dashboard builds against the published pin, not the tree. So: a
+change to `forsight/web/` must ship its refreshed embed on the same PR
+(`make build-web` in `forsight/`), while a design-system change reaches the
+dashboard only through a new published version and a bump of that pin. Do
+not "fix" a stale embed by widening that trigger.
 
-**The intended end state** is to break the `file:` link: once
-`@marcfs31/forsight` is published under its new name (version 3.0.0, the
-pending Changesets release), `forsight/web` should depend on a pinned
-published version from GitHub Packages, with `packages: read` on the `web`
-job. The two artifacts then version independently, and the dashboard picks up
-a new design-system release as an ordinary Dependabot PR that rebuilds the
-embed — the same shape as every other dependency.
+**The two artifacts version independently.** The `web` job carries
+`packages: read` so `npm ci` can fetch the pin, and Dependabot has a
+`registries:` entry for GitHub Packages backed by the
+`DEPENDABOT_NPM_PACKAGES_TOKEN` Dependabot secret, so a new design-system
+release arrives as an ordinary Dependabot PR on `forsight/web/package.json` —
+the same shape as every other dependency. Refreshing the embed on that PR is
+the triage routine's job (pre-approved below).
 
 # Standing rule: Graft and CodeGraph, both — each for the job it wins
 
@@ -128,22 +128,27 @@ explicitly says to stop.
   checks; the `web` job is the embed-drift gate described above. Both real
   jobs fail closed: if `changes` itself fails they run anyway, because a
   skipped job satisfies branch protection while an absent one blocks it.
-- **What the required checks actually are.** As of 2026-09-10 branch
-  protection on `main` requires nine contexts: `verify (Node 22)`, `verify
+- **What the required checks actually are.** As of 2026-09-16 branch
+  protection on `main` requires ten contexts: `verify (Node 22)`, `verify
 (Node 24)`, `audit (npm audit, high+)`, `consumer (…)`, `storybook (…)`,
   `Analyze (actions)`, `Analyze (javascript-typescript)`, `go (vet, lint,
-test, build)` and `web (dashboard build, and it matches what's embedded)`.
-  Read the live list with `gh api
+test, build)`, `web (dashboard build, and it matches what's embedded)` and
+  `CodeQL` (the code-scanning results check). Read the live list with `gh api
 repos/marcfs31/forsight/branches/main/protection/required_status_checks`
   rather than trusting this paragraph.
-- **The gap that remains.** The two "Analyze (…)" checks prove the CodeQL
-  scan ran, not that it was clean — `github/codeql-action/analyze` does not
-  fail on a finding, and the check that reports findings ("Code scanning
-  results / CodeQL") is not required. So a bump that introduces an alert can
-  merge green, and the alert is fixed after the fact by the triage routine.
-  Making that check required is the remaining hardening step; it was left
-  alone because it only reports from `pull_request` analyses, so requiring it
-  needs care not to deadlock PRs that re-run their checks by dispatch.
+- **CodeQL findings block merge.** The two "Analyze (…)" checks only prove
+  the scan ran — `github/codeql-action/analyze` does not fail on a finding —
+  so the check that reports findings, "Code scanning results / CodeQL", is
+  required too (since 2026-09-16). A bump or feature that introduces an alert
+  now sits BLOCKED until the finding is fixed at its source, instead of
+  landing on `main` for the triage routine to chase afterwards. Two things to
+  know: that check reports only from `pull_request` analyses, so on a
+  Dependabot or release PR it appears once the PR's parked runs are approved —
+  the same approval every other required check on those PRs already needs
+  (#114 merged this way on 2026-09-16); and its exemption for a deliberate
+  `InsecureSkipVerify` is the enclosing function's _name_ declaring the
+  intent, not a `VerifyConnection` hook (see `manualVerifyTLSConfig` in the
+  probe collector, #120).
 - The `forsight-dependabot-triage` scheduled task (every 3 hours,
   `~/.claude/scheduled-tasks/forsight-dependabot-triage/SKILL.md`) is what
   handles everything a GitHub Action cannot: a red Dependabot PR that needs a

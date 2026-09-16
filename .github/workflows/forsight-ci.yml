@@ -102,7 +102,7 @@ jobs:
       - run: go test ./...
         working-directory: forseer
       # Uses whatever is currently checked into internal/api/webdist/ (the
-      # fallback page unless a prior "web" job step refreshed it) — this
+      # committed dashboard snapshot; this job never refreshes it) — this
       # step's whole point is proving `go build` never needs Node, so it
       # deliberately does not build forsight/web first.
       - run: go build ./...
