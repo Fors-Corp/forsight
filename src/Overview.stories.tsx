@@ -1,5 +1,6 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react";
+import { expect, userEvent, within } from "storybook/test";
 import { Button } from "./components/Button";
 import { Badge } from "./components/Badge";
 import { Input } from "./components/Input";
@@ -1086,11 +1087,86 @@ export const Dashboard: Story = {
   render: () => <ObservabilityDashboard />,
 };
 
-/** The same dashboard under `dir="rtl"`. */
+/**
+ * The same dashboard under `dir="rtl"` — the whole-system RTL check for the
+ * chart/observability family, the way `KitchenSinkRTL` is for the base
+ * library (roadmap "Fold seven chart components into the DashboardRTL
+ * story"): every chart `Dashboard` composes — `LineChart` (x2), `BarChart`,
+ * `DonutChart`, `BarList`, `Heatmap`, `TraceWaterfall`, and `Sparkline` (via
+ * `StatCard`'s `trend`) — renders here too, since this story wraps the exact
+ * same `ObservabilityDashboard`, so the Storybook test runner's axe pass
+ * already covers all seven under `dir="rtl"`.
+ *
+ * The `play` step below goes further than axe and checks the geometry axe
+ * can't: a chart's plotted x-axis is a physical pixel space that never
+ * mirrors under RTL (see `ChartFrame.tsx`'s "time flows left-to-right in
+ * both text directions"), so a handful of spots that used a *logical*
+ * left/right property against that physical space rendered wrong under
+ * `dir="rtl"` — axis-value labels landing on top of the plot instead of in
+ * its margin (SVG's `text-anchor` resolves against the inherited CSS
+ * direction), the keyboard-cursor tooltip parking on the same side as the
+ * point instead of the opposite one, and `TraceWaterfall`'s span bars
+ * reading the trace backwards. Fixed in `ChartFrame.tsx`, `LineChart.tsx`,
+ * `BarChart.tsx` and `TraceWaterfall.tsx`; verified here by real rendered
+ * position (`getBoundingClientRect`), not `toHaveClass` — see
+ * `Switch.stories.tsx`'s "RTL" story for why.
+ */
 export const DashboardRTL: Story = {
   render: () => (
     <div dir="rtl">
       <ObservabilityDashboard />
     </div>
   ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // --- LineChart: a y-axis value label sits in the left margin, not on
+    // top of the plotted line, and the keyboard-cursor tooltip parks on
+    // the side that actually avoids the active point.
+    const requestsSvg = [...canvasElement.querySelectorAll('svg[role="img"]')].find(
+      (svg) => svg.querySelector("title")?.textContent === "Requests per second"
+    );
+    if (!requestsSvg) throw new Error("Requests per second chart not found");
+    const plot = requestsSvg.closest<HTMLElement>('[tabindex="0"]');
+    // dominant-baseline="middle" is only set on the y-axis tick labels
+    // (LineChart.tsx), not the x-axis category labels — both use
+    // text-anchor="end" for their last entry.
+    const tick = [...requestsSvg.querySelectorAll("text")].find(
+      (t) =>
+        t.getAttribute("text-anchor") === "end" && t.getAttribute("dominant-baseline") === "middle"
+    );
+    const plotLeft = Math.min(
+      ...[...requestsSvg.querySelectorAll("path")].map((p) => p.getBoundingClientRect().left)
+    );
+    if (!plot || !tick) throw new Error("LineChart geometry not found");
+    await expect(tick.getBoundingClientRect().right).toBeLessThanOrEqual(plotLeft + 2);
+
+    plot.focus();
+    await userEvent.keyboard("{End}");
+    const circle = requestsSvg.querySelector("circle");
+    const tooltip = plot.querySelector<HTMLElement>(":scope > div.absolute");
+    if (!circle || !tooltip) throw new Error("Keyboard-cursor readout not found");
+    await expect(tooltip.getBoundingClientRect().right).toBeLessThanOrEqual(
+      circle.getBoundingClientRect().left + 2
+    );
+    await userEvent.keyboard("{Escape}");
+
+    // --- TraceWaterfall: a span's bar is positioned by wall-clock offset,
+    // which (like the line/bar x-axis above) reads left-to-right in both
+    // text directions — a span that starts later renders further right,
+    // never further left, regardless of page direction. The root span is
+    // deliberately not one of the two compared: at 100% width its bar fills
+    // the row either way, so it can't tell a fixed timeline from a mirrored
+    // one — `auth.verify` (starts at 12ms) and `payment.charge` (starts at
+    // 780ms) both start and end short of the full width, so their bars only
+    // land in the right order when the offset reads left-to-right.
+    const earlyRow = canvas.getByRole("rowheader", { name: /auth\.verify/ }).closest("tr");
+    const laterRow = canvas.getByRole("rowheader", { name: /payment\.charge/ }).closest("tr");
+    const earlyBar = earlyRow?.querySelector<HTMLElement>("td span span");
+    const laterBar = laterRow?.querySelector<HTMLElement>("td span span");
+    if (!earlyBar || !laterBar) throw new Error("TraceWaterfall bars not found");
+    await expect(earlyBar.getBoundingClientRect().left).toBeLessThan(
+      laterBar.getBoundingClientRect().left
+    );
+  },
 };

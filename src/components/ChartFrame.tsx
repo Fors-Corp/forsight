@@ -58,6 +58,15 @@ export const ChartFrame = React.forwardRef<HTMLDivElement, ChartFrameProps>(
             width={width}
             height={height}
             viewBox={`0 0 ${width} ${height}`}
+            // SVG resolves `text-anchor="start"/"end"` against the inherited
+            // CSS `direction`, not a fixed physical side — so under
+            // `dir="rtl"` every axis-value and annotation label drawn with
+            // those anchors (LineChart, BarChart) flips onto the wrong edge
+            // and lands on top of the plot instead of in its margin. Pinning
+            // the svg's own direction keeps that resolution physical, which
+            // is what "time flows left-to-right in both text directions"
+            // above already assumes; nothing outside the svg is affected.
+            style={{ direction: "ltr" }}
             className="block max-w-full"
           >
             <title id={titleId}>{label}</title>
