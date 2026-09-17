@@ -1,5 +1,10 @@
 # Roadmap
 
+**Status, 2026-09-17.** All twenty-five items have shipped. Round two, near the
+bottom, re-triaged every proposal this list had left out: none earned a place,
+and the defects that triage turned up are listed there, the first of them
+confirmed on a live agent.
+
 Twenty-five items, in the order they are worth doing. Every one names the
 file and line it starts from, what gets built, and what it waits on.
 
@@ -775,96 +780,138 @@ belongs to the operator; nothing lands in the repo.
 
 **Depends on.** Nothing.
 
-## Left out, and why
+## Round two: the left-out proposals, re-triaged
 
-Strong proposals that did not make the twenty-five, with the reason. Scores
-are the judges' composites.
+On 2026-09-17 every proposal the first round left out was re-judged against
+the tree: 35 in all, once the last bullet's ten bundled proposals were split
+apart. A researcher first checked whether each had already landed. Each one
+still open went to three judges reading the tree (and the mlaas checkout where
+relevant) through different lenses: operator value, cost and rules, and a
+skeptic arguing it was not worth doing. A critic then checked every candidate
+was accounted for and corrected the citations below.
 
-- **Chart-only size-limit budget** (design-system-10, 3.92). The why was
-  wrong: `.github/workflows/ci.yml:46` runs `npm run smoke` in the required
-  verify job, and `scripts/smoke-test.mjs:243-286` already fails the build if
-  `import { Button }` is not far below the barrel. Only the chart path is
-  unbudgeted, and it cannot matter until the embed is built from a
-  tree-shaking release. The chart-path check is the follow-up inside item 4.
-- **Responsive header, Containers overflow, status live region**
-  (dashboard-ux-10, 3.83). Three one-liners in `Overview.tsx` that belong in
-  the same PR as the connection state they announce; inside item 5.
-- **A script for the `file:`-link workaround** (ops-security-8 as proposed,
-  3.43). The link is gone from the lockfile and the local token has
-  `read:packages`; reframed as item 19, three lines of npm auth instead of a
-  mutation-and-restore script.
-- **Theme toggle** (dashboard-ux-6, 3.72). Cheap, and `applyForsightTheme`
-  plus the anti-flash script already exist for it — but no operator decision
-  changes. Next round.
-- **Fold seven chart components into the DashboardRTL story**
-  (design-system-8, 3.62). Strengthens a design-system gate; invisible in the
-  agent. Belongs on the design system's own list.
-- **Dense Sparkline size** (design-system-4, 3.65). Earns its place only once
-  sparklines go into table rows; item 11 puts them in StatCards, where the
-  default fits.
-- **Learned CUSUM `h` per series** (forseer-models-7, 3.07). The statistic
-  already sums sigma-normalised z, so the constant is scale-free, and a
-  changepoints-per-week budget converges too slowly for Robbins-Monro — the
-  trap `thresholds.go` documents. Not proven enough to schedule.
-- **End-to-end boot test** (quality-dx-2, 3.22). Deferred while the go CI
-  job could only assert a fallback page; the embed has since become the real
-  dashboard build, and the test shipped as #117 (see "Shipped after the
-  roadmap").
-- **TLS-expiry and HTTP probe collectors** (agent-collection-2 and -3, 3.40
-  and 3.03). One probe collector is the right shape and UptimeBar is waiting
-  for it, but reconstructing segments from raw points needs item 10 first.
-- **Downsampling tier** (agent-collection-7, 2.73). L; the concrete consumer
-  is the mlaas exporter re-bucketing fourteen days each pass. After item 10.
-- **`forsight/CHANGELOG.md`** (quality-dx-8, 3.25). Worth starting at the
-  second `forsight-v*` tag; the release-workflow gate is Marc's.
-- **`make help`** (quality-dx-10, 3.40). Trivial; fold into whichever
-  Makefile PR lands first (item 15 or 19).
-- **A `--config` file** (the other half of agent-collection-8). A third
-  source of truth next to flags and env. The install.sh half is item 15.
-- **Champion severity classifier, the feedback loop, capacity forecasts, the
-  routing shell** (mlaas-depth-3, -5, -4, dashboard-ux-1). Stale:
-  `sync.go`'s `feedback()` and `forecast()`, `ForecastsCard`,
-  `PredictionsCard` and the hash router are already on the branch. That is
-  items 1 and 2.
-- **mlaas health as an AlertList insight** (mlaas-depth-8, 2.72). A `forseer`
-  Kind for an external signal breaks \"forseer has no idea mlaas exists\". The
-  shipped StatusDot outage on the Models page is the right surface.
-- **Tuning leaderboard** (mlaas-depth-7, 2.55). The Tune button ships; the
-  leaderboard is mlaas's own console, and copying it turns the comparison page
-  into an mlaas admin page.
-- **Client-side acknowledge** (dashboard-ux-5, 2.82). Insight IDs expire and
-  reopen, so a localStorage ack hides every recurrence forever. Needs a
-  backend endpoint.
-- **Log detail drawer** (dashboard-ux-4, 2.85). LogStream has no per-row
-  callback; a design-system change first.
-- **gRPC receiver** (agent-collection-4, 2.62). L, grpc-go in a minimal static
-  binary, a second port with no auth story.
-- **Per-IP rate limiting** (ops-security-2, 2.67). The 32 MiB body cap and the
-  fixed OTLP memory bounds cover the damaging case; adds `x/time/rate` for a
-  threat with no evidence yet.
-- **Shared secret type** (ops-security-5, 3.05). Hygiene; the \"proxied error
-  contains the key\" test guards a leak that cannot happen, and the type would
-  have to live in `forseer`.
-- **`forsight/web` coverage gate** (quality-dx-6, 2.95). Evidence partly wrong
-  — there is no `test:coverage` script or coverage dependency in
-  `forsight/web` — and the CI step is a workflow edit.
-- **Exemplars** (agent-collection-5, 2.47). `trace_id` labels on bucket
-  metrics make every point its own series, the cardinality amplification the
-  OTLP bounds work just closed.
-- **Incident grouping model** (forseer-models-9, 2.77). No label source, so
-  the \"model\" is never ready and never merges. Do it as a deterministic window
-  plus shared-`Related` grouping when the Timeline needs it.
-- **Weekly seasonality** (forseer-models-4, 2.92). Weeks to fill buckets
-  against the 512-series cap. (The Mahalanobis host anomaly that used to share
-  this line, forseer-models-6, is now item 13 with an exit criterion, because
-  `forseer/README.md`'s own Next row needed a decision either way.)
-- **OpenAPI codegen, DOM snapshot, command palette, ModelCard, KpiRow,
-  DiffViewer, NotificationCenter, federation, backup awareness, catalog smoke
-  test** (quality-dx-1, quality-dx-9, dashboard-ux-7, design-system-2, -3, -5,
-  -6, agent-collection-10, mlaas-depth-9, -10; all at or below 3.18). Low
-  value, wrong shape, or no consumer. The judges' notes stand.
+**14 had already landed**, shipped or folded into items 1-25 and later PRs.
+**The other 21 are dropped**: no judge voted to keep one, and no composite
+reached 2.0. Scores below show the first round's composite and this round's.
+So this round schedules no new numbered item. What it did produce is the list
+of defects directly below, found while ruling proposals out.
+
+### Found while triaging, not yet planned
+
+The judges found these while ruling proposals out. None has a verified plan, so
+none is numbered; each is a candidate for the next round.
+
+- **Every series the Detector watches raises false "changed regime" warnings.**
+  forseer/detector.go:102 takes `z` as an absolute value and :115 adds
+  `z - cusumK` (0.5) on every point, so on steady data, where `|z|` averages
+  about 0.8, the sum climbs about 0.3 per point and crosses `cusumH` (5) about
+  every 17 points, resetting at :130. forseer/spans.go:168-169 does the same for
+  spans; a judge measured the P2 estimators resetting every 43-55 spans, so
+  slow_span's p99 never sees more than about 50 samples. Confirmed live on
+  2026-09-17: all 77 open insights on a local agent were changepoint warnings,
+  which holds the Overview at degraded. The fix is a signed two-sided CUSUM with
+  a false-alarm-rate test; one judge's simulation cut false alarms about 26x at
+  a similar detection delay.
+- **OTLP ingest has two unbounded paths.** (a) spansFromOTLP
+  (forsight/internal/collector/otlp/receiver.go:380-391) has no per-request
+  span cap, unlike metrics and logs (:337, :341); a `maxSpansPerRequest` with
+  logsFromOTLP's reject-on-truncate contract closes it. (b) Those caps run after
+  `proto.Unmarshal` (:166), so allocation while decoding, and the number of
+  requests decoding at once, is unbounded on every OTLP route. One judge
+  measured about 575x allocation growth, enough for a 32 MiB body to exceed
+  the DaemonSet's 256Mi limit; treat the figure as one measurement until it is
+  reproduced. A global in-flight or decode budget fixes it; per-IP limiting
+  does not.
+- **The install template puts the auth token in argv.** forsight/install.sh:97-104
+  suggests `--auth-token` inside `FORSIGHT_ARGS`, which the unit expands into
+  the command line (:115), where `ps` shows it, and the file is written without
+  a mode. The agent already reads `FORSIGHT_AUTH_TOKEN` (forsight/cmd/run.go:270,
+  `resolveAuthToken` :509): the template should suggest that line instead,
+  `chmod 600` the file, and the README should match.
+- **An mlaas key rotation fails silently.** `resolveMlaas`
+  (forsight/cmd/run.go:580-612) reads `--mlaas-api-key-file` once. On
+  2026-09-17 a rotation produced 143 consecutive 401 sync passes over twelve
+  hours while mlaas kept retraining on frozen datasets. Keep the path, re-read
+  the file after a 401, and show the 401 on the Models page. The dropped
+  config-file and secret-type proposals would not have prevented it.
+- **The mlaas log-severity model receives no real data.** The filelog collector
+  marks every tailed line inferred, and export.go `severityRows` and sync.go
+  `feedback()` drop inferred lines, so only OTLP logs with a declared level can
+  train it, and none arrive on a typical host. Keep the guard at
+  forsight/internal/collector/filelog/tail.go:269-280, which marks classifier
+  output inferred so the model never trains on its own answers. Options: treat
+  a level parsed from a structured line (a JSON `level` field, a syslog
+  priority) as declared, on the regex path only and never from the classifier;
+  or document an OTLP log producer as the supported source.
+- **Smaller.** forseer/summarize.go:215 copies xAI's raw error body into the
+  summary response; trim it the way the mlaas client does. The Overview's 24h
+  and 7d ranges chart every raw point on each five-second poll even after #133;
+  a server-side `step` bucket on /api/v1/metrics would fix it. Train and Tune
+  enqueue with no dedup. forsight/internal/mlaas/sync.go:181 and :184 put the
+  unredacted mlaas URL into startup errors. A JSON tag renamed only on the Go
+  side never runs the web CI job; wire-shape fixtures under
+  forsight/internal/api/testdata, decoded by a Go test and imported by the
+  vitest suite, would catch it with no workflow change.
+- **For Marc.** A vitest/@vitest/* group in forsight/web's Dependabot block,
+  needed before any web coverage gate; and any CI step for cross-repo mlaas
+  testing.
+
+### Dropped
+
+- **Dense Sparkline size** (design-system-4, 3.65 → 1.5). Sparkline already takes a free `height` prop (src/components/Sparkline.tsx:40-41), and still no table row renders one. A named preset would lock a guessed size into the published API, with nothing using it.
+- **Learned CUSUM h per series** (forseer-models-7, 3.07 → 1.33). The premise is wrong. The statistic adds `|z| - k` every point (forseer/detector.go:102 takes `|z|`, :115 updates, :130 resets; forseer/spans.go:168-169 does the same), so on steady data it climbs about 0.3 per point and fires about every h/0.3 points, roughly 17 at h=5. Raising h only stretches that period and delays real detection; a learned h would chase the drift upward and turn the test into a timer. The statistic is the bug, first under _Found while triaging_.
+- **Downsampling tier** (agent-collection-7, 2.73 → 1.83). The exporter it was meant to serve spends well under 1% of a core rereading its window. A stored rollup tier is L work across both backends and would reopen the sender-timestamp problem Badger closed. The real pain, the Overview's 7d range charting raw points, would be fixed by a server-side `step` bucket on /api/v1/metrics at read time, which is not built yet (see _Found while triaging_).
+- **A --config file** (agent-collection-8, other half, 1.5). Every deploy path already keeps its flags somewhere that survives upgrades (install.sh's EnvironmentFile, DaemonSet args). A file read once at startup would not have prevented the key-rotation outage. It adds a third precedence layer across about 24 flags and gives nobody a new ability.
+- **Tuning leaderboard** (mlaas-depth-7, 2.55 → 1.5). Forsight has no promote action, so nobody can act on a ranking. The report sits only on the tune version, and 30-minute retrains replace that version, so the card would be empty most of the time. mlaas's own console already shows it.
+- **Client-side acknowledge** (dashboard-ux-5, 2.82 → 1.6). Nothing pages anyone, and every insight closes or expires within 10 minutes. IDs are fixed (`host_outlier`) or tied to the hour of day, so a client-side ack hides later recurrences, real criticals included. A correct version needs per-occurrence IDs, the first forseer write route with CSRF protection, and an AlertList API change.
+- **Log detail drawer** (dashboard-ux-4, 2.85 → 1.67). The row already shows time, level, source and the full wrapped message. Tailed and demo lines carry no labels, and the OTLP receiver drops trace and span IDs, so the drawer would only repeat the row. It would cost a design-system release, a manual pin bump and roving focus across 2000 rows.
+- **gRPC receiver** (agent-collection-4, 2.62 → 1.73). grpc-go is already linked in, so binary size is no longer the objection. But nothing sends OTLP to the agent over any transport, and every gRPC-default exporter can switch to http/protobuf with one setting. A second listener would duplicate auth, TLS and ingest caps for traffic nobody has shown exists.
+- **Per-IP rate limiting** (ops-security-2, 2.67 → 1.67). Local apps, a Collector or a proxy all show up as one IP, and so do the dashboard's aligned polls. A per-IP bucket would throttle legitimate telemetry with no signal to the operator. It also doesn't bound the real exposure: memory growth while decoding a single request (see _Found while triaging_).
+- **Shared secret type** (ops-security-5, 3.05 → 1.63). Nothing prints a struct that holds a key, so a redacting type guards nothing. The real gaps can't be fixed by a type: xAI's raw error body passed back to callers (forseer/summarize.go:215) and a key read once at startup. The type would also make internal/mlaas import forseer.
+- **forsight/web coverage gate** (quality-dx-6, 2.95 → 1.67). Every recent dashboard PR shipped its own tests. The one real dashboard bug (#132) was a race that line coverage can't see. `@vitest/coverage-v8` must match vitest's exact version, and forsight/web's Dependabot has no vitest group, so each bump would split into red PRs until someone edits a Marc-only file.
+- **Exemplars** (agent-collection-5, 2.47 → 1.53). No dashboard page charts a histogram, and LineChart has no per-point marker. slow_span insights already link a latency outlier to its trace. Stored as labels, trace IDs would fill the detector's 512 never-evicted series slots and quietly switch off anomaly detection.
+- **Weekly seasonality** (forseer-models-4, 2.92 → 1.5). The 512-series cap never evicts and is likely already reached with hour-of-day keys on a default host. Seven times as many keys would fill it on the first day and silently drop detection. Detector baselines are also not persisted, so a restart wipes the week of history each bucket needs.
+- **OpenAPI codegen** (quality-dx-1, 2.45 → 1.33). The dashboard and handlers ship in one binary from one commit, and the Go structs and api.ts match field for field. A hand-written spec would be a third copy of the contract that nothing checks: a Go-only PR never runs the web job, and gating it needs a Marc-only workflow edit.
+- **Command palette** (dashboard-ux-7, 2.78 → 1.33). CommandDialog exists, but the dashboard has two routes and one theme switch, all one click away. Anything more useful means lifting Overview's page state into App, and a global Ctrl+K clashes with the browser and with the undismissable token dialog.
+- **KpiRow component** (design-system-3, 2.83 → 1.23). The only product row (forsight/web/src/pages/Overview.tsx:707-736) is an ARIA radiogroup that picks the chart metric. A layout-only KpiRow is one grid class it couldn't use. A selectable one would push one screen's div-based radio pattern into a semver-locked API.
+- **DiffViewer component** (design-system-5, 2.28 → 1). No agent route returns two versions of anything, and the dashboard doesn't even use JSONViewer or CodeBlock. It would be a diff algorithm, stories and accessibility upkeep for a component nothing renders.
+- **NotificationCenter component** (design-system-6, 2.43 → 1.17). AlertList, StatusDot and inline job feedback already cover every async event. The one thing a notification center adds is unread state, which brings back the rejected client-side ack or needs a backend endpoint nobody has built.
+- **Federation** (agent-collection-10, 1.98 → 1.33). host.* metrics carry no host label, the mlaas exporter assumes one host, and forseer caps at 512 series. Merging peers would silently blend series and drop detection. No one has asked for it, and central OTLP, remote `--scrape` and a shared mlaas already cover the multi-host cases.
+- **Backup awareness** (mlaas-depth-9, 1.92 → 1.67). mlaas exposes no backup state over HTTP, so this starts as a change in another repo. Forsight's own mlaas models rebuild themselves on the next sync pass anyway. Loud backup failures already show up by pointing `--log-file` at backups/backup.log.
+- **Catalog smoke test** (mlaas-depth-10, 1.78 → 1.1). Forsight never calls /catalog. The two plugins it uses are compiled into mlaas and tested there, and an unknown plugin already appears as Last error on the Models page. Running real mlaas in forsight CI would need a Marc-only workflow edit and a secret.
+
+### Already resolved
+
+- **Chart-only size-limit budget.** Item 4: chart-path smoke check #87 (scripts/smoke-test.mjs:329-357) with pin bump #86.
+- **Responsive header, Containers overflow, status live region.** Item 5, #88 (2a0dba3): the Overview header stacks with `flex-col sm:flex-row`, the Containers table gained its `overflow-x-auto` wrapper, alongside `usePoll` and a real connection state.
+- **A script for the file:-link workaround.** Item 19: build-web sources its own registry credential, #106; CLAUDE.md corrected in #127.
+- **Theme toggle.** #130 (ba14640), listed under Shipped after the roadmap.
+- **Fold seven chart components into the DashboardRTL story.** #122, follow-up #125, listed under Shipped after the roadmap.
+- **End-to-end boot test.** #117 (55a459b), end-to-end boot test of the real binary.
+- **TLS-expiry and HTTP probe collectors.** #120 probe collector (forsight/internal/collector/probe) and #131 UptimeBar strips on the Overview, on top of item 10 (#94) and #128.
+- **forsight/CHANGELOG.md.** #119 (75ca603) added forsight/CHANGELOG.md; #134 updated it for 1.2.0.
+- **make help.** #119 (75ca603), folded into the first Makefile PR.
+- **Champion severity classifier, the feedback loop, capacity forecasts, the routing shell.** Items 1-2, #83: sync.go feedback() and forecast(), ForecastsCard, PredictionsCard, hash router. In practice the severity feedback path gets no data (see cross-item notes).
+- **mlaas health as an AlertList insight.** Substituted, not shipped as proposed: the StatusDot on MlaasModelsCard (forsight/web/src/pages/Models.tsx:314-353, #83) covers it, and an insight Kind would break forseer's no-mlaas boundary.
+- **Incident grouping model.** #118 (1802e35), deterministic grouping in forseer/incident.go.
+- **DOM snapshot tests.** Existing test infrastructure: `src/__tests__/dom-snapshot.test.tsx`, added in d37cabc before the roadmap and extended since (most recently #121).
+- **ModelCard design-system component.** Need met by page-local cards in forsight/web/src/pages/Models.tsx:229 and :314 (#83). No design-system ModelCard exists, and a second consumer would be needed before one earns a semver-locked API.
 
 ## Shipped after the roadmap
+
+- **Changelog for 1.2.0** — `forsight/CHANGELOG.md`'s Unreleased entry moves under 1.2.0 ahead of the `forsight-v1.2.0` tag, which the release workflow then built and published, 2026-09-17, #134.
+
+- **The Overview's metrics poll split into bounded reads** — a two-minute unscoped "latest" read feeds the StatCards, container and process rows and the probe check, and three name-scoped ranged reads feed the chart histories, instead of fetching every name's whole retained history every five seconds, 2026-09-17, #133.
+
+- **CLAUDE.md describes the repo as it is** — the published design-system pin, ten required checks, and CodeQL findings blocking merge now that branch protection requires the `CodeQL` results check (item 7's second half), 2026-09-17, #127.
+
+- **A 401 counts only against the token it carried** — `fetchWithAuth` no longer lets the token-less poll that follows a rejection flip the access-token dialog back to its first-load wording, which had also made a dashboard test flaky, 2026-09-17, #132.
+
+- **Restore keeps forseer models inside their bounds** — tests for every persisted model's Restore-time cap, and the paging model now truncates an oversized snapshot to its most recently seen clusters, as live eviction would, 2026-09-17, #129.
+
+- **Per-name cap on metrics reads** — `?per_name=<n>` keeps the newest N points of every metric name, the bound an unscoped read needs, with Badger seeking past a name once its cap is met, 2026-09-17, #128.
+
+- **Chart tooltips park on the physical side in RTL** — ComboChart, BoxPlot and Histogram get the keyboard-cursor tooltip fix #122 made for LineChart and BarChart, each with an RTL story, 2026-09-17, #125.
 
 - **Probe uptime strips on the Overview** — a "Probes" card renders one UptimeBar per `--probe` target from the agent's `probe.*` metrics, bucketing the selected time range into operational/degraded/outage/unknown segments and showing a TLS-expiry badge beside it, visible only once a target is configured, 2026-09-17, #131.
 
