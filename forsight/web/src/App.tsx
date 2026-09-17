@@ -12,16 +12,19 @@ import {
   Input,
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarHeader,
   SidebarNav,
   SidebarNavItem,
   SidebarProvider,
   SidebarTrigger,
+  Switch,
   Text,
   useSidebar,
 } from "@marcfs31/forsight";
 import { useHashRoute, type Route } from "./route";
 import { submitAuthToken, useAuthPrompt } from "./api";
+import { useTheme } from "./theme";
 import Overview from "./pages/Overview";
 import Models from "./pages/Models";
 
@@ -94,6 +97,30 @@ function SidebarNavLinks({ route }: { route: Route }) {
         Models
       </SidebarNavItem>
     </SidebarNav>
+  );
+}
+
+/**
+ * The sidebar's one appearance control: a Switch (it reads as a settings
+ * row, not a toolbar action, so Switch over Toggle) that flips between the
+ * design system's two themes and remembers the choice per browser via
+ * useTheme. "Light theme" is the accessible name regardless of which way
+ * it's currently set, same as any other on/off setting.
+ */
+function ThemeToggle() {
+  const [theme, setTheme] = useTheme();
+
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <Text as="span" size="sm">
+        Light theme
+      </Text>
+      <Switch
+        aria-label="Light theme"
+        checked={theme === "light"}
+        onCheckedChange={(checked) => setTheme(checked ? "light" : "dark")}
+      />
+    </div>
   );
 }
 
@@ -189,6 +216,9 @@ export default function App() {
           <SidebarContent>
             <SidebarNavLinks route={route} />
           </SidebarContent>
+          <SidebarFooter>
+            <ThemeToggle />
+          </SidebarFooter>
         </Sidebar>
         <AppShellMain>
           <div className="flex h-14 items-center gap-2 border-b border-ink-border px-3">
