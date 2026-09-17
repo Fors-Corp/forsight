@@ -147,6 +147,15 @@ export interface UseMetricsOptions {
    * that only ever charts a bounded recent slice, so it isn't re-fetching
    * and re-serializing metrics it will never use. */
   sinceMinutes?: number;
+  /** Same idea as `sinceMinutes`, but in milliseconds — for a caller whose
+   * own window is already in ms (a chart's selected time range) so it isn't
+   * converting back and forth. Wins over `sinceMinutes` when both are set;
+   * set neither for the unbounded read. */
+  sinceMs?: number;
+  /** Scopes the read to one metric name (`?name=<name>`) — for a caller
+   * that only ever charts one series' history, so the response is that
+   * series alone rather than every metric name sharing the same window. */
+  name?: string;
 }
 
 export interface PollState<T> {
@@ -299,17 +308,25 @@ function asArray<T>(raw: unknown): T[] {
 }
 
 /** Polls /api/v1/metrics every `intervalMs` — the server's own MemoryStore
- * already retains the whole window, so with no `sinceMinutes` one fetch
- * returns full history for every metric name, not just the latest point. */
+ * already retains the whole window, so with none of `sinceMinutes`, `sinceMs`
+ * or `name` set, one fetch returns full history for every metric name, not
+ * just the latest point. */
 export function useMetrics(intervalMs: number, options?: UseMetricsOptions): PollState<Metric[]> {
   const sinceMinutes = options?.sinceMinutes;
+  const sinceMs = options?.sinceMs;
+  const name = options?.name;
+  const windowMs = sinceMs ?? (sinceMinutes === undefined ? undefined : sinceMinutes * 60000);
   return usePoll<Metric[]>(
-    sinceMinutes === undefined
+    windowMs === undefined && name === undefined
       ? "/api/v1/metrics"
-      : () =>
-          `/api/v1/metrics?since=${encodeURIComponent(
-            new Date(Date.now() - sinceMinutes * 60000).toISOString()
-          )}`,
+      : () => {
+          const params = new URLSearchParams();
+          if (name !== undefined) params.set("name", name);
+          if (windowMs !== undefined) {
+            params.set("since", new Date(Date.now() - windowMs).toISOString());
+          }
+          return `/api/v1/metrics?${params.toString()}`;
+        },
     intervalMs,
     [],
     asArray
