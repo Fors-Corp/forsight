@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { probeUptime } from "./Overview";
+import { coveredSpanMs, offeredTimeRanges, probeUptime } from "./Overview";
 import type { Metric } from "../api";
 
 function iso(ms: number): string {
@@ -113,5 +113,52 @@ describe("probeUptime", () => {
     const [target] = probeUptime(metrics, 0, 1000, 1);
     expect(target.tlsDaysRemaining).toBeUndefined();
     expect(target.tlsValid).toBeUndefined();
+  });
+});
+
+describe("coveredSpanMs", () => {
+  const NOW = 100_000_000;
+  const ONE_HOUR = 60 * 60_000;
+  const SIX_HOURS = 6 * 60 * 60_000;
+
+  it("returns null when there are no usable timestamps", () => {
+    expect(coveredSpanMs(NOW, NOW - ONE_HOUR, ONE_HOUR, [])).toBeNull();
+  });
+
+  it("returns the raw covered span when the oldest timestamp does not reach the range's start", () => {
+    const since = NOW - ONE_HOUR;
+    const tenMinutesAgo = NOW - 10 * 60_000;
+    const span = coveredSpanMs(NOW, since, ONE_HOUR, [iso(tenMinutesAgo)]);
+    expect(span).toBe(10 * 60_000);
+  });
+
+  it("returns rangeMs + 1 when the oldest timestamp reaches the start of the range (within 5%)", () => {
+    const since = NOW - ONE_HOUR;
+    // 4% of the range past `since` — inside the 5% tolerance.
+    const nearStart = since + 0.04 * ONE_HOUR;
+    const span = coveredSpanMs(NOW, since, ONE_HOUR, [iso(nearStart)]);
+    expect(span).toBe(ONE_HOUR + 1);
+  });
+
+  it("keeps a widened range offered on the next poll even though its own read doesn't reach back that far — the state machine stays stable across two polls", () => {
+    // Poll 1: viewing 1h, and the read comes back full (within 5% of
+    // reaching the range's start) — offeredTimeRanges should widen to 6h so
+    // the user can ask for more, without dropping 1h or 15m.
+    const sinceOneHour = NOW - ONE_HOUR;
+    const filled = [iso(sinceOneHour + 1000)];
+    const span1 = coveredSpanMs(NOW, sinceOneHour, ONE_HOUR, filled);
+    expect(span1).toBe(ONE_HOUR + 1);
+    expect(offeredTimeRanges(span1).map((r) => r.value)).toEqual(["15m", "1h", "6h"]);
+
+    // Poll 2: the user picked 6h, but the store only actually holds 3 hours
+    // — the widened, name-scoped read's oldest sample is 3h old, nowhere
+    // near the 6h range's own start.
+    const sinceSixHours = NOW - SIX_HOURS;
+    const threeHoursAgo = NOW - 3 * 60 * 60_000;
+    const span2 = coveredSpanMs(NOW, sinceSixHours, SIX_HOURS, [iso(threeHoursAgo)]);
+    expect(span2).toBe(3 * 60 * 60_000);
+    // 6h is still the first range that covers a 3h span, so the range the
+    // user just chose does not vanish from the list out from under them.
+    expect(offeredTimeRanges(span2).map((r) => r.value)).toEqual(["15m", "1h", "6h"]);
   });
 });

@@ -14,19 +14,28 @@ type FetchResponses = Record<string, unknown>;
  * treats the same as a transient failure: keep the last snapshot.
  */
 function mockFetch(responses: FetchResponses) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
-      const path = url.split("?")[0];
-      if (path in responses) {
-        return new Response(JSON.stringify(responses[path]), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      return new Response("", { status: 404 });
-    })
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const path = url.split("?")[0];
+    if (path in responses) {
+      return new Response(JSON.stringify(responses[path]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response("", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/** The full request URLs (path + query string) every mocked fetch call was
+ *  made with, in call order — for asserting on *what was asked for*, not
+ *  just what was served back (mockFetch's routing strips query strings, so
+ *  it can't tell two differently-scoped reads of the same path apart). */
+function fetchedUrls(fetchMock: ReturnType<typeof mockFetch>): string[] {
+  return fetchMock.mock.calls.map(([input]) =>
+    typeof input === "string" ? input : input.toString()
   );
 }
 
@@ -630,6 +639,13 @@ describe("Overview probe strips", () => {
 
   const now = () => new Date().toISOString();
   const probeMetrics = [
+    // A near-current host metric alongside the probe samples: the fixture's
+    // whole point is a deployment with a --probe target, but the range math
+    // now reads its span from the (named, ranged) chart-metric histories and
+    // logs, not from every metric in one unbounded read — so a fixture with
+    // only probe.* samples would otherwise cover nothing and default to the
+    // widest offered range instead of the 15m these tests assert.
+    { name: "host.cpu.percent", value: 10, timestamp: now(), labels: {} },
     { name: "probe.http.up", value: 1, timestamp: now(), labels: { name: "checkout", url: "https://checkout.example.com" } },
     { name: "probe.tls.days_remaining", value: 5, timestamp: now(), labels: { name: "checkout", url: "https://checkout.example.com" } },
     { name: "probe.tls.valid", value: 1, timestamp: now(), labels: { name: "checkout", url: "https://checkout.example.com" } },
@@ -658,6 +674,75 @@ describe("Overview probe strips", () => {
 
     await screen.findByText("Host CPU over time");
     expect(screen.queryByRole("heading", { name: "Probes" })).not.toBeInTheDocument();
+  });
+});
+
+// The split this covers: Overview used to poll GET /api/v1/metrics with no
+// bound at all, fetching the store's whole retained history for every
+// metric name on every 5s tick. It now issues one since-bounded, unscoped
+// read for the newest point of every series (StatCards, container/process
+// rows, the probe gate), plus one name-scoped, ranged read per CHART_METRICS
+// entry, plus — only once a probe metric shows up — one name-scoped, ranged
+// read per probe.* metric name. These tests assert on the request URLs
+// themselves (mockFetch's routing strips query strings, so it can't tell two
+// differently-scoped reads of the same path apart, and so returns the same
+// fixture body to all of them; the coverage here is what got *asked for*,
+// not what was returned).
+describe("Overview bounded metrics reads", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const CHART_METRIC_NAMES = ["host.cpu.percent", "host.memory.percent", "host.disk.percent"];
+
+  it("polls a since-bounded unscoped read plus one name-scoped ranged read per chart metric", async () => {
+    const fetchMock = mockFetch(emptyEndpoints);
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    const metricsUrls = fetchedUrls(fetchMock).filter((u) => u.startsWith("/api/v1/metrics"));
+
+    // The "latest" read: bounded by since=, but not scoped to one name.
+    expect(metricsUrls.some((u) => u.includes("since=") && !u.includes("name="))).toBe(true);
+    // One ranged, name-scoped read per chart metric.
+    for (const name of CHART_METRIC_NAMES) {
+      expect(
+        metricsUrls.some((u) => u.includes(`name=${name}`) && u.includes("since="))
+      ).toBe(true);
+    }
+  });
+
+  it("issues no probe.* read at all when the latest read carries no probe metric", async () => {
+    const fetchMock = mockFetch(emptyEndpoints);
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    const urls = fetchedUrls(fetchMock);
+    expect(urls.some((u) => u.includes("name=probe."))).toBe(false);
+    expect(screen.queryByRole("heading", { name: "Probes" })).not.toBeInTheDocument();
+  });
+
+  it("reads every probe.* metric, ranged, once the latest read carries one, and still renders the Probes card from them", async () => {
+    const now = () => new Date().toISOString();
+    const probeMetrics = [
+      { name: "host.cpu.percent", value: 10, timestamp: now(), labels: {} },
+      {
+        name: "probe.http.up",
+        value: 1,
+        timestamp: now(),
+        labels: { name: "checkout", url: "https://checkout.example.com" },
+      },
+    ];
+    const fetchMock = mockFetch({ ...emptyEndpoints, "/api/v1/metrics": probeMetrics });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Probes" })).toBeInTheDocument();
+    expect(screen.getByText("checkout, last 15m")).toBeInTheDocument();
+
+    const urls = fetchedUrls(fetchMock);
+    for (const name of ["probe.http.up", "probe.tls.days_remaining", "probe.tls.valid"]) {
+      expect(urls.some((u) => u.includes(`name=${name}`) && u.includes("since="))).toBe(true);
+    }
   });
 });
 
