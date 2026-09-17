@@ -10,8 +10,52 @@ this file fits into cutting a release.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-17
+
+Probes, a lighter dashboard, and the last of the roadmap follow-ups.
+
+### Added
+
+- An HTTP and TLS-expiry probe collector: `--probe [name=]<url>` (repeatable)
+  GETs a URL on `--collect-interval` and reports `probe.http.up`, `.status`
+  and `.duration_ms`, plus `probe.tls.days_remaining` and `.valid` from the
+  leaf certificate of an `https://` target, read independently so a
+  certificate nearing expiry never makes a reachable site look down (#120)
+- The Overview page shows an uptime strip per probe target over the
+  selected range, with the certificate's expiry as a badge, only once a
+  target is configured (#131)
+- A light/dark theme toggle in the dashboard's sidebar footer, remembered
+  per browser and applied before first paint (#130)
+- Forecasts on the Models page are drawn as a dashed projection of the
+  observed series, and the chart's description names the minute the
+  projection starts; the dashboard builds on design system 4.1.0 (#126)
+- `GET /api/v1/metrics?per_name=<n>` keeps the newest N points of every
+  metric name, the bound an unscoped read needs; on the Badger store a
+  ranged unscoped read now costs the window rather than the history (#128)
+- The dashboard reads a two-minute latest window plus per-name ranged
+  history for its charts and probe strips, instead of the whole retained
+  window every five seconds (#133)
+- Deterministic incident grouping on the Timeline: insights within five
+  minutes of each other that share a Related value or a Source fold into
+  one incident event (#118)
+- An end-to-end boot test builds the real binary and boots it against
+  `--store memory`, asserting the embedded dashboard, the metrics API,
+  `/healthz` and a clean SIGINT shutdown (#117)
+- This changelog, and a self-generating `make help` (#119)
+
+### Changed
+
+- The dashboard builds on Vite 8, plugin-react 6, Vitest 5 and TypeScript 7
+  (#111, #114, #112)
+- The embedded dashboard is documented as the checked-in snapshot it is,
+  not a fallback page (#124)
+
 ### Fixed
 
+- Restoring an oversized paging snapshot keeps the most recently trained
+  clusters, the same ones the live model's eviction would keep, instead of
+  an arbitrary subset; every persisted model's restore-time bound is now
+  tested (#129)
 - The dashboard's access-token dialog no longer flips back to its first-load
   wording after a rejected token: a 401 now counts as evidence only about the
   token that request carried, so the token-less poll that follows a rejection
