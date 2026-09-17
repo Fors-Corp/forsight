@@ -123,15 +123,44 @@ function sinceOrUndated(timestamp: string, since: number): boolean {
   return Number.isNaN(t) || t >= since;
 }
 
-/** Milliseconds between `now` and the oldest timestamp on offer, or null
- *  when nothing has a usable timestamp. */
-function heldSpanMs(now: number, timestamps: Iterable<string>): number | null {
+/**
+ * What offeredTimeRanges should be told the store holds, now that nothing
+ * reads the whole retained history to measure that directly: the age of the
+ * oldest timestamp among the ranged reads that actually landed (the chart
+ * histories, plus logs — logs are read newest-`LOG_READ_LIMIT`-first rather
+ * than time-bounded, so they can reach further back than a metric history
+ * scoped to the current range).
+ *
+ * When that oldest point reaches the start of the current range — at or
+ * within 5% of `rangeMs` short of `since` — the read that was scoped to the
+ * current range came back full, which says nothing about whether more
+ * exists beyond it. Rather than report the range's own span (which would
+ * make offeredTimeRanges stop offering anything wider), this reports
+ * `rangeMs + 1`, one tick past it, so the next wider option is offered too
+ * and the user can ask. If that wider read then turns out not to be full —
+ * the store genuinely didn't hold that much — the next poll's oldest
+ * timestamp reports the real, shorter span, and the range the user just
+ * picked stays offered for as long as it remains the first option that
+ * covers that span: nothing yanks a selection out from under the user
+ * between one poll and the next.
+ *
+ * Null with no usable timestamp at all, so offeredTimeRanges falls back to
+ * its own default rather than being told the span is zero.
+ */
+export function coveredSpanMs(
+  now: number,
+  since: number,
+  rangeMs: number,
+  timestamps: Iterable<string>
+): number | null {
   let oldest = Infinity;
   for (const ts of timestamps) {
     const t = Date.parse(ts);
     if (!Number.isNaN(t) && t < oldest) oldest = t;
   }
-  return oldest === Infinity ? null : Math.max(0, now - oldest);
+  if (oldest === Infinity) return null;
+  if (oldest <= since + rangeMs * 0.05) return rangeMs + 1;
+  return Math.max(0, now - oldest);
 }
 
 /** The ranges worth offering: every option shorter than what the store
@@ -437,7 +466,15 @@ function statusFromInsights(
 }
 
 export default function Overview() {
-  const metricsPoll = useMetrics(5000);
+  // Every series' newest points inside a short, fixed window — not the
+  // store's whole retained history. Feeds the StatCards' latest values,
+  // the container/process rows, and the probe gate below. Two minutes
+  // covers several collect intervals; a per-name cap (the kind item 10 gave
+  // logs and traces) is the wrong bound here because containers and
+  // processes share a metric name and differ only by label, so capping by
+  // name would still return one series' worth of every container mixed
+  // together rather than every container's own newest point.
+  const latestPoll = useMetrics(5000, { sinceMinutes: 2 });
   const logsPoll = useLogs(5000);
   const tracesPoll = useTraces(5000);
   const insightsPoll = useInsights(5000);
@@ -445,7 +482,7 @@ export default function Overview() {
   const summaryPoll = useSummary(30000);
   const budgetPoll = useBudget(5000);
   const storyPoll = useTimeline(5000);
-  const metrics = metricsPoll.data;
+  const latest = latestPoll.data;
   const logs = logsPoll.data;
   const traces = tracesPoll.data;
   const insights = insightsPoll.data;
@@ -460,27 +497,56 @@ export default function Overview() {
   const [queryError, setQueryError] = useState<string | null>(null);
 
   const [rangeValue, setRangeValue] = useState(DEFAULT_TIME_RANGE);
-  // Client-side only: the store already returned its whole window, and the
-  // range decides how much of it the charts draw. `now` is read once per
-  // render, and every poll re-renders, so the window slides with the data.
+  // `now` is read once per render, and every poll re-renders, so every
+  // window below slides with the data.
   const now = Date.now();
-  const offeredRanges = offeredTimeRanges(
-    heldSpanMs(now, [...metrics.map((m) => m.timestamp), ...logs.map((l) => l.timestamp)])
-  );
-  // A selection the data no longer reaches falls back to the widest on offer.
+  // What the user's selection (or the default, before any click) asks the
+  // ranged reads below for — independent of what ends up "offered" a few
+  // lines down, since that comes FROM these reads rather than the other way
+  // around.
+  const requestedRangeMs =
+    TIME_RANGES.find((r) => r.value === rangeValue)?.ms ??
+    TIME_RANGES.find((r) => r.value === DEFAULT_TIME_RANGE)?.ms ??
+    0;
+  const requestedSince = now - requestedRangeMs;
+
+  // One ranged, name-scoped read per stat, keyed the same way as
+  // CHART_METRICS so the StatCard row and the chart below can both index
+  // into it by key. historyFor's filter+sort still runs on each result: in
+  // production the server already scoped the response to this one name, so
+  // the filter is a no-op there, but it keeps this correct against a test
+  // double (or a future store) that doesn't, and the sort is load-bearing
+  // either way since LineChart needs oldest-first.
+  const metricHistories: Record<ChartMetric, Metric[]> = {
+    cpu: historyFor(
+      useMetrics(5000, { name: "host.cpu.percent", sinceMs: requestedRangeMs }).data,
+      "host.cpu.percent"
+    ),
+    memory: historyFor(
+      useMetrics(5000, { name: "host.memory.percent", sinceMs: requestedRangeMs }).data,
+      "host.memory.percent"
+    ),
+    disk: historyFor(
+      useMetrics(5000, { name: "host.disk.percent", sinceMs: requestedRangeMs }).data,
+      "host.disk.percent"
+    ),
+  };
+
+  // What the reads above actually cover (plus logs, read newest-first
+  // rather than time-bounded, so they can reach further back) decides what
+  // offeredTimeRanges offers — there is no more unbounded read to measure
+  // the store's whole held span against directly. A selection the data
+  // doesn't reach falls back to the widest still on offer, same as before.
+  const coveredSpan = coveredSpanMs(now, requestedSince, requestedRangeMs, [
+    ...metricHistories.cpu.map((m) => m.timestamp),
+    ...metricHistories.memory.map((m) => m.timestamp),
+    ...metricHistories.disk.map((m) => m.timestamp),
+    ...logs.map((l) => l.timestamp),
+  ]);
+  const offeredRanges = offeredTimeRanges(coveredSpan);
   const range =
     offeredRanges.find((r) => r.value === rangeValue) ?? offeredRanges[offeredRanges.length - 1];
   const since = now - range.ms;
-
-  // One ranged history per stat, keyed the same way as CHART_METRICS so the
-  // StatCard row and the chart below can both index into it by key.
-  const metricHistories = useMemo(() => {
-    const out = {} as Record<ChartMetric, Metric[]>;
-    for (const { key, metricName } of CHART_METRICS) {
-      out[key] = historyFor(metrics, metricName).filter((m) => sinceOrUndated(m.timestamp, since));
-    }
-    return out;
-  }, [metrics, since]);
 
   const [chartMetric, setChartMetric] = useState<ChartMetric>("cpu");
   // Roving tab stop across the three StatCards, same model as TimeRange:
@@ -520,15 +586,16 @@ export default function Overview() {
     [logs, since]
   );
 
-  const cpu = latestValue(metrics, "host.cpu.percent");
-  const memory = latestValue(metrics, "host.memory.percent");
-  const disk = latestValue(metrics, "host.disk.percent");
+  const cpu = latestValue(latest, "host.cpu.percent");
+  const memory = latestValue(latest, "host.memory.percent");
+  const disk = latestValue(latest, "host.disk.percent");
   const statValues: Record<ChartMetric, number | undefined> = { cpu, memory, disk };
-  const containers = containerRows(metrics);
-  const processes = processRows(metrics).slice(0, 15);
-  // Absent on a deployment with no --probe target, so the card below it
-  // never renders and this page looks exactly as it did before item #128.
-  const probes = probeUptime(metrics, since, now);
+  const containers = containerRows(latest);
+  const processes = processRows(latest).slice(0, 15);
+  // False on a deployment with no --probe target, so the card below it never
+  // renders and this page looks exactly as it did before item #128, and its
+  // three extra polls (ProbesSection) never run either.
+  const hasProbeMetrics = latest.some((m) => m.name.startsWith("probe."));
   const rangeStartLabel = (range.ms > ONE_DAY_MS ? dayTimeLabelFormat : timeLabelFormat).format(
     new Date(since)
   );
@@ -581,7 +648,7 @@ export default function Overview() {
   // The summary poller runs six times slower and is left out on purpose: a
   // success from it could only make a dead agent look alive for longer.
   const connection = connectionState(
-    [metricsPoll, logsPoll, tracesPoll, insightsPoll, clustersPoll, budgetPoll, storyPoll],
+    [latestPoll, logsPoll, tracesPoll, insightsPoll, clustersPoll, budgetPoll, storyPoll],
     5000
   );
   const status = statusFromInsights(connection.state, insights);
@@ -695,30 +762,22 @@ export default function Overview() {
           cards and chart, before Forseer/processes/containers/logs, because
           "is this endpoint up" is a health-at-a-glance question like the
           StatusDot above, not one of the diagnostic-detail sections below
-          it. */}
-      {probes.length > 0 ? (
+          it. ProbesSection itself is only mounted once `latest` has proven a
+          probe target exists, so its three polls never start on a
+          deployment with none. */}
+      {hasProbeMetrics ? (
         <Card>
           <CardHeader>
             <CardTitle>Probes</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-6">
-            {probes.map((probe) => (
-              <div key={probe.name} className="flex flex-col gap-2">
-                <UptimeBar
-                  label={`${probe.name}, last ${range.label}`}
-                  segments={probe.segments}
-                  startCaption={rangeStartLabel}
-                  endCaption="Now"
-                />
-                {probe.tlsDaysRemaining !== undefined ? (
-                  <Badge variant={tlsBadgeTone(probe.tlsValid, probe.tlsDaysRemaining)}>
-                    {probe.tlsValid === false
-                      ? "TLS certificate invalid"
-                      : `TLS expires in ${Math.round(probe.tlsDaysRemaining)} days`}
-                  </Badge>
-                ) : null}
-              </div>
-            ))}
+            <ProbesSection
+              since={since}
+              now={now}
+              rangeMs={range.ms}
+              rangeLabel={range.label}
+              rangeStartLabel={rangeStartLabel}
+            />
           </CardContent>
         </Card>
       ) : null}
@@ -948,5 +1007,68 @@ export default function Overview() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Mounted only once `latest` has shown at least one probe.* sample, so its
+ * three polls — the only ones on this page that ever ask for probe.* — never
+ * run at all on a deployment with no --probe target. Same pattern as
+ * Models.tsx's ForecastsSection: a narrow child component whose sole job is
+ * to hold the extra hooks a conditional render would otherwise pull into the
+ * page unconditionally.
+ *
+ * Each read is named and ranged to the selected time range, same as the
+ * CHART_METRICS reads above, and their results are merged back into one
+ * array for the existing probeUptime — unchanged by this component's
+ * existence. One consequence of scoping these reads to the window: a target
+ * with literally no probe.* sample anywhere in the selected range (rather
+ * than merely no probe.http.up sample, which still buckets as "unknown" —
+ * see probeUptime's own doc comment) no longer surfaces, since it would
+ * never appear in any of the three arrays below to be discovered from. That
+ * traded a genuinely unbounded read for a case that only bites a target
+ * whose checks have been absent for the entire visible window.
+ */
+function ProbesSection({
+  since,
+  now,
+  rangeMs,
+  rangeLabel,
+  rangeStartLabel,
+}: {
+  since: number;
+  now: number;
+  rangeMs: number;
+  rangeLabel: string;
+  rangeStartLabel: string;
+}) {
+  const up = useMetrics(5000, { name: "probe.http.up", sinceMs: rangeMs }).data;
+  const tlsDaysRemaining = useMetrics(5000, {
+    name: "probe.tls.days_remaining",
+    sinceMs: rangeMs,
+  }).data;
+  const tlsValid = useMetrics(5000, { name: "probe.tls.valid", sinceMs: rangeMs }).data;
+  const probes = probeUptime([...up, ...tlsDaysRemaining, ...tlsValid], since, now);
+
+  return (
+    <>
+      {probes.map((probe) => (
+        <div key={probe.name} className="flex flex-col gap-2">
+          <UptimeBar
+            label={`${probe.name}, last ${rangeLabel}`}
+            segments={probe.segments}
+            startCaption={rangeStartLabel}
+            endCaption="Now"
+          />
+          {probe.tlsDaysRemaining !== undefined ? (
+            <Badge variant={tlsBadgeTone(probe.tlsValid, probe.tlsDaysRemaining)}>
+              {probe.tlsValid === false
+                ? "TLS certificate invalid"
+                : `TLS expires in ${Math.round(probe.tlsDaysRemaining)} days`}
+            </Badge>
+          ) : null}
+        </div>
+      ))}
+    </>
   );
 }
