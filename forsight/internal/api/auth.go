@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"net/http"
 	"strings"
@@ -28,22 +29,49 @@ func isPublicPath(method, path string) bool {
 	return strings.HasPrefix(path, "/assets/")
 }
 
+// anonymousKey marks a request that reached a public path on a server with
+// a token configured, without presenting it. Public paths are exempt from
+// the 401 — a kubelet sends no headers, and the dashboard shell has to load
+// before there is anywhere to type a token — but exempt from the check is
+// not the same as trusted. /readyz reads this to decide how much to say.
+//
+// The absence of the mark means "trusted", not "unknown": a server with no
+// token at all serves next unchanged, and the operator who turned auth off
+// has decided every caller is equal. The only way a request is marked is
+// the hardened middleware explicitly saying so.
+type ctxKey int
+
+const anonymousKey ctxKey = iota
+
+// isAnonymous reports whether BearerAuth let this request through a public
+// path without a valid token.
+func isAnonymous(ctx context.Context) bool {
+	v, _ := ctx.Value(anonymousKey).(bool)
+	return v
+}
+
 // BearerAuth wraps next so every route except the public paths above
 // requires Authorization: Bearer <token>, compared with
 // ConstantTimeCompare. An empty token disables auth entirely and returns
-// next unchanged.
+// next unchanged. A public path is served either way, but a correct
+// bearer on one still counts: the comparison happens first so /readyz can
+// tell an operator with the token from anything that can reach the port.
 func BearerAuth(token string, next http.Handler) http.Handler {
 	if token == "" {
 		return next
 	}
 	want := []byte("Bearer " + token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := []byte(r.Header.Get("Authorization"))
+		presented := subtle.ConstantTimeCompare(got, want) == 1
 		if isPublicPath(r.Method, r.URL.Path) {
+			if !presented {
+				r = r.WithContext(context.WithValue(r.Context(), anonymousKey, true))
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
-		got := []byte(r.Header.Get("Authorization"))
-		if subtle.ConstantTimeCompare(got, want) != 1 {
+		if !presented {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
