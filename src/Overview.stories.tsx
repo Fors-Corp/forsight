@@ -50,7 +50,7 @@ import {
   DropdownMenuSeparator,
 } from "./components/DropdownMenu";
 import { Popover, PopoverTrigger, PopoverContent } from "./components/Popover";
-import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "./components/Tooltip";
+import { TooltipProvider } from "./components/Tooltip";
 import { Toaster, toast } from "./components/Toast";
 import {
   Breadcrumb,
@@ -435,16 +435,16 @@ function KitchenSink() {
                 </PopoverContent>
               </Popover>
 
-              <Tooltip>
-                <TooltipTrigger asChild>
+              <Popover>
+                <PopoverTrigger asChild>
                   <Button variant="ghost" aria-label="Help">
                     ?
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent>
+                </PopoverTrigger>
+                <PopoverContent aria-label="Help">
                   Deploys trigger on every push to a connected branch.
-                </TooltipContent>
-              </Tooltip>
+                </PopoverContent>
+              </Popover>
 
               <Button
                 variant="secondary"
