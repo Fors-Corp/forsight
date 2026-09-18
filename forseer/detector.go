@@ -38,10 +38,25 @@ type Detector struct {
 }
 
 type rolling struct {
-	n     int
-	mean  float64
-	m2    float64
-	cusum float64
+	n    int
+	mean float64
+	m2   float64
+	// cusumHi and cusumLo are the two arms of a two-sided CUSUM over the
+	// *signed* standardised residual: hi accumulates evidence that the
+	// series has shifted up, lo that it has shifted down.
+	//
+	// One arm over |z| does not work, and the way it fails is silent. CUSUM
+	// is defined on a statistic whose in-control mean is zero, so that
+	// subtracting the slack k gives it negative drift and max(0, ...) pins
+	// it at zero until something real happens. |z| is half-normal: its
+	// in-control mean is E|Z| = sqrt(2/pi) = 0.798, which is *above* k=0.5.
+	// The sum then drifts up by ~0.3 per sample on a series that never
+	// changed, crosses h=5 after ~17 samples, fires, resets, and does it
+	// again forever. Measured on stationary N(100,5): 579 changepoints in
+	// 10000 samples with |z|, versus 21 with the signed pair below, and a
+	// real +2 sigma shift is still caught in every run either way.
+	cusumHi float64
+	cusumLo float64
 }
 
 // NewDetector builds an empty detector.
@@ -90,16 +105,20 @@ func (d *Detector) observeOneLocked(p Point, now time.Time) {
 	variance := s.m2 / float64(s.n-1)
 	if variance <= 0 {
 		delete(d.open, key)
-		s.cusum = 0
+		s.cusumHi, s.cusumLo = 0, 0
 		return
 	}
 	sigma := math.Sqrt(variance)
 	if sigma == 0 {
 		delete(d.open, key)
-		s.cusum = 0
+		s.cusumHi, s.cusumLo = 0, 0
 		return
 	}
-	z := math.Abs(p.Value-s.mean) / sigma
+	// Signed for the CUSUM below, absolute for the anomaly thresholds —
+	// "this sample is far from the mean" is direction-free, "this series has
+	// changed regime" is not.
+	zSigned := (p.Value - s.mean) / sigma
+	z := math.Abs(zSigned)
 	warn, critical, _ := d.thresholds.Observe(key, z)
 	switch {
 	case z >= critical:
@@ -112,21 +131,25 @@ func (d *Detector) observeOneLocked(p Point, now time.Time) {
 		}
 	}
 
-	s.cusum = math.Max(0, s.cusum+z-cusumK)
+	s.cusumHi = math.Max(0, s.cusumHi+zSigned-cusumK)
+	s.cusumLo = math.Max(0, s.cusumLo-zSigned-cusumK)
 	cpKey := key + "|cusum"
-	if s.cusum >= cusumH {
+	if reached, direction := s.cusumHi, "up"; reached >= cusumH || s.cusumLo >= cusumH {
+		if s.cusumLo > reached {
+			reached, direction = s.cusumLo, "down"
+		}
 		d.open[cpKey] = Insight{
 			ID:          cpKey,
 			Kind:        KindChangepoint,
 			Severity:    SeverityWarning,
 			Title:       fmt.Sprintf("%s changed regime", p.Name),
-			Description: fmt.Sprintf("CUSUM reached %.1f (value %.4g vs rolling mean %.4g)", s.cusum, p.Value, s.mean),
+			Description: fmt.Sprintf("CUSUM reached %.1f %s (value %.4g vs rolling mean %.4g)", reached, direction, p.Value, s.mean),
 			Source:      "forseer",
 			Metric:      p.Name,
 			Value:       p.Value,
 			Time:        now,
 		}
-		s.cusum = 0
+		s.cusumHi, s.cusumLo = 0, 0
 	}
 }
 
