@@ -4,11 +4,13 @@ import {
   ANNOTATION_TONE_CLASSES,
   areaPath,
   clamp,
+  formatActiveReading,
   formatCompact,
   linePath,
   niceScale,
   project,
   seriesFill,
+  seriesLegendItems,
   seriesStroke,
   splitAtProjection,
   type ChartAnnotation,
@@ -53,6 +55,8 @@ export interface LineChartProps extends Omit<React.HTMLAttributes<HTMLDivElement
   valueFormat?: (value: number) => string;
   /** Reference lines — an SLO threshold (`value`) or a deploy marker (`label`). */
   annotations?: ChartAnnotation[];
+  /** Read for a `null`/missing sample in the cursor readout, tooltip and data table. Defaults to `"no data"` — override to localize it. */
+  noDataLabel?: string;
 }
 
 const PAD_LEFT = 44;
@@ -96,6 +100,7 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
       height = 220,
       valueFormat = formatCompact,
       annotations = [],
+      noDataLabel = "no data",
       ...props
     },
     ref
@@ -140,15 +145,14 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
     };
 
     const active = cursor.active;
-    const activeReading =
-      active === null
-        ? ""
-        : `${labels[active]}: ${series
-            .map((s) => {
-              const value = s.values[active];
-              return `${s.name} ${value === null || value === undefined ? "no data" : valueFormat(value)}`;
-            })
-            .join(", ")}`;
+    const activeReading = formatActiveReading(
+      labels,
+      series,
+      active,
+      () => valueFormat,
+      noDataLabel
+    );
+    const legendItems = seriesLegendItems(series);
 
     return (
       <div ref={ref} className={cn("flex w-full min-w-0 flex-col gap-3", className)} {...props}>
@@ -177,7 +181,7 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
             columns={labels}
             rows={series.map((s) => ({
               header: s.name,
-              cells: s.values.map((v) => (v === null ? "no data" : valueFormat(v))),
+              cells: s.values.map((v) => (v === null ? noDataLabel : valueFormat(v))),
             }))}
           >
             {({ width }) => {
@@ -424,7 +428,7 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
                   seriesIndex,
                   value:
                     s.values[active] === null || s.values[active] === undefined
-                      ? "no data"
+                      ? noDataLabel
                       : valueFormat(s.values[active] as number),
                 }))}
               />
@@ -436,9 +440,7 @@ export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
           {activeReading}
         </div>
 
-        {series.length > 1 ? (
-          <ChartLegend items={series.map((s, seriesIndex) => ({ label: s.name, seriesIndex }))} />
-        ) : null}
+        {legendItems ? <ChartLegend items={legendItems} /> : null}
       </div>
     );
   }
