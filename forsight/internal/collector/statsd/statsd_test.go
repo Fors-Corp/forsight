@@ -3,8 +3,12 @@ package statsd
 import (
 	"context"
 	"net"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/marcfs31/forsight/forsight/internal/model"
 )
 
 func TestIngestLine_CounterGaugeTimer(t *testing.T) {
@@ -203,4 +207,141 @@ func TestName(t *testing.T) {
 	if got := New(":0").Name(); got != "statsd" {
 		t.Errorf("Name() = %q, want statsd", got)
 	}
+}
+
+// TestCollector_SeriesCapBoundsIngest pins the cardinality bound at the point
+// that matters: after ingest, not after a flush. Nothing about this listener
+// can be authenticated — it is UDP on every interface by default — so before
+// the cap, one 65535-byte datagram of distinct gauge lines was ~6500
+// permanent heap entries, and a stream of them was an out-of-memory kill.
+func TestCollector_SeriesCapBoundsIngest(t *testing.T) {
+	c := New(":0")
+	for i := 0; i < maxSeries*2; i++ {
+		c.ingestLine("flood" + strconv.Itoa(i) + ":1|g")
+	}
+	c.mu.Lock()
+	held, dropped := c.seriesLocked(), c.dropped
+	c.mu.Unlock()
+	if held > maxSeries {
+		t.Fatalf("held %d series, want at most maxSeries=%d", held, maxSeries)
+	}
+	if dropped == 0 {
+		t.Error("nothing recorded as dropped, so a cardinality wall would be invisible")
+	}
+}
+
+// TestCollector_CapKeepsUpdatingKnownSeries is the other half of the cap: at
+// the wall, a series already being tracked must keep accumulating. Checking
+// the length before membership would freeze every established metric at
+// whatever arrived first and hand an attacker a way to silence real data.
+func TestCollector_CapKeepsUpdatingKnownSeries(t *testing.T) {
+	c := New(":0")
+	c.ingestLine("real.requests:1|c")
+	for i := 0; i < maxSeries*2; i++ {
+		c.ingestLine("flood" + strconv.Itoa(i) + ":1|g")
+	}
+	c.ingestLine("real.requests:41|c")
+
+	got := collectOne(t, c)
+	for _, m := range got {
+		if m.Name == "real.requests" {
+			if m.Value != 42 {
+				t.Fatalf("real.requests = %v, want 42 — the cap stopped an established series from updating", m.Value)
+			}
+			return
+		}
+	}
+	t.Fatal("real.requests missing entirely after the flood")
+}
+
+// TestCollector_GaugesExpireAfterTTL: gauges persist across a flush by
+// design, which without a TTL means forever — every gauge any client ever
+// sent, re-emitted into the store and into Forseer on every tick for the life
+// of the process.
+func TestCollector_GaugesExpireAfterTTL(t *testing.T) {
+	c := New(":0")
+	c.ingestLine("stale.gauge:7|g")
+	c.ingestLine("fresh.gauge:9|g")
+
+	c.mu.Lock()
+	c.gauges[metricKey{name: "stale.gauge"}] = gaugeEntry{
+		value: 7, lastSeen: time.Now().Add(-gaugeTTL - time.Minute),
+	}
+	c.mu.Unlock()
+
+	names := map[string]bool{}
+	for _, m := range collectOne(t, c) {
+		names[m.Name] = true
+	}
+	if names["stale.gauge"] {
+		t.Error("a gauge untouched for longer than gaugeTTL is still being reported")
+	}
+	if !names["fresh.gauge"] {
+		t.Error("expiry took a gauge that was still being set")
+	}
+
+	c.mu.Lock()
+	_, stillHeld := c.gauges[metricKey{name: "stale.gauge"}]
+	c.mu.Unlock()
+	if stillHeld {
+		t.Error("the expired gauge left its entry in the live map, so the memory is not actually reclaimed")
+	}
+}
+
+// TestCollector_CollectDoesNotRaceIngest fails under -race on the version
+// that handed Collect the live gauge map and ranged over it after unlocking.
+// That is not a benign race: concurrent map iteration and write is a Go
+// runtime fatal error, which recover() cannot catch — so any host able to
+// route a datagram to :8125 could crash the agent outright.
+func TestCollector_CollectDoesNotRaceIngest(t *testing.T) {
+	c := New(":0")
+	for i := 0; i < 200; i++ {
+		c.ingestLine("g" + strconv.Itoa(i) + ":1|g")
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			c.ingestLine("g" + strconv.Itoa(i%500) + ":1|g")
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		if _, err := c.Collect(context.Background()); err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
+
+// TestCollector_TimerSamplesBounded: one name must not absorb an unbounded
+// slice between two ticks.
+func TestCollector_TimerSamplesBounded(t *testing.T) {
+	c := New(":0")
+	for i := 0; i < maxTimerSamplesPerKey*2; i++ {
+		c.ingestLine("slow.op:1|ms")
+	}
+	c.mu.Lock()
+	n := len(c.timers[metricKey{name: "slow.op"}])
+	c.mu.Unlock()
+	if n > maxTimerSamplesPerKey {
+		t.Fatalf("held %d timer samples for one key, want at most %d", n, maxTimerSamplesPerKey)
+	}
+}
+
+func collectOne(t *testing.T, c *Collector) []model.Metric {
+	t.Helper()
+	got, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	return got
 }
