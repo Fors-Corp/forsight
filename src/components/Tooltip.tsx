@@ -8,9 +8,13 @@ export const Tooltip = TooltipPrimitive.Root;
 export const TooltipTrigger = TooltipPrimitive.Trigger;
 
 /**
- * Short hint shown on hover/focus of a `TooltipTrigger`, typically an
- * icon-only Button. Wrap your app once in a single `<TooltipProvider>`
- * (root layout) — every `<Tooltip>` reads shared hover-timing config from it.
+ * Short hint shown on hover/focus of a `TooltipTrigger`. Wrap your app once
+ * in a single `<TooltipProvider>` (root layout) — every `<Tooltip>` reads
+ * shared hover-timing config from it. Touch gets no hover, and a tap never
+ * opens it (Radix ignores touch pointer events by design) — an icon-only
+ * trigger whose only explanation lives in `TooltipContent` is not
+ * accessible on touch. Give the trigger a visible label, or reach for
+ * `Popover` when the content matters and needs to be tap-reachable.
  */
 export const TooltipContent = React.forwardRef<
   React.ElementRef<typeof TooltipPrimitive.Content>,
