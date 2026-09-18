@@ -36,6 +36,16 @@
         "default": "./dist/theme.cjs"
       }
     },
+    "./chart": {
+      "import": {
+        "types": "./dist/chart.d.ts",
+        "default": "./dist/chart.js"
+      },
+      "require": {
+        "types": "./dist/chart.d.cts",
+        "default": "./dist/chart.cjs"
+      }
+    },
     "./tailwind-preset": {
       "import": {
         "types": "./dist/tailwind-preset.d.ts",
@@ -54,6 +64,7 @@
   "files": [
     "dist",
     "theme",
+    "chart",
     "tailwind-preset"
   ],
   "repository": {
