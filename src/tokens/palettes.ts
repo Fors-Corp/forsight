@@ -31,6 +31,14 @@ export interface ForsightPalette {
   warning: string;
   warningSubtle: string;
   warningFg: string;
+  /**
+   * The focus ring, as the box-shadow actually paints it: a color and the
+   * alpha it is drawn at. The ring sits outside the control, so it composites
+   * against whatever surface is behind it — the alpha is part of the rendered
+   * color and has to be mirrored here for the contrast test to see the truth.
+   */
+  focusRing: string;
+  focusRingAlpha: number;
   /** Categorical chart series, slots 1-8 in fixed assignment order. */
   viz: readonly [string, string, string, string, string, string, string, string];
 }
@@ -60,6 +68,8 @@ export const DARK_PALETTE: ForsightPalette = {
   warning: "#ffc93d",
   warningSubtle: "#332a10",
   warningFg: "#241d08",
+  focusRing: "#16c7b0",
+  focusRingAlpha: 1,
   viz: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"],
 };
 
@@ -88,6 +98,8 @@ export const LIGHT_PALETTE: ForsightPalette = {
   warning: "#8a6200",
   warningSubtle: "#fdf3d9",
   warningFg: "#ffffff",
+  focusRing: "#0b6c5e",
+  focusRingAlpha: 1,
   viz: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"],
 };
 
