@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"testing"
 	"time"
 )
@@ -61,17 +62,37 @@ func TestSpanWatch_EvictsOldestTraceByTime(t *testing.T) {
 // spanBaseline is a little jitter, not one repeated value: a zero-spread
 // series makes the very first outlier redefine the interquartile spread
 // too, which is a degenerate case of its own and not what these tests are
-// checking. It has exactly minSamples points so the series becomes eligible
-// for slow-span evaluation right after the last one lands.
+// checking. It is a cycle, not the whole warm-up: warmSpanBaseline repeats
+// it until the series has the spanP99MinSamples spans its p99 marker needs
+// before it is allowed to judge anything.
 var spanBaseline = []float64{18, 19, 20, 21, 22, 20, 19, 21, 18, 22, 20, 19}
 
+// warmSpanBaseline feeds exactly spanP99MinSamples spans, so the series
+// becomes eligible for slow-span evaluation right after the last one lands.
+// It used to feed minSamples, which is what the old gate asked for and is
+// nowhere near enough for a p99 — see spanP99MinSamples.
 func warmSpanBaseline(t *testing.T, w *spanWatch, service, name string) {
 	t.Helper()
-	if len(spanBaseline) != minSamples {
-		t.Fatalf("test setup: spanBaseline has %d points, want minSamples=%d", len(spanBaseline), minSamples)
+	warmSpanSeries(t, w, service, name, spanP99MinSamples)
+}
+
+// warmSpanSeries adds n more spans from the jitter cycle and insists the
+// series actually kept them: the cycle is stationary, so a CUSUM reset here
+// would mean the test is measuring the changepoint statistic by accident.
+func warmSpanSeries(t *testing.T, w *spanWatch, service, name string, n int) {
+	t.Helper()
+	key := service + "|" + name
+	before := 0
+	if s := w.series[key]; s != nil {
+		before = s.n
 	}
-	for _, d := range spanBaseline {
-		w.Observe([]SpanSample{{Service: service, Name: name, DurationMs: d}})
+	for i := 0; i < n; i++ {
+		w.Observe([]SpanSample{{Service: service, Name: name, DurationMs: spanBaseline[i%len(spanBaseline)]}})
+	}
+	s := w.series[key]
+	if s == nil || s.n != before+n {
+		t.Fatalf("test setup: %d spans of stationary jitter took n from %d to %v; it must not trip a CUSUM reset",
+			n, before, s)
 	}
 }
 
@@ -198,7 +219,11 @@ func TestSpanWatch_OneSlowSpanDoesNotResetTheBaseline(t *testing.T) {
 	if s.n < warmedN {
 		t.Fatalf("one outlier reset the series: n went %d -> %d", warmedN, s.n)
 	}
-	if got, ok := s.p50.value(); !ok || got != wantP50 {
+	// A tolerance rather than exact equality: with the warm-up now
+	// spanP99MinSamples long, the P² median marker is free to take its normal
+	// one-position step on any observation, outlier or not. What must not
+	// happen is the baseline being thrown away or dragged towards 5000ms.
+	if got, ok := s.p50.value(); !ok || math.Abs(got-wantP50)/wantP50 > 0.01 {
 		t.Fatalf("one outlier moved the median baseline: p50 %v -> %v (ok=%v)", wantP50, got, ok)
 	}
 }
@@ -294,9 +319,23 @@ func TestSpanWatch_AdaptsToNewBaselineAfterReset(t *testing.T) {
 	for i := 0; i < int(math.Ceil(cusumH/(1-cusumK)))+1; i++ {
 		w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: 500}})
 	}
-	shifted := []float64{98, 99, 100, 101, 102, 100, 99, 101, 98, 102, 100, 99, 100, 101, 99}
-	for _, d := range shifted {
-		w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: d}})
+	// Re-warm all the way past the gate, so the assertion below is about a
+	// live p99 rather than about a series that is simply still too young to
+	// judge anything.
+	// Feed until the series is past the gate rather than a fixed count: the
+	// tail of 500ms spans left over after the reset seeds the fresh markers
+	// high, so the first shifted spans read as a second downward regime
+	// change and reset it once more. That is the statistic working; the point
+	// here is where it settles.
+	shifted := []float64{98, 99, 100, 101, 102, 100, 99, 101, 98, 102, 100, 99}
+	for i := 0; i < 4*spanP99MinSamples; i++ {
+		if s := w.series["api|GET /checkout"]; s != nil && s.n >= spanP99MinSamples {
+			break
+		}
+		w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: shifted[i%len(shifted)]}})
+	}
+	if s := w.series["api|GET /checkout"]; s == nil || s.n < spanP99MinSamples {
+		t.Fatalf("setup: the series did not re-warm past the gate: %+v", s)
 	}
 
 	// More spans at the same new level must not read as exceedances of a
@@ -306,6 +345,87 @@ func TestSpanWatch_AdaptsToNewBaselineAfterReset(t *testing.T) {
 	}
 	if got := w.Insights(); len(got) != 0 {
 		t.Fatalf("expected no slow_span once the series re-warmed on its new baseline, got %+v", got)
+	}
+}
+
+// lognormalSpans is stationary long-tailed latency: median 40ms, sigma 0.6,
+// so the true p99 is 40*exp(0.6*z99) = 161.5ms. Latency is lognormal-ish in
+// practice and this is the shape the p99 marker is meant to summarise.
+func lognormalSpans(r *rand.Rand) float64 { return 40 * math.Exp(0.6*r.NormFloat64()) }
+
+const trueLognormalP99 = 161.5
+
+// TestSpanWatch_P99IsNotUsableAtMinSamples is the measurement that justifies
+// spanP99MinSamples, kept as a test so the constant cannot quietly be lowered
+// back towards minSamples to suit a fixture. A P² marker converges on a long
+// tail from below, because early on it has not yet seen the tail it is
+// supposed to be summarising: at minSamples the value this code reports as
+// "p99" — and prints in every KindSlowSpan Description — sits nearer the true
+// 79th percentile, and the old gate let it judge there anyway. It asserts
+// both ends: badly off at minSamples, within 15% by the gate.
+func TestSpanWatch_P99IsNotUsableAtMinSamples(t *testing.T) {
+	r := rand.New(rand.NewSource(20260918))
+	w := newSpanWatch()
+	for i := 0; i < spanP99MinSamples; i++ {
+		w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: lognormalSpans(r)}})
+		s := w.series["api|GET /checkout"]
+		if s.n != i+1 {
+			t.Fatalf("setup: stationary traffic reset the series at span %d", i+1)
+		}
+		p99, ok := s.p99.value()
+		if !ok {
+			continue
+		}
+		off := math.Abs(p99-trueLognormalP99) / trueLognormalP99
+
+		if s.n == minSamples && off < 0.25 {
+			t.Fatalf("test is not measuring what it claims: at minSamples=%d the marker reported %.1fms, "+
+				"within %.0f%% of the true p99 %.1fms", minSamples, p99, 100*off, trueLognormalP99)
+		}
+		if s.n >= spanP99MinSamples && off > 0.15 {
+			t.Fatalf("at the gate (n=%d) the marker reported %.1fms, %.0f%% off the true p99 %.1fms",
+				s.n, p99, 100*off, trueLognormalP99)
+		}
+	}
+}
+
+// TestSpanWatch_ColdSeriesDoNotOpenOnOrdinaryTraffic is the alert-budget
+// half. spanExceedRun's comment claims a run of three exceedances is about
+// one span in a million; that is a property of the marker actually sitting
+// at the p99, and it is simply false while the marker is still warming up.
+// Measured over four million spans of this traffic, a series judged with
+// between 12 and 25 samples exceeds its own "p99" on 13.5% of spans and
+// opens an insight once per 323 — three and a half orders of magnitude past
+// the budget. Nothing in this stream ever changes, so every open is false.
+//
+// Against the old gate (minSamples) this test fails with 13 opens.
+func TestSpanWatch_ColdSeriesDoNotOpenOnOrdinaryTraffic(t *testing.T) {
+	const endpoints, spansEach = 250, 250
+	if endpoints > maxSpanSeries {
+		t.Fatalf("test setup: %d endpoints exceeds maxSpanSeries=%d", endpoints, maxSpanSeries)
+	}
+	r := rand.New(rand.NewSource(20260918))
+	w := newSpanWatch()
+
+	opens, prev := 0, 0
+	for e := 0; e < endpoints; e++ {
+		name := fmt.Sprintf("GET /op-%03d", e)
+		for i := 0; i < spansEach; i++ {
+			w.Observe([]SpanSample{{Service: "api", Name: name, DurationMs: lognormalSpans(r)}})
+			w.mu.Lock()
+			n := len(w.open)
+			w.mu.Unlock()
+			if n > prev {
+				opens++
+			}
+			prev = n
+		}
+	}
+
+	if opens != 0 {
+		t.Fatalf("stationary traffic opened %d slow_span insight(s) across %d endpoints x %d spans; "+
+			"nothing in this stream ever changed, so every one of them is false",
+			opens, endpoints, spansEach)
 	}
 }
 
@@ -326,13 +446,22 @@ func TestSpanWatch_Card(t *testing.T) {
 		t.Fatalf("card does not fully describe itself: %+v", card)
 	}
 
-	warmSpanBaseline(t, w, "api", "GET /checkout")
+	// A series with a placed median but a p99 marker still warming up is not
+	// a series with "a stable p50/p99", which is what Card claims. It used to
+	// report Ready here.
+	warmSpanSeries(t, w, "api", "GET /checkout", minSamples)
+	if card = w.Card(); card.Ready {
+		t.Fatalf("reported Ready on %d samples, far short of the %d its p99 needs: %+v",
+			minSamples, spanP99MinSamples, card)
+	}
+
+	warmSpanSeries(t, w, "api", "GET /checkout", spanP99MinSamples-minSamples)
 	card = w.Card()
 	if !card.Ready {
-		t.Fatalf("expected Ready once a series passed minSamples: %+v", card)
+		t.Fatalf("expected Ready once a series passed spanP99MinSamples: %+v", card)
 	}
-	if card.Trained != minSamples {
-		t.Fatalf("Trained = %d, want %d", card.Trained, minSamples)
+	if card.Trained != spanP99MinSamples {
+		t.Fatalf("Trained = %d, want %d", card.Trained, spanP99MinSamples)
 	}
 }
 
