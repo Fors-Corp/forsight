@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -74,6 +75,72 @@ func TestDetector_EmitsChangepointOnSustainedShift(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected a CUSUM changepoint after a sustained shift")
+	}
+}
+
+// TestDetector_NoChangepointOnStationarySeries is the assertion the
+// changepoint test above never made, and its absence hid a guaranteed
+// false-alarm loop for the life of the detector.
+//
+// CUSUM is defined on a statistic whose in-control mean is zero: subtracting
+// the slack k then gives it negative drift, and max(0, ...) pins it at zero
+// until something real happens. This fed it |z|, which is half-normal —
+// in-control mean E|Z| = sqrt(2/pi) = 0.798, above cusumK = 0.5. The sum
+// drifted up by ~0.3 per sample on a series that never changed, crossed
+// cusumH = 5 after ~17 samples, fired "changed regime", reset, and did it
+// again forever: 579 changepoints per 10000 stationary samples, on every
+// series, at every collector tick.
+//
+// The values below are a deterministic stand-in for stationary noise: they
+// hold a steady mean and never shift regime, so every changepoint this
+// produces is false by construction.
+func TestDetector_NoChangepointOnStationarySeries(t *testing.T) {
+	d := NewDetector()
+	wobble := []float64{49, 51, 50, 52, 48, 50, 51, 49, 50, 53, 47, 50, 50, 52, 48}
+	for i := 0; i < 400; i++ {
+		d.Observe([]Point{{Name: "host.cpu.percent", Value: wobble[i%len(wobble)]}})
+	}
+	for _, ins := range d.Insights() {
+		if ins.Kind == KindChangepoint {
+			t.Fatalf("changepoint on a series that never changed regime: %+v", ins)
+		}
+	}
+}
+
+// TestDetector_ChangepointNamesItsDirection: a regime change that went down
+// is not the same operational event as one that went up, and a one-armed
+// CUSUM over |z| could not tell them apart even in principle.
+func TestDetector_ChangepointNamesItsDirection(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		from, to   float64
+		wantInDesc string
+	}{
+		{"upward shift", 10, 80, "up"},
+		{"downward shift", 80, 10, "down"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := NewDetector()
+			for i := 0; i < minSamples; i++ {
+				d.Observe([]Point{{Name: "host.disk.percent", Value: tc.from}})
+			}
+			for i := 0; i < 20; i++ {
+				d.Observe([]Point{{Name: "host.disk.percent", Value: tc.to}})
+			}
+			var cp *Insight
+			for i := range d.Insights() {
+				if ins := d.Insights()[i]; ins.Kind == KindChangepoint {
+					cp = &ins
+					break
+				}
+			}
+			if cp == nil {
+				t.Fatal("expected a CUSUM changepoint after a sustained shift")
+			}
+			if !strings.Contains(cp.Description, tc.wantInDesc) {
+				t.Errorf("description %q does not name the direction %q", cp.Description, tc.wantInDesc)
+			}
+		})
 	}
 }
 
