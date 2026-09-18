@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cn } from "../lib/cn";
+import { formatPercent } from "../lib/chart";
 
 export type DeltaDirection = "up" | "down" | "flat";
 
@@ -66,6 +67,10 @@ export const Delta = React.forwardRef<HTMLSpanElement, DeltaProps>(
 );
 Delta.displayName = "Delta";
 
+// Delegates rather than repeating the percent format, so a Delta reads the
+// same as every other percentage in the library and picks up the locale's
+// decimal separator with it. This used to be its own template literal, which
+// always wrote "5.5%" regardless of who was reading.
 function defaultFormat(value: number): string {
-  return `${Number(value.toFixed(1))}%`;
+  return formatPercent(value);
 }
