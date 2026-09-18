@@ -3,7 +3,9 @@ package forseer
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -405,4 +407,53 @@ func TestDetector_NonFiniteValueDoesNotPoisonTheSeries(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDetector_ConcurrentObserveAndRead: production runs Observe from the
+// ingest path (one call per collector tick) while Insights/SeriesCount/
+// SeriesBaseline are read from API handler goroutines at the same time, and
+// no test exercised that shape — every other test in this file drives a
+// Detector from a single goroutine. d.mu is the only thing standing between
+// this and a torn read of series/lastSeen/open, so this test is a check
+// that it is enough on its own; run with -race.
+func TestDetector_ConcurrentObserveAndRead(t *testing.T) {
+	d := NewDetector()
+	const iterations = 200
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			name := "host.cpu.percent"
+			if i%7 == 0 {
+				// Occasionally a different series, to exercise the
+				// eviction/lastSeen bookkeeping alongside the steady one.
+				name = "proc.cpu.percent." + strconv.Itoa(i%5)
+			}
+			d.Observe([]Point{{Name: name, Value: float64(i % 100)}})
+		}
+	}()
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = d.Insights()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_, _ = d.SeriesCount()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_, _, _ = d.SeriesBaseline("host.cpu.percent", nil)
+		}
+	}()
+
+	wg.Wait()
 }
