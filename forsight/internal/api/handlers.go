@@ -281,10 +281,19 @@ func (s *Server) handleForseerSummary(w http.ResponseWriter, r *http.Request) {
 // slog.Default() rather than s.logger: writeJSON is a free function shared by
 // handlers.go and mlaas.go with no receiver, and NewServer falls back to the
 // same default.
+//
+// The line carries the marshalling error and nothing else, deliberately. The
+// status is the one that was NOT sent — this path answers 500 — so recording
+// it next to a 500 misleads more than it helps, and it is also the only value
+// here an outsider can reach: writeMlaasError forwards UpstreamError.Status,
+// which errors.As lifts out of an error whose text carries req.URL.Path.
+// encoding/json already names the offending type or value in err ("json:
+// unsupported value: NaN", "json: unsupported type: chan int"), and that is
+// what actually diagnoses a failure here.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	buf, err := json.Marshal(v)
 	if err != nil {
-		slog.Default().Error("encoding a JSON response", "status", status, "error", err)
+		slog.Default().Error("encoding a JSON response", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
