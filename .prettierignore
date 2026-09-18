@@ -14,9 +14,11 @@ fixtures/**/next-env.d.ts
 .claude/skills/graft
 .mcp.json
 
-# Go modules with their own toolchain and conventions (gofmt for Go source;
-# their own README/docs style) — not part of this project's formatting gate.
-# See eslint.config.js's matching exclusion.
+# forsight and forseer are separate Go modules (gofmt covers their .go
+# source, not Prettier). forsight/web, nested inside forsight/, is a
+# separate npm project with no formatter of its own — only ESLint (see
+# forsight/web/eslint.config.js) — so its TS/TSX is unformatted by any
+# tool right now. See eslint.config.js's matching exclusion.
 forsight
 forseer
 
