@@ -2,9 +2,12 @@ package promscrape
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 // realExposition is genuine Prometheus text-exposition-format output (the
@@ -104,6 +107,104 @@ func TestCollect_OneDownTargetDoesNotDropOthers(t *testing.T) {
 	}
 	if len(metrics) != 1 || metrics[0].Name != "up" {
 		t.Fatalf("got %+v, want exactly the reachable target's one metric", metrics)
+	}
+}
+
+// TestCollect_ScrapeBodyIsBounded is a regression test: scrapeOne used to
+// hand the parser resp.Body directly, with no limit. The exposition text
+// format has no end-of-message marker but EOF, so a target that never stops
+// sending (an unbounded or malicious response, transparently gzip-inflated
+// by the default transport — a "gzip bomb") made the parse call block, and
+// grow memory, forever. A LimitReader is what makes it return instead.
+func TestCollect_ScrapeBodyIsBounded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		line := []byte("# a filler comment line, repeated forever\n")
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			default:
+			}
+			if _, err := w.Write(line); err != nil {
+				return // the client stopped reading — exactly what this test wants
+			}
+		}
+	}))
+	defer srv.Close()
+
+	c := New([]Target{{URL: srv.URL}})
+	done := make(chan struct{})
+	go func() {
+		_, _ = c.Collect(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Collect did not return within 5s — an unbounded scrape body was not capped")
+	}
+}
+
+// TestCollect_PerTargetMetricCapSkipsRatherThanTruncates is a regression
+// test: scrapeOne used to flatten every family into one target's output
+// with no cap, the same unbounded-fan-out shape the OTLP receiver already
+// guards against (a small body can still expand past its byte size, e.g.
+// via histogram buckets). Storing a truncated prefix would silently drop
+// data, so a target over the cap must be skipped entirely instead — the
+// same contract Collect already gives an unreachable target.
+func TestCollect_PerTargetMetricCapSkipsRatherThanTruncates(t *testing.T) {
+	var body strings.Builder
+	body.WriteString("# TYPE flood gauge\n")
+	for i := 0; i < maxScrapeMetricsPerTarget+1; i++ {
+		fmt.Fprintf(&body, "flood{n=\"%d\"} 1\n", i)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = w.Write([]byte(body.String()))
+	}))
+	defer srv.Close()
+
+	c := New([]Target{{URL: srv.URL}})
+	metrics, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(metrics) != 0 {
+		t.Fatalf("got %d metrics from a target over the per-target cap, want 0 (a partial write is the thing this prevents)", len(metrics))
+	}
+}
+
+// TestCollect_DoesNotFollowRedirects is a regression test: the scrape
+// client had no CheckRedirect override, so the default net/http behaviour
+// (follow up to 10 redirects) applied. A scrape target has no reason to
+// answer with a redirect; auto-discovery (DiscoverLocal) adds targets the
+// operator never explicitly listed, so following one sends this agent's
+// request to a host nobody configured.
+func TestCollect_DoesNotFollowRedirects(t *testing.T) {
+	var redirectTargetHit bool
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectTargetHit = true
+		_, _ = w.Write([]byte("up 1\n"))
+	}))
+	defer redirectTarget.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, redirectTarget.URL, http.StatusFound)
+	}))
+	defer srv.Close()
+
+	c := New([]Target{{URL: srv.URL}})
+	metrics, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if redirectTargetHit {
+		t.Error("the redirect was followed; a scrape target must not be able to send this agent's request elsewhere")
+	}
+	if len(metrics) != 0 {
+		t.Errorf("got %d metrics from a redirect response, want 0", len(metrics))
 	}
 }
 

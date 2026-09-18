@@ -11,6 +11,7 @@ package promscrape
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -21,6 +22,26 @@ import (
 	"github.com/prometheus/common/model"
 
 	fsmodel "github.com/marcfs31/forsight/forsight/internal/model"
+)
+
+const (
+	// maxScrapeBodyBytes bounds how much of a target's response body the
+	// parser is handed, the same way every other HTTP response this repo
+	// reads is bounded (probe.go's maxProbeBodyBytes, the OTLP receiver's
+	// 32MiB request cap, mlaas/client.go's maxResponseBytes). resp.Body is
+	// already the DECOMPRESSED stream — Go's transport applies
+	// Accept-Encoding: gzip and inflates it transparently when no Transport
+	// override disables that, as here — so this is what actually bounds a
+	// gzip bomb from a compromised or malicious exporter, not the size of
+	// the bytes that came in over the wire.
+	maxScrapeBodyBytes = 8 << 20
+	// maxScrapeMetricsPerTarget bounds one target's flattened output, for
+	// the same reason the OTLP receiver bounds its own (see its package
+	// doc): a histogram or summary's buckets/quantiles fan out one metric
+	// each, so a compact body can still expand well past what its byte size
+	// suggests. Same order of magnitude as the OTLP receiver's per-request
+	// caps.
+	maxScrapeMetricsPerTarget = 200_000
 )
 
 // Target is one endpoint to scrape on the collector's shared interval.
@@ -41,7 +62,14 @@ type Collector struct {
 // valid — Collect then simply returns nothing every tick, the same graceful
 // "nothing configured" shape as forsight's other optional collectors.
 func New(targets []Target) *Collector {
-	return &Collector{targets: targets, client: &http.Client{Timeout: 10 * time.Second}}
+	return &Collector{targets: targets, client: &http.Client{
+		Timeout: 10 * time.Second,
+		// A scrape target has no reason to answer with a redirect; treating
+		// one as the final response (mlaas/client.go's noRedirectClient does
+		// the same, for the same reason) avoids following it — and replaying
+		// the request — to a host the operator never configured.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}}
 }
 
 func (c *Collector) Name() string { return "promscrape" }
@@ -75,7 +103,7 @@ func (c *Collector) scrapeOne(ctx context.Context, t Target) ([]fsmodel.Metric, 
 	}
 
 	parser := expfmt.NewTextParser(model.LegacyValidation)
-	families, err := parser.TextToMetricFamilies(resp.Body)
+	families, err := parser.TextToMetricFamilies(io.LimitReader(resp.Body, maxScrapeBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("promscrape: parsing %s: %w", t.URL, err)
 	}
@@ -85,6 +113,14 @@ func (c *Collector) scrapeOne(ctx context.Context, t Target) ([]fsmodel.Metric, 
 	for name, mf := range families {
 		for _, m := range mf.GetMetric() {
 			out = append(out, metricsFromFamily(name, m, t.Labels, now)...)
+			if len(out) > maxScrapeMetricsPerTarget {
+				// Half of one target's metrics is worse than none this
+				// tick: Collect treats any error here the same as an
+				// unreachable target and simply skips it, the way the OTLP
+				// receiver refuses a request rather than store a truncated
+				// prefix.
+				return nil, fmt.Errorf("promscrape: %s exceeds the per-target metric limit of %d", t.URL, maxScrapeMetricsPerTarget)
+			}
 		}
 	}
 	return out, nil

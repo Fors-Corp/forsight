@@ -59,6 +59,37 @@ func TestSpanWatch_EvictsOldestTraceByTime(t *testing.T) {
 	}
 }
 
+// TestSpanWatch_BoundsSpansPerTrace is a regression test: maxTraces bounds
+// how many DISTINCT trace IDs the watch keeps, but nothing bounded how many
+// spans could pile up under a single one of them — a high-fanout trace, or
+// a client that reuses a TraceID, grew that one entry without limit.
+func TestSpanWatch_BoundsSpansPerTrace(t *testing.T) {
+	w := newSpanWatch()
+	const extra = 50
+	const total = maxSpansPerTrace + extra
+	for i := 0; i < total; i++ {
+		w.Observe([]SpanSample{{
+			TraceID:    "hot-trace",
+			SpanID:     fmt.Sprintf("s-%04d", i),
+			Name:       "op",
+			DurationMs: 1,
+		}})
+	}
+
+	got := w.traces["hot-trace"]
+	if len(got) != maxSpansPerTrace {
+		t.Fatalf("trace buffer holds %d spans, want the cap of %d", len(got), maxSpansPerTrace)
+	}
+	// The newest spans are kept, dropping from the front — the oldest
+	// `extra` span IDs must be gone.
+	if want := fmt.Sprintf("s-%04d", extra); got[0].SpanID != want {
+		t.Errorf("oldest retained span = %s, want %s (the first %d spans must have been dropped)", got[0].SpanID, want, extra)
+	}
+	if want := fmt.Sprintf("s-%04d", total-1); got[len(got)-1].SpanID != want {
+		t.Errorf("newest retained span = %s, want %s", got[len(got)-1].SpanID, want)
+	}
+}
+
 // spanBaseline is a little jitter, not one repeated value: a zero-spread
 // series makes the very first outlier redefine the interquartile spread
 // too, which is a degenerate case of its own and not what these tests are

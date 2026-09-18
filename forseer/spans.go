@@ -11,6 +11,14 @@ import (
 const maxSpanSeries = 256
 const maxTraces = 64
 
+// maxSpansPerTrace bounds how many spans one trace ID's buffer may hold.
+// maxTraces alone bounds how many DISTINCT trace IDs are kept, but nothing
+// bounded how many spans could pile up under a single one — a high-fanout
+// trace, or a client that reuses a TraceID, grows that one entry without
+// limit. Far above any real trace and far below anything dangerous, the
+// same reasoning maxSpanSeries and maxTraces themselves already carry.
+const maxSpansPerTrace = 1024
+
 // spanExceedRun is how many spans in a row have to land past this endpoint's
 // own p99 before slowSpan opens an insight. A calibrated p99 fires on about
 // one span in a hundred by construction — that is what "p99" means — so a
@@ -119,8 +127,14 @@ func (w *spanWatch) Observe(spans []SpanSample) {
 	}
 	for _, sp := range spans {
 		if sp.TraceID != "" {
-			tr := w.traces[sp.TraceID]
-			tr = append(tr, sp)
+			tr := append(w.traces[sp.TraceID], sp)
+			if len(tr) > maxSpansPerTrace {
+				// Keep the newest maxSpansPerTrace, dropping from the
+				// front — the same "bound the count, drop the oldest"
+				// shape evictOldestTraceLocked applies one level up, at
+				// the trace-ID granularity rather than the span one.
+				tr = tr[len(tr)-maxSpansPerTrace:]
+			}
 			w.traces[sp.TraceID] = tr
 			w.traceSeen[sp.TraceID] = now
 			if len(w.traces) > maxTraces {

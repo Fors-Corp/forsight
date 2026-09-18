@@ -532,6 +532,116 @@ func TestFutureTimestampsAreClamped(t *testing.T) {
 	}
 }
 
+// TestNumberDataPointsClampsFarFutureTimestamp is a regression test:
+// numberDataPoints (the Gauge/Sum path) used to convert TimeUnixNano
+// straight to a time.Time with no clamp, unlike every other OTLP point
+// type. A far-future Gauge would then survive every retention pass forever
+// (memory.go prunes by timestamp) and pin the dashboard's "latest value" to
+// it permanently.
+func TestNumberDataPointsClampsFarFutureTimestamp(t *testing.T) {
+	now := time.Now()
+	far := uint64(now.Add(72 * time.Hour).UnixNano())
+	points := []*metricspb.NumberDataPoint{
+		{TimeUnixNano: far, Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: 12.5}},
+	}
+
+	out := numberDataPoints("cpu.percent", points, nil)
+	if len(out) != 1 {
+		t.Fatalf("got %d metrics, want 1", len(out))
+	}
+	if out[0].Timestamp.After(now.Add(maxFutureSkew)) {
+		t.Errorf("Gauge/Sum timestamp = %v, want clamped to about %v", out[0].Timestamp, now)
+	}
+}
+
+// TestSpanFromOTLPClampsFarFutureStartAndDuration is a regression test:
+// spanFromOTLP used to convert both timestamps straight from the wire, with
+// no clamp. A far-future Start would be immortal the same way a far-future
+// Gauge is; a wire value above MaxInt64 wrapped to a time near the Unix
+// epoch on conversion, so Duration (end.Sub(start)) came out as a huge
+// negative number instead of an error — garbage a consumer would have had
+// no reason to guard against.
+func TestSpanFromOTLPClampsFarFutureStartAndDuration(t *testing.T) {
+	now := time.Now()
+
+	// A far-future Start must be clamped, the same as any other timestamp.
+	far := uint64(now.Add(72 * time.Hour).UnixNano())
+	s := &tracepb.Span{StartTimeUnixNano: far, EndTimeUnixNano: far + uint64(time.Second)}
+	got := spanFromOTLP(s, "svc")
+	if got.Start.After(now.Add(maxFutureSkew)) {
+		t.Errorf("span Start = %v, want clamped to about %v", got.Start, now)
+	}
+	if got.Duration < 0 {
+		t.Errorf("span Duration = %v, want >= 0", got.Duration)
+	}
+
+	// EndTimeUnixNano above MaxInt64 used to wrap to ~epoch on a raw
+	// int64 conversion, making end.Sub(start) a huge negative Duration.
+	overflow := &tracepb.Span{
+		StartTimeUnixNano: uint64(now.Add(-time.Second).UnixNano()),
+		EndTimeUnixNano:   math.MaxUint64,
+	}
+	gotOverflow := spanFromOTLP(overflow, "svc")
+	if gotOverflow.Duration < 0 {
+		t.Errorf("span Duration = %v, want >= 0 (an end above MaxInt64 must not wrap into a huge negative duration)", gotOverflow.Duration)
+	}
+
+	// Even with no overflow involved, an end that precedes start (both
+	// otherwise ordinary timestamps) must not produce a negative Duration.
+	inverted := &tracepb.Span{
+		StartTimeUnixNano: uint64(now.Add(4 * time.Minute).UnixNano()),
+		EndTimeUnixNano:   uint64(now.Add(1 * time.Minute).UnixNano()),
+	}
+	gotInverted := spanFromOTLP(inverted, "svc")
+	if gotInverted.Duration != 0 {
+		t.Errorf("span Duration = %v, want 0 (end before start must clamp, not go negative)", gotInverted.Duration)
+	}
+}
+
+// TestPerRequestSpanCapRejectsRatherThanTruncates is a regression test:
+// unlike /v1/metrics and /v1/logs, /v1/traces had no per-request cap at
+// all — a minimal Span message is small enough that the 32MiB body-read
+// limit every /v1/* endpoint already applies decodes to on the order of
+// ten million spans. Same contract as the metrics/logs caps: reject the
+// whole request rather than silently store a truncated prefix.
+func TestPerRequestSpanCapRejectsRatherThanTruncates(t *testing.T) {
+	spans := make([]*tracepb.Span, 0, maxSpansPerRequest+1)
+	for i := 0; i < maxSpansPerRequest+1; i++ {
+		spans = append(spans, &tracepb.Span{
+			StartTimeUnixNano: uint64(time.Now().UnixNano()),
+		})
+	}
+	req := &collectortrace.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			ScopeSpans: []*tracepb.ScopeSpans{{Spans: spans}},
+		}},
+	}
+	got, truncated := spansFromOTLP(req)
+	if !truncated {
+		t.Fatalf("flattened %d spans without reporting truncation", len(got))
+	}
+	if len(got) != maxSpansPerRequest {
+		t.Errorf("returned %d spans, want exactly the cap %d", len(got), maxSpansPerRequest)
+	}
+
+	body, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	sink := &fakeSink{}
+	rec := httptest.NewRecorder()
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(body))
+	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	NewHandler(sink, sink, sink).handleTraces(rec, httpReq)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+	if len(sink.spans) != 0 {
+		t.Errorf("stored %d spans from a rejected request, want 0 — a partial write is the thing this prevents", len(sink.spans))
+	}
+}
+
 func TestHandleLogs_MapsLogFields(t *testing.T) {
 	sink := &fakeSink{}
 	h := NewHandler(sink, sink, sink)

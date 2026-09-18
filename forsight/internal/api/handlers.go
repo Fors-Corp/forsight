@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -65,9 +66,15 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	// per_name is the metrics read's own cap (see store.MetricQuery.PerName):
 	// the newest N of every name, so an unscoped read stays bounded without
-	// a busy name starving a quiet one.
+	// a busy name starving a quiet one. Its maximum is enforced here, at the
+	// call site, rather than inside parsePositive (see maxQueryLimit's
+	// comment on why that helper stays a plain parser).
 	if err := parsePositive(q.Get("per_name"), errInvalidPerName, &query.PerName); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if query.PerName > maxQueryLimit {
+		http.Error(w, errPerNameTooLarge.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -118,9 +125,23 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, logs)
 }
 
-// parseWindow reads the three parameters every store query shares:
-// since and before (RFC3339, each optional) bound the window, limit (a
-// positive integer, optional) caps it at the newest N records.
+// maxQueryLimit bounds how many records a single /api/v1/metrics,
+// /api/v1/traces or /api/v1/logs request can ask for via limit or per_name,
+// and doubles as the default limit gets when a request sends none at all.
+// Before this, an unset limit meant "however much the store holds" — up to
+// store.DefaultMaxElements per collection (~200MB of metrics, and spans run
+// larger per record) — so a client that simply never passed limit was
+// already an unbounded read; this makes "no limit" mean "the newest
+// maxQueryLimit", a bound every request now gets whether it names one or
+// not. A request that names a limit over this is refused with 400 rather
+// than silently clamped, so the caller can tell its request didn't do what
+// it asked, instead of quietly getting fewer records back.
+const maxQueryLimit = 200_000
+
+// parseWindow reads the three parameters every store query shares: since
+// and before (RFC3339, each optional) bound the window, limit (a positive
+// integer, optional, capped and defaulted at maxQueryLimit) caps it at the
+// newest N records.
 func parseWindow(q url.Values, since, before *time.Time, limit *int) error {
 	var err error
 	if *since, err = parseTime(q.Get("since"), errInvalidSince); err != nil {
@@ -129,7 +150,16 @@ func parseWindow(q url.Values, since, before *time.Time, limit *int) error {
 	if *before, err = parseTime(q.Get("before"), errInvalidBefore); err != nil {
 		return err
 	}
-	return parsePositive(q.Get("limit"), errInvalidLimit, limit)
+	if err := parsePositive(q.Get("limit"), errInvalidLimit, limit); err != nil {
+		return err
+	}
+	switch {
+	case *limit == 0:
+		*limit = maxQueryLimit
+	case *limit > maxQueryLimit:
+		return errLimitTooLarge
+	}
+	return nil
 }
 
 // parsePositive stores raw as a positive integer in dst, leaves dst alone
@@ -158,10 +188,12 @@ func parseTime(raw string, invalid error) (time.Time, error) {
 }
 
 var (
-	errInvalidSince   = &queryError{"invalid since: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
-	errInvalidBefore  = &queryError{"invalid before: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
-	errInvalidLimit   = &queryError{"invalid limit: expected a positive integer"}
-	errInvalidPerName = &queryError{"invalid per_name: expected a positive integer"}
+	errInvalidSince    = &queryError{"invalid since: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
+	errInvalidBefore   = &queryError{"invalid before: expected RFC3339, e.g. 2026-01-02T15:04:05Z"}
+	errInvalidLimit    = &queryError{"invalid limit: expected a positive integer"}
+	errInvalidPerName  = &queryError{"invalid per_name: expected a positive integer"}
+	errLimitTooLarge   = &queryError{fmt.Sprintf("invalid limit: must be at most %d", maxQueryLimit)}
+	errPerNameTooLarge = &queryError{fmt.Sprintf("invalid per_name: must be at most %d", maxQueryLimit)}
 )
 
 type queryError struct{ msg string }
