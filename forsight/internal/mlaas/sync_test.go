@@ -52,7 +52,11 @@ type fakeMlaas struct {
 	// body (still 200) instead of {"ok":true} — a test's way to simulate an
 	// upstream that answers but not with valid JSON.
 	healthzOverride string
-	requests        []string // "METHOD /path?query"
+	// version, when non-empty, is served as GET /healthz's "version" field
+	// — a test's way to simulate an mlaas release, and to change it
+	// between passes to simulate an upgrade.
+	version  string
+	requests []string // "METHOD /path?query"
 }
 
 type fakeDataset struct {
@@ -108,6 +112,7 @@ func newFakeMlaas(t *testing.T) *fakeMlaas {
 func (f *fakeMlaas) healthz(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	override := f.healthzOverride
+	version := f.version
 	f.mu.Unlock()
 	if override != "" {
 		w.Header().Set("Content-Type", "application/json")
@@ -115,7 +120,11 @@ func (f *fakeMlaas) healthz(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, override)
 		return
 	}
-	f.json(w, 200, map[string]any{"ok": true})
+	body := map[string]any{"ok": true}
+	if version != "" {
+		body["version"] = version
+	}
+	f.json(w, 200, body)
 }
 
 func (f *fakeMlaas) json(w http.ResponseWriter, code int, v any) {
@@ -741,6 +750,50 @@ func TestFirstPass_UploadsCreatesAndTrains(t *testing.T) {
 	}
 	if len(st.Forecasts) != 0 || len(st.Predictions) != 0 {
 		t.Errorf("forecasts/predictions before any champion: %+v %+v", st.Forecasts, st.Predictions)
+	}
+}
+
+// TestPass_RecordsMlaasVersionOnChange checks that the version mlaas
+// reports on GET /healthz is recorded, and that an upgrade between two
+// sync passes — mlaas swapped out underneath a running agent — is
+// observed. It asserts on Syncer's own recorded state (mlaasVersion)
+// rather than on log text: that field only ever changes through
+// noteVersion, so if version-tracking were removed or never wired into a
+// pass, mlaasVersion would stay "" and this test would fail.
+func TestPass_RecordsMlaasVersionOnChange(t *testing.T) {
+	f := newFakeMlaas(t)
+	f.version = "v1.8.0"
+	s := newSyncer(t, f, seedStore(t))
+
+	s.pass(context.Background())
+	s.mu.Lock()
+	got := s.mlaasVersion
+	s.mu.Unlock()
+	if got != "v1.8.0" {
+		t.Fatalf("mlaasVersion after first pass = %q, want v1.8.0", got)
+	}
+
+	// A pass with the same version reported is the routine case: still
+	// recorded, nothing to observe as a change.
+	s.pass(context.Background())
+	s.mu.Lock()
+	got = s.mlaasVersion
+	s.mu.Unlock()
+	if got != "v1.8.0" {
+		t.Fatalf("mlaasVersion after an unchanged pass = %q, want v1.8.0", got)
+	}
+
+	// mlaas is upgraded underneath the running agent.
+	f.mu.Lock()
+	f.version = "v1.9.0"
+	f.mu.Unlock()
+
+	s.pass(context.Background())
+	s.mu.Lock()
+	got = s.mlaasVersion
+	s.mu.Unlock()
+	if got != "v1.9.0" {
+		t.Fatalf("mlaasVersion after an upgrade = %q, want v1.9.0", got)
 	}
 }
 

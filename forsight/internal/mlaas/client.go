@@ -270,25 +270,29 @@ type wireActual struct {
 // ---- calls ----
 
 // Healthz is the liveness probe. It sends no key, like a supervisor would,
-// and reports mlaas's own verdict: a 503 names the part that failed.
-func (c *Client) Healthz(ctx context.Context) error {
+// and reports mlaas's own verdict: a 503 names the part that failed. On
+// success it also returns the version mlaas reported
+// ({"ok":true,"version":"v1.8.0"}), so a caller can tell which build it is
+// talking to; empty when the response carries none.
+func (c *Client) Healthz(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/healthz", nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var body struct {
-		OK     bool   `json:"ok"`
-		Failed string `json:"failed"`
+		OK      bool   `json:"ok"`
+		Failed  string `json:"failed"`
+		Version string `json:"version"`
 	}
 	if err := c.do(req, &body); err != nil {
-		return err
+		return "", err
 	}
 	if !body.OK {
-		return fmt.Errorf("mlaas is unhealthy: %s", body.Failed)
+		return "", fmt.Errorf("mlaas is unhealthy: %s", body.Failed)
 	}
-	return nil
+	return body.Version, nil
 }
 
 // ListDatasets is GET /datasets.
