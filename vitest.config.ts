@@ -47,6 +47,7 @@ export default defineConfig({
         // Storybook test runner in real Chromium — a coverage tool v8 can't
         // see. Excluded here so the 95% bar stays meaningful for the ~24
         // components jsdom covers properly.
+        "src/components/HoverCard.tsx",
         "src/components/Popover.tsx",
         "src/components/DropdownMenu.tsx",
         "src/components/Tooltip.tsx",
