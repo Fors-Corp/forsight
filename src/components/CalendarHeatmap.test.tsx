@@ -78,3 +78,24 @@ describe("CalendarHeatmap", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 });
+
+describe("weekday labels", () => {
+  it("come from Intl, not a hardcoded English array", () => {
+    // Asserts delegation, not literal strings, so it holds in any locale —
+    // and it failed before, when a German reader got German month labels one
+    // line above English weekday labels in the same grid.
+    const expected = new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      timeZone: "UTC",
+    });
+    const firstSunday = Date.UTC(2026, 0, 4);
+    const wanted = Array.from({ length: 7 }, (_, day) =>
+      expected.format(new Date(firstSunday + day * 86_400_000))
+    );
+
+    render(<CalendarHeatmap days={[{ date: "2026-01-04", value: 1 }]} label="Deploys" />);
+    for (const name of wanted) {
+      expect(screen.getByRole("rowheader", { name })).toBeInTheDocument();
+    }
+  });
+});

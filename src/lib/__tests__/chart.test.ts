@@ -249,3 +249,64 @@ describe("formatters", () => {
     expect(formatPercent(50)).toBe("50%");
   });
 });
+
+// These assert DELEGATION to Intl rather than literal strings, so they hold
+// whatever locale the runtime is in — which is the whole point. A literal
+// "1.2k" expectation would pass on an en-US CI runner and pass again if the
+// delegation were reverted.
+describe("locale-aware number formatting", () => {
+  const num = (v: number, maximumFractionDigits: number) =>
+    new Intl.NumberFormat(undefined, { maximumFractionDigits, useGrouping: false }).format(v);
+
+  it("formatCompact writes its number in the viewer's locale, keeping our unit", () => {
+    expect(formatCompact(1_240)).toBe(`${num(1.24, 1)}k`);
+    expect(formatCompact(1_240_000)).toBe(`${num(1.24, 1)}M`);
+    expect(formatCompact(-1_240)).toBe(`-${num(1.24, 1)}k`);
+  });
+
+  it("formatCompact keeps two significant decimals below 1", () => {
+    expect(formatCompact(0.0123)).toBe(num(0.012, 3));
+  });
+
+  it("keeps a precision Intl's own compact notation cannot give it", () => {
+    // notation:"compact" applies one maximumFractionDigits AFTER compacting,
+    // so the value that keeps 1240 reading as "1.2k" rather than "1.24k" is
+    // the same value that flattens 0.0123 to "0". This library needs both,
+    // which is why it compacts itself and delegates only the number.
+    const compact = new Intl.NumberFormat(undefined, {
+      notation: "compact",
+      maximumFractionDigits: 1,
+    });
+    expect(compact.format(0.0123)).toBe(num(0, 0));
+    expect(formatCompact(0.0123)).not.toBe(compact.format(0.0123));
+  });
+
+  it("formatDuration writes its number in the viewer's locale", () => {
+    expect(formatDuration(1_250)).toBe(`${num(1.25, 2)}s`);
+    expect(formatDuration(940)).toBe(`${num(940, 0)}ms`);
+    expect(formatDuration(210_000)).toBe(`${num(3.5, 1)}min`);
+  });
+
+  it("formatPercent delegates the whole value, so the locale's spacing applies too", () => {
+    const pct = (v: number, maximumFractionDigits: number) =>
+      new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits }).format(v / 100);
+    expect(formatPercent(5.5)).toBe(pct(5.5, 1));
+    expect(formatPercent(99.982, 3)).toBe(pct(99.982, 3));
+    expect(formatPercent(50, 0)).toBe(pct(50, 0));
+  });
+
+  it("formatPercent's default rounds an SLO figure, as its doc now says", () => {
+    // Pinned because the previous doc comment claimed 99.982 -> "99.982%" for
+    // the default, which was never true: decimals defaults to 1.
+    expect(formatPercent(99.982)).toBe(formatPercent(100));
+    expect(formatPercent(99.982, 2)).not.toBe(formatPercent(100, 2));
+  });
+
+  it("no formatter emits a hardcoded ASCII decimal point", () => {
+    // The separator must come from Intl, so it must match Intl's for the same
+    // number — a hardcoded "." passes in en-US and fails everywhere else.
+    const sep = num(1.1, 1).replace(/1/g, "");
+    expect(formatCompact(1_100)).toBe(`1${sep}1k`);
+    expect(formatDuration(1_100)).toBe(`1${sep}1s`);
+  });
+});
