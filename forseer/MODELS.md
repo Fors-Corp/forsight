@@ -268,11 +268,22 @@ min/q1/median/q3/max — a box plot, for free, for a later per-endpoint spread
 view. The other targets p99, and a span past it is what opens `slow_span`
 now, replacing the sigma test.
 
-p99 fires on about one span in a hundred *by construction*, so opening still
-waits for a run of `spanExceedRun` (3) consecutive exceedances — an alert
-budget in the spirit of the learned thresholds above, sized without standing
-up a second model to learn it. Closing is immediate on the first span back
-in line; the budget only guards the false-positive cost of opening.
+A *calibrated* p99 fires on about one span in a hundred *by construction*, so
+opening still waits for a run of `spanExceedRun` (3) consecutive exceedances
+— an alert budget in the spirit of the learned thresholds above, sized
+without standing up a second model to learn it. Closing is immediate on the
+first span back in line; the budget only guards the false-positive cost of
+opening.
+
+"Calibrated" is the load-bearing word, and `spanP99MinSamples` (200) is what
+earns it. A P² marker converges on a long tail from below, so a series judged
+on twelve samples reports a "p99" that is really nearer a p79: measured on
+stationary lognormal latency, a series with 12-25 samples lands past its own
+marker on 13.5% of spans and opens an insight once per 323, against a budget
+of one per million. From 200 samples on it is 1.11% and one per 734 000. Two
+hundred rather than a thousand because a CUSUM reset drops the count to zero
+and the gate is not free: the share of spans judged at all falls from 75.6%
+at 200 to 23.5% at 1000, for another 0.06 percentage points of calibration.
 
 A CUSUM on the span's deviation from the median — scaled by the p50
 tracker's own interquartile spread, so it is a shape-free "how many spreads
@@ -286,7 +297,8 @@ because it is being compared against a baseline that stopped being true.
 
 **Measured.** Nobody tags a trace with "yes, this really was slow", so there
 is no label to grade `slow_span` against — the Card reports `Unmeasured` and
-gates `Ready` on `minSamples`, the same bar the z-score it replaced used.
+gates `Ready` on `spanP99MinSamples`, because what it claims is a stable
+p50/p99 and a twelve-sample series has only the first of those.
 
 **Component.** **TraceWaterfall**, unchanged.
 
