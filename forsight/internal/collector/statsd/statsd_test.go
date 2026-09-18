@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/marcfs31/forsight/forsight/internal/model"
+	"math"
+	"strings"
 )
 
 func TestIngestLine_CounterGaugeTimer(t *testing.T) {
@@ -344,4 +346,30 @@ func collectOne(t *testing.T, c *Collector) []model.Metric {
 		t.Fatalf("Collect: %v", err)
 	}
 	return got
+}
+
+// TestCollector_RejectsNonFiniteValues: ParseFloat accepts these literals in
+// any case, and this listener is unauthenticated UDP on every interface by
+// default — so without the filter, one datagram puts a value in the store
+// that json.Marshal cannot encode and that poisons Forseer's baseline for
+// that series permanently.
+func TestCollector_RejectsNonFiniteValues(t *testing.T) {
+	c := New(":0")
+	for _, line := range []string{
+		"evil.gauge:NaN|g", "evil.gauge2:nan|g",
+		"evil.counter:Inf|c", "evil.counter2:+Inf|c", "evil.counter3:-inf|c",
+		"evil.timer:NaN|ms",
+	} {
+		c.ingestLine(line)
+	}
+	c.ingestLine("good.gauge:1.5|g")
+
+	for _, m := range collectOne(t, c) {
+		if math.IsNaN(m.Value) || math.IsInf(m.Value, 0) {
+			t.Errorf("%s came through with a non-finite value %v", m.Name, m.Value)
+		}
+		if strings.HasPrefix(m.Name, "evil.") {
+			t.Errorf("%s was accumulated at all", m.Name)
+		}
+	}
 }

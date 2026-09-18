@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"net"
 	"sort"
 	"strconv"
@@ -200,6 +201,13 @@ func (c *Collector) ingestLine(line string) {
 
 	value, err := strconv.ParseFloat(fields[0], 64)
 	if err != nil {
+		return
+	}
+	// ParseFloat accepts "NaN", "Inf", "+Inf" and "-Inf" (in any case), so
+	// without this an unauthenticated datagram can put a non-finite value in
+	// the store. json.Marshal then fails on the whole metrics response, and
+	// the detector's Welford state for that series is poisoned permanently.
+	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return
 	}
 	metricType := fields[1]

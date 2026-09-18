@@ -14,6 +14,7 @@ import (
 	"github.com/marcfs31/forsight/forsight/internal/collector"
 	"github.com/marcfs31/forsight/forsight/internal/model"
 	"github.com/marcfs31/forsight/forsight/internal/store"
+	"math"
 )
 
 func TestHandleHealthz(t *testing.T) {
@@ -633,5 +634,51 @@ func TestHandleReadyz_OmitsCollectorsWithoutARegistry(t *testing.T) {
 	}
 	if _, ok := raw["collectors"]; ok {
 		t.Errorf("body has a collectors field with no registry attached: %s", rec.Body.String())
+	}
+}
+
+// TestWriteJSON_ReportsAnEncodeFailureInsteadOfA200WithNoBody.
+//
+// The previous shape committed the status line before attempting to encode,
+// and discarded the error. json.Marshal fails outright on a non-finite float
+// and Encode buffers before writing, so the client received 200 with
+// Content-Type: application/json and a zero-length body — res.ok true,
+// res.json() throwing, the dashboard reporting the agent unreachable, and
+// nothing at all in the agent's log. handleMetrics passes the whole matching
+// slice, so one such value made every metrics read behave this way for as
+// long as it stayed in the retention window.
+func TestWriteJSON_ReportsAnEncodeFailureInsteadOfA200WithNoBody(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeJSON(rec, http.StatusOK, map[string]any{"value": math.NaN()})
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("status %d with body %q: an unencodable response must not report success",
+			rec.Code, rec.Body.String())
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("error response has an empty body too, which is the failure mode this replaces")
+	}
+}
+
+// TestWriteJSON_StillWritesOrdinaryPayloads guards the rewrite itself.
+func TestWriteJSON_StillWritesOrdinaryPayloads(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeJSON(rec, http.StatusCreated, map[string]any{"name": "ok", "value": 1.5})
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &back); err != nil {
+		t.Fatalf("body does not parse: %v (%q)", err, rec.Body.String())
+	}
+	if back["name"] != "ok" || back["value"] != 1.5 {
+		t.Errorf("round trip = %+v", back)
 	}
 }

@@ -332,15 +332,26 @@ func (s *BadgerStore) WriteMetrics(_ context.Context, metrics []model.Metric) er
 	if len(metrics) == 0 {
 		return nil
 	}
-	wb := s.db.NewWriteBatch()
-	defer wb.Cancel()
-	for _, m := range metrics {
+	// Marshal everything before opening the batch. WriteBatch auto-commits a
+	// sub-transaction when an entry would make it too big, and Cancel cannot
+	// undo one that already went in — so an encode failure partway through
+	// the loop leaves some records durably written and returns an error
+	// saying none were. json.Marshal fails outright on a non-finite float,
+	// which is exactly the input the ingest filters now reject; this makes
+	// the write all-or-nothing regardless of what else ever fails to encode.
+	vals := make([][]byte, len(metrics))
+	for i, m := range metrics {
 		val, err := json.Marshal(m)
 		if err != nil {
 			return fmt.Errorf("encode metric %q: %w", m.Name, err)
 		}
+		vals[i] = val
+	}
+	wb := s.db.NewWriteBatch()
+	defer wb.Cancel()
+	for i, m := range metrics {
 		key := encodeKey(metricKeyType, m.Name, m.Timestamp, s.nextSeq())
-		if err := wb.SetEntry(badger.NewEntry(key, val).WithTTL(s.ttl())); err != nil {
+		if err := wb.SetEntry(badger.NewEntry(key, vals[i]).WithTTL(s.ttl())); err != nil {
 			return fmt.Errorf("write metric %q: %w", m.Name, err)
 		}
 	}

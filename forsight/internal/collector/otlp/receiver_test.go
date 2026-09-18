@@ -740,3 +740,31 @@ func TestLogSeverityMapping(t *testing.T) {
 		}
 	}
 }
+
+// TestNumberDataPointValue_DropsNonFinite. A double on the OTLP wire can be
+// NaN or +/-Inf, and nothing downstream survives one: json.Marshal fails on
+// the whole metrics response, the Badger batch cannot encode the record, and
+// Forseer's Welford state for that series is poisoned permanently. Dropping
+// the point is the only reading that is not a lie — reporting 0 would invent
+// a measurement nobody took.
+func TestNumberDataPointValue_DropsNonFinite(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		dp     *metricspb.NumberDataPoint
+		want   float64
+		wantOK bool
+	}{
+		{"NaN", &metricspb.NumberDataPoint{Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: math.NaN()}}, 0, false},
+		{"+Inf", &metricspb.NumberDataPoint{Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: math.Inf(1)}}, 0, false},
+		{"-Inf", &metricspb.NumberDataPoint{Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: math.Inf(-1)}}, 0, false},
+		{"ordinary double", &metricspb.NumberDataPoint{Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: 12.5}}, 12.5, true},
+		{"int is finite by construction", &metricspb.NumberDataPoint{Value: &metricspb.NumberDataPoint_AsInt{AsInt: 7}}, 7, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := numberDataPointValue(tc.dp)
+			if ok != tc.wantOK || (ok && got != tc.want) {
+				t.Errorf("numberDataPointValue = (%v, %v), want (%v, %v)", got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -264,8 +265,39 @@ func (s *Server) handleForseerSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "summary": summary})
 }
 
+// writeJSON marshals first and commits the status afterwards.
+//
+// The obvious shape — WriteHeader then Encode — cannot report a failure,
+// because by the time Encode runs the status line is already on the wire.
+// Encode marshals into an internal buffer before writing, so a failure there
+// writes zero body bytes: the client gets a 200 with an empty body, res.ok is
+// true, res.json() throws, and the dashboard reports the agent unreachable
+// while the agent logs nothing. json.Marshal fails outright on a non-finite
+// float, and handleMetrics passes the entire matching slice, so one NaN
+// anywhere in the retention window did that to every metrics read. The
+// non-finite filters at the ingest boundaries are what stop it arriving; this
+// is what stops it being silent if anything ever does.
+//
+// slog.Default() rather than s.logger: writeJSON is a free function shared by
+// handlers.go and mlaas.go with no receiver, and NewServer falls back to the
+// same default.
+//
+// The line carries the marshalling error and nothing else, deliberately. The
+// status is the one that was NOT sent — this path answers 500 — so recording
+// it next to a 500 misleads more than it helps, and it is also the only value
+// here an outsider can reach: writeMlaasError forwards UpstreamError.Status,
+// which errors.As lifts out of an error whose text carries req.URL.Path.
+// encoding/json already names the offending type or value in err ("json:
+// unsupported value: NaN", "json: unsupported type: chan int"), and that is
+// what actually diagnoses a failure here.
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	buf, err := json.Marshal(v)
+	if err != nil {
+		slog.Default().Error("encoding a JSON response", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(buf)
 }
