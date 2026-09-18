@@ -15,12 +15,17 @@
 // "flush-and-reset" semantics the original Etsy statsd server popularized.
 // Gauges are the one exception: they persist their last value across a
 // flush rather than resetting to zero, matching every real StatsD
-// implementation's gauge semantics.
+// implementation's gauge semantics — but only for gaugeTTL after the last
+// packet that set them, so a client that goes away stops costing memory
+// forever. UDP has no connection to close and no authentication to fail, so
+// every bound in this file is the only thing standing between a datagram and
+// the agent's heap; see maxSeries.
 package statsd
 
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"sort"
 	"strconv"
@@ -33,6 +38,35 @@ import (
 
 var errNotBound = errors.New("statsd: Serve called before a successful Bind")
 
+// The bounds below exist because this is the one ingest path in the agent
+// that cannot be authenticated: StatsD is UDP, the default listen address is
+// :8125 on every interface, and a source address is spoofable, so anything
+// that can route a datagram here can write to these maps. OTLP and the
+// Prometheus scrape both cap what one request can turn into; before these,
+// this did not.
+const (
+	// maxSeries caps distinct series held across counters, gauges and timers
+	// together. A single 65535-byte datagram carries roughly 6500 "a1:1|g"
+	// lines, each of which was a permanent heap entry: sustained, that is an
+	// out-of-memory kill in minutes, and short of one, every registry tick
+	// emitted a model.Metric per accumulated gauge into the store and into
+	// Forseer. 10000 is well above any real application's cardinality and far
+	// below what hurts.
+	maxSeries = 10_000
+
+	// maxTimerSamplesPerKey caps one key's samples within a single flush
+	// interval, so one name cannot absorb an unbounded slice between ticks.
+	// Timers are summarized to count/sum/quantiles, and a few thousand
+	// samples already pin those well inside a percentile bucket's width.
+	maxTimerSamplesPerKey = 10_000
+
+	// gaugeTTL is how long a gauge keeps reporting its last value with no
+	// further packets. Long enough that an ordinary reporting cadence (or a
+	// brief client restart) never loses a series, short enough that a dead
+	// client's cardinality does not accumulate for the life of the process.
+	gaugeTTL = 10 * time.Minute
+)
+
 // Collector accumulates StatsD packets and flushes them as forsight metrics.
 type Collector struct {
 	addr string
@@ -40,8 +74,20 @@ type Collector struct {
 	mu       sync.Mutex
 	conn     net.PacketConn
 	counters map[metricKey]float64
-	gauges   map[metricKey]float64
+	gauges   map[metricKey]gaugeEntry
 	timers   map[metricKey][]float64
+	// dropped counts lines refused for exceeding maxSeries since the last
+	// flush, so a cardinality wall shows up as a number somewhere rather than
+	// as series that quietly stop appearing.
+	dropped int
+}
+
+// gaugeEntry is a gauge's last value and when a packet last set it. The
+// timestamp is what lets Collect expire a gauge whose client is gone; a bare
+// float64 could only ever grow.
+type gaugeEntry struct {
+	value    float64
+	lastSeen time.Time
 }
 
 type metricKey struct {
@@ -55,7 +101,7 @@ func New(addr string) *Collector {
 	return &Collector{
 		addr:     addr,
 		counters: map[metricKey]float64{},
-		gauges:   map[metricKey]float64{},
+		gauges:   map[metricKey]gaugeEntry{},
 		timers:   map[metricKey][]float64{},
 	}
 }
@@ -174,24 +220,61 @@ func (c *Collector) ingestLine(line string) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Membership before length: once the cap is reached a series already
+	// being tracked must keep updating, or the accumulator freezes at
+	// whatever arrived first and every established metric goes stale while
+	// the flood is refused. Only a genuinely new key is turned away.
+	if !c.knownLocked(key) && c.seriesLocked() >= maxSeries {
+		c.dropped++
+		return
+	}
+
 	switch metricType {
 	case "c":
 		// A sampled counter under-reports by definition — scale back up
 		// to what the client says the real count would have been.
 		c.counters[key] += value / sampleRate
 	case "g":
+		now := time.Now()
 		if strings.HasPrefix(fields[0], "+") || strings.HasPrefix(fields[0], "-") {
-			c.gauges[key] += value // DogStatsD's relative-gauge-adjustment convention
+			// DogStatsD's relative-gauge-adjustment convention.
+			c.gauges[key] = gaugeEntry{value: c.gauges[key].value + value, lastSeen: now}
 		} else {
-			c.gauges[key] = value
+			c.gauges[key] = gaugeEntry{value: value, lastSeen: now}
 		}
 	case "ms", "h", "d":
+		if len(c.timers[key]) >= maxTimerSamplesPerKey {
+			c.dropped++
+			return
+		}
 		c.timers[key] = append(c.timers[key], value)
 	case "s":
 		// Sets (unique-value counting) need a different accumulator shape
 		// than a plain float — not implemented; the line is dropped rather
 		// than silently mis-recorded as a bogus numeric value.
 	}
+}
+
+// knownLocked reports whether key is already accumulating somewhere. Callers
+// hold c.mu.
+func (c *Collector) knownLocked(key metricKey) bool {
+	if _, ok := c.counters[key]; ok {
+		return true
+	}
+	if _, ok := c.gauges[key]; ok {
+		return true
+	}
+	_, ok := c.timers[key]
+	return ok
+}
+
+// seriesLocked is how many distinct series are held right now. A key present
+// in two accumulators counts twice, which is the conservative direction: the
+// cap is about bounding memory, and two entries cost two entries. Callers
+// hold c.mu.
+func (c *Collector) seriesLocked() int {
+	return len(c.counters) + len(c.gauges) + len(c.timers)
 }
 
 func splitOnce(s string, sep byte) ([2]string, bool) {
@@ -232,14 +315,38 @@ func tagsToLabels(tags string) map[string]string {
 // last flush"); gauges persist their last value, since a gauge represents
 // "the current value of something," not an interval total.
 func (c *Collector) Collect(_ context.Context) ([]model.Metric, error) {
+	now := time.Now()
+
 	c.mu.Lock()
-	counters, gauges, timers := c.counters, c.gauges, c.timers
+	counters, timers := c.counters, c.timers
 	c.counters = map[metricKey]float64{}
 	c.timers = map[metricKey][]float64{}
+
+	// Gauges are not swapped out — they persist by design — so they must be
+	// COPIED here rather than aliased. Handing the live map out and ranging
+	// over it after the unlock is a concurrent map iteration and write the
+	// moment one more packet arrives, which the Go runtime turns into an
+	// unrecoverable fatal error: a remote, unauthenticated crash of the whole
+	// agent. Expiry happens in the same critical section, so a gone client's
+	// keys leave both the snapshot and the live map together.
+	for key, g := range c.gauges {
+		if now.Sub(g.lastSeen) > gaugeTTL {
+			delete(c.gauges, key)
+		}
+	}
+	gauges := make(map[metricKey]float64, len(c.gauges))
+	for key, g := range c.gauges {
+		gauges[key] = g.value
+	}
+	dropped := c.dropped
+	c.dropped = 0
 	c.mu.Unlock()
 
-	now := time.Now()
 	var out []model.Metric
+	if dropped > 0 {
+		slog.Default().Warn("statsd dropped lines over the series cap",
+			"dropped", dropped, "max_series", maxSeries)
+	}
 	for key, v := range counters {
 		out = append(out, model.Metric{Name: key.name, Value: v, Timestamp: now, Labels: tagsToLabels(key.tags)})
 	}
