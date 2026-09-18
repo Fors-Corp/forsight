@@ -221,10 +221,14 @@ func dataPointsFromMetric(m *metricspb.Metric, resourceLabels map[string]string)
 func numberDataPoints(name string, points []*metricspb.NumberDataPoint, resourceLabels map[string]string) []model.Metric {
 	out := make([]model.Metric, 0, len(points))
 	for _, dp := range points {
+		value, ok := numberDataPointValue(dp)
+		if !ok {
+			continue
+		}
 		labels := mergeLabels(resourceLabels, attributesToLabels(dp.GetAttributes()))
 		out = append(out, model.Metric{
 			Name:      name,
-			Value:     numberDataPointValue(dp),
+			Value:     value,
 			Timestamp: time.Unix(0, int64(dp.GetTimeUnixNano())),
 			Labels:    labels,
 		})
@@ -366,14 +370,24 @@ func formatBound(v float64) string {
 	return strconv.FormatFloat(v, 'g', -1, 64)
 }
 
-func numberDataPointValue(dp *metricspb.NumberDataPoint) float64 {
+// numberDataPointValue reads a data point's value, reporting false for one
+// that is not finite. A double on the wire can be NaN or +/-Inf, and nothing
+// downstream survives one: json.Marshal fails on the entire metrics response
+// (see writeJSON), the Badger batch cannot encode the record, and the
+// detector's Welford state for that series is poisoned permanently (see
+// observeOneLocked). Dropping the point is the only reading that is not a
+// lie; an int value is finite by construction.
+func numberDataPointValue(dp *metricspb.NumberDataPoint) (float64, bool) {
 	switch v := dp.GetValue().(type) {
 	case *metricspb.NumberDataPoint_AsDouble:
-		return v.AsDouble
+		if math.IsNaN(v.AsDouble) || math.IsInf(v.AsDouble, 0) {
+			return 0, false
+		}
+		return v.AsDouble, true
 	case *metricspb.NumberDataPoint_AsInt:
-		return float64(v.AsInt)
+		return float64(v.AsInt), true
 	default:
-		return 0
+		return 0, false
 	}
 }
 

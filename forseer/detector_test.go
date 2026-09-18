@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -228,5 +229,50 @@ func TestSeriesKey_IncludesSortedLabels(t *testing.T) {
 	c := seriesKey("docker.cpu.percent", map[string]string{"container_id": "def", "container_name": "web"})
 	if a == c {
 		t.Fatal("different container_id produced the same key")
+	}
+}
+
+// TestDetector_NonFiniteValueDoesNotPoisonTheSeries.
+//
+// Welford has no way back from a NaN: once mean and m2 are NaN they stay NaN,
+// and every comparison against NaN is false in Go, so neither the
+// variance <= 0 guard nor the sigma == 0 guard fires, z is NaN, and both
+// z >= warn and z >= critical are false forever. Anomaly and changepoint
+// detection for that series go permanently dead with no error and no log
+// line. One value is enough, and it need not be trusted: strconv.ParseFloat
+// accepts "NaN" and "Inf" from an unauthenticated StatsD datagram.
+func TestDetector_NonFiniteValueDoesNotPoisonTheSeries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bad  float64
+	}{
+		{"NaN", math.NaN()},
+		{"+Inf", math.Inf(1)},
+		{"-Inf", math.Inf(-1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := NewDetector()
+			for i := 0; i < minSamples; i++ {
+				d.Observe([]Point{{Name: "host.cpu.percent", Value: 10}})
+			}
+			d.Observe([]Point{{Name: "host.cpu.percent", Value: tc.bad}})
+
+			// The series must still be able to see a real spike afterwards.
+			d.Observe([]Point{{Name: "host.cpu.percent", Value: 10_000}})
+
+			var sawAnomaly bool
+			for _, ins := range d.Insights() {
+				if ins.Kind == KindAnomaly {
+					sawAnomaly = true
+				}
+			}
+			if !sawAnomaly {
+				t.Fatal("a huge spike after the non-finite value opened nothing: the series baseline is poisoned")
+			}
+			mean, stddev, ready := d.SeriesBaseline("host.cpu.percent", nil)
+			if !ready || math.IsNaN(mean) || math.IsNaN(stddev) {
+				t.Fatalf("baseline is mean=%v stddev=%v ready=%v", mean, stddev, ready)
+			}
+		})
 	}
 }
