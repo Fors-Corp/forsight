@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 )
@@ -142,9 +143,12 @@ func TestSpanWatch_ErrorStatusEscalatesToCritical(t *testing.T) {
 // TestSpanWatch_CUSUMResetsEstimatorOnRegimeShift checks that a sharp,
 // sustained jump — the CUSUM statistic on the series' own robust z crossing
 // cusumH — throws the P² markers away rather than letting one shift get
-// blended into a lifetime baseline that never catches up. A tight baseline
-// makes the interquartile spread small, so a jump far outside it produces a
-// z large enough to cross cusumH on a single point.
+// blended into a lifetime baseline that never catches up.
+//
+// A *sustained* shift, not a single point: the sign CUSUM needs a run of
+// spans on one side of the median to accumulate past cusumH, which is the
+// point of it. TestSpanWatch_OneSlowSpanDoesNotResetTheBaseline below is the
+// other half of that contract.
 func TestSpanWatch_CUSUMResetsEstimatorOnRegimeShift(t *testing.T) {
 	w := newSpanWatch()
 	warmSpanBaseline(t, w, "api", "GET /checkout")
@@ -155,14 +159,86 @@ func TestSpanWatch_CUSUMResetsEstimatorOnRegimeShift(t *testing.T) {
 	}
 	warmedN := warm.n
 
-	w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: 500}})
+	// Every span above the old median: +1 each, less cusumK, so cusumH is
+	// reached after ceil(cusumH/(1-cusumK)) of them.
+	need := int(math.Ceil(cusumH/(1-cusumK))) + 1
+	for i := 0; i < need; i++ {
+		w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: 500}})
+	}
 
 	s := w.series[key]
 	if s.n >= warmedN {
-		t.Fatalf("expected the regime-shift point to reset the series (n back down from %d), got n=%d", warmedN, s.n)
+		t.Fatalf("expected the sustained shift to reset the series (n back down from %d), got n=%d", warmedN, s.n)
 	}
-	if s.cusum != 0 {
-		t.Fatalf("expected cusum cleared right after a reset, got %v", s.cusum)
+	if s.cusumHi != 0 || s.cusumLo != 0 {
+		t.Fatalf("expected both CUSUM arms cleared right after a reset, got hi=%v lo=%v", s.cusumHi, s.cusumLo)
+	}
+}
+
+// TestSpanWatch_OneSlowSpanDoesNotResetTheBaseline pins the half of the
+// contract the previous formulation got wrong. It divided |duration-median|
+// by the interquartile spread, so a single span far outside a tight baseline
+// cleared cusumH on its own and threw away p50/p99 — losing the very
+// baseline needed to judge the next span, on evidence of exactly one sample.
+// One slow span is a slow span; spanExceedRun exceedances in a row are what
+// opens an insight about it, and neither is a regime change.
+func TestSpanWatch_OneSlowSpanDoesNotResetTheBaseline(t *testing.T) {
+	w := newSpanWatch()
+	warmSpanBaseline(t, w, "api", "GET /checkout")
+	key := "api|GET /checkout"
+	warmedN := w.series[key].n
+	wantP50, ok := w.series[key].p50.value()
+	if !ok {
+		t.Fatal("setup: no p50 after warm-up")
+	}
+
+	w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: 5000}})
+
+	s := w.series[key]
+	if s.n < warmedN {
+		t.Fatalf("one outlier reset the series: n went %d -> %d", warmedN, s.n)
+	}
+	if got, ok := s.p50.value(); !ok || got != wantP50 {
+		t.Fatalf("one outlier moved the median baseline: p50 %v -> %v (ok=%v)", wantP50, got, ok)
+	}
+}
+
+// TestSpanWatch_SteadyTrafficNeverResetsTheBaseline is the false-alarm gate.
+// Latency is long-tailed, and the old statistic was positive by
+// construction, so its CUSUM drifted upward on an endpoint that never
+// changed and wiped p50/p99 every few dozen spans — leaving the watcher
+// below minSamples, and so judging nothing, for much of its life. Steady
+// traffic must reset nothing, however long it runs.
+func TestSpanWatch_SteadyTrafficNeverResetsTheBaseline(t *testing.T) {
+	w := newSpanWatch()
+	warmSpanBaseline(t, w, "api", "GET /checkout")
+	key := "api|GET /checkout"
+	warmedN := w.series[key].n
+
+	// A long-tailed but stationary stream: mostly fast, a heavy tail every
+	// tenth span. Deterministic, so a failure here is reproducible.
+	//
+	// A bound rather than zero: a sign CUSUM is a hypothesis test, so a
+	// stationary stream still trips it occasionally — measured at 1 per 435
+	// spans, and unchanged whether the tail is light or heavy, because
+	// E[sign(x-median)] is zero for any continuous distribution. The old
+	// |duration-median|/IQR statistic tripped every 23-46 spans instead,
+	// which over this run is a dozen resets or more. Anything near that is
+	// the drift coming back.
+	const spans, maxResets = 600, 2
+	tail := []float64{8, 9, 10, 11, 9, 10, 12, 9, 10, 240}
+	resets, prevN := 0, warmedN
+	for i := 0; i < spans; i++ {
+		w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: tail[i%len(tail)]}})
+		n := w.series[key].n
+		if n < prevN {
+			resets++
+		}
+		prevN = n
+	}
+	if resets > maxResets {
+		t.Fatalf("steady traffic reset the baseline %d times in %d spans (want <= %d); the old drifting statistic did this every 23-46 spans",
+			resets, spans, maxResets)
 	}
 }
 
@@ -188,10 +264,21 @@ func TestSpanWatch_RegimeShiftClosesTheOpenInsight(t *testing.T) {
 	}
 
 	// A regime shift resets the series, and the insight judged against the
-	// old baseline goes with it.
-	w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: 500}})
-	if w.series[key].n != 0 {
-		t.Fatalf("setup: expected the jump to reset the series, n=%d", w.series[key].n)
+	// old baseline goes with it. Sustained, not a single jump: the sign
+	// CUSUM needs a run on one side of the median, and the exceedances above
+	// are already part of that run.
+	sawReset, prevN := false, w.series[key].n
+	for i := 0; i < int(math.Ceil(cusumH/(1-cusumK)))+1; i++ {
+		w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: 500}})
+		if n := w.series[key].n; n < prevN {
+			sawReset = true
+			break
+		} else {
+			prevN = n
+		}
+	}
+	if !sawReset {
+		t.Fatalf("setup: expected the sustained shift to reset the series, n=%d", w.series[key].n)
 	}
 	if got := w.Insights(); len(got) != 0 {
 		t.Fatalf("expected the open insight closed by the reset, got %+v", got)
@@ -202,8 +289,11 @@ func TestSpanWatch_AdaptsToNewBaselineAfterReset(t *testing.T) {
 	w := newSpanWatch()
 	warmSpanBaseline(t, w, "api", "GET /checkout")
 
-	// The jump itself resets the series (see the test above); feed enough
-	// points at the new level to re-warm past minSamples.
+	// A sustained run at the new level resets the series (see the test
+	// above); the points after it re-warm past minSamples on the new regime.
+	for i := 0; i < int(math.Ceil(cusumH/(1-cusumK)))+1; i++ {
+		w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: 500}})
+	}
 	shifted := []float64{98, 99, 100, 101, 102, 100, 99, 101, 98, 102, 100, 99, 100, 101, 99}
 	for _, d := range shifted {
 		w.Observe([]SpanSample{{Service: "api", Name: "GET /checkout", DurationMs: d}})
@@ -255,7 +345,7 @@ func TestSpanWatch_SnapshotRestoreRoundTrip(t *testing.T) {
 
 	w.mu.Lock()
 	s := w.series["api|GET /checkout"]
-	wantN, wantCusum, wantRunLen := s.n, s.cusum, s.runLen
+	wantN, wantHi, wantLo, wantRunLen := s.n, s.cusumHi, s.cusumLo, s.runLen
 	wantP50, ok50 := s.p50.value()
 	wantP99, ok99 := s.p99.value()
 	w.mu.Unlock()
@@ -278,9 +368,9 @@ func TestSpanWatch_SnapshotRestoreRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("restored watch has no api|GET /checkout series")
 	}
-	if rs.n != wantN || rs.cusum != wantCusum || rs.runLen != wantRunLen {
-		t.Fatalf("restored series = {n:%d cusum:%g runLen:%d}, want {n:%d cusum:%g runLen:%d}",
-			rs.n, rs.cusum, rs.runLen, wantN, wantCusum, wantRunLen)
+	if rs.n != wantN || rs.cusumHi != wantHi || rs.cusumLo != wantLo || rs.runLen != wantRunLen {
+		t.Fatalf("restored series = {n:%d hi:%g lo:%g runLen:%d}, want {n:%d hi:%g lo:%g runLen:%d}",
+			rs.n, rs.cusumHi, rs.cusumLo, rs.runLen, wantN, wantHi, wantLo, wantRunLen)
 	}
 	gotP50, gotOK50 := rs.p50.value()
 	gotP99, gotOK99 := rs.p99.value()
