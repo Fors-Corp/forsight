@@ -141,6 +141,9 @@ type Syncer struct {
 	// not a time series) and stays on the count rule alone: it is the
 	// feedback loop, not re-uploads, that grows that corpus over time.
 	uploadedThrough map[string]time.Time
+	// mlaasVersion is the version mlaas last reported on GET /healthz, ""
+	// before the first successful probe. noteVersion is what maintains it.
+	mlaasVersion string
 }
 
 // New builds a Syncer. An empty cfg.URL is not an error: it means the
@@ -270,13 +273,15 @@ func (s *Syncer) pass(ctx context.Context) {
 		s.mu.Unlock()
 	}
 
-	if err := s.client.Healthz(ctx); err != nil {
+	version, err := s.client.Healthz(ctx)
+	if err != nil {
 		s.logger.Warn("mlaas unreachable; skipping sync pass", "url", s.displayURL, "err", logsafe.Err(err))
 		note(err)
 		s.markUnreachable(err)
 		finish()
 		return
 	}
+	s.noteVersion(version)
 	datasets, err := s.client.ListDatasets(ctx)
 	if err != nil {
 		s.logger.Warn("mlaas: list datasets", "err", logsafe.Err(err))
@@ -638,6 +643,31 @@ func (s *Syncer) feedback(ctx context.Context, m managedModel, classes []string,
 	return feedbackErr
 }
 
+// noteVersion records the version mlaas reported on a successful Healthz
+// and logs it: once when a version is first seen, and again whenever it
+// differs from the last one recorded. A changed version between sync
+// passes means mlaas was upgraded underneath a running agent — the
+// interesting event; the routine case of the same version every five
+// minutes stays silent. version empty (an old mlaas whose /healthz omits
+// the field) is a no-op.
+func (s *Syncer) noteVersion(version string) {
+	if version == "" {
+		return
+	}
+	s.mu.Lock()
+	prev := s.mlaasVersion
+	s.mlaasVersion = version
+	s.mu.Unlock()
+	if prev == version {
+		return
+	}
+	if prev == "" {
+		s.logger.Info("mlaas: version", "version", version)
+		return
+	}
+	s.logger.Info("mlaas: version changed", "from", prev, "to", version)
+}
+
 // markUnreachable records a failed probe without touching what was learned
 // before it.
 func (s *Syncer) markUnreachable(err error) {
@@ -708,10 +738,12 @@ func (s *Syncer) refresh(ctx context.Context, force bool) {
 		return
 	}
 
-	if err := s.client.Healthz(ctx); err != nil {
+	version, err := s.client.Healthz(ctx)
+	if err != nil {
 		s.markUnreachable(err)
 		return
 	}
+	s.noteVersion(version)
 	datasets, err := s.client.ListDatasets(ctx)
 	if err != nil {
 		s.markUnreachable(err)
