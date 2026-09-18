@@ -88,6 +88,18 @@ func TestEngine_SnapshotRestoreRoundTrip(t *testing.T) {
 		"severity": true, "thresholds": true, "forecast": false, // forecast never observed a reading
 		"paging": true, "spans": true, "culprit": true, "outlier": true,
 	}
+	// Each model versions its own payload independently — that is the point
+	// of a per-model schema version — so this asserts each report carries
+	// the version that model actually writes, not one shared number.
+	wantVersion := map[string]int{
+		"severity":   severitySnapshotVersion,
+		"thresholds": thresholdSnapshotVersion,
+		"forecast":   forecastSnapshotVersion,
+		"paging":     pagingSnapshotVersion,
+		"spans":      spanSnapshotVersion,
+		"culprit":    culpritSnapshotVersion,
+		"outlier":    hostOutlierSnapshotVersion,
+	}
 	seen := map[string]bool{}
 	for _, r := range reports {
 		seen[r.Name] = true
@@ -95,8 +107,13 @@ func TestEngine_SnapshotRestoreRoundTrip(t *testing.T) {
 			t.Errorf("model %q did not restore: %+v", r.Name, r)
 			continue
 		}
-		if r.Version != 1 {
-			t.Errorf("model %q restored at version %d, want 1", r.Name, r.Version)
+		want, known := wantVersion[r.Name]
+		if !known {
+			t.Errorf("model %q is in the restore report but not in this test's version map", r.Name)
+			continue
+		}
+		if r.Version != want {
+			t.Errorf("model %q restored at version %d, want %d", r.Name, r.Version, want)
 		}
 	}
 	for key, want := range wantKeys {

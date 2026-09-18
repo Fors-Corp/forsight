@@ -121,24 +121,76 @@ So the threshold is learned per series from that series' own history, and the
 budget is stated in a unit somebody can hold an opinion about: alert on about
 one point in a thousand, page on one in ten thousand.
 
-**Method.** Robbins-Monro stochastic approximation, one line:
-`t ← t · (1 + step · (exceeded − target))`. A point above the threshold pushes
-it up, every point below nudges it down, and those balance exactly at the
-target quantile — with four floats per series and no assumption about the
-shape of the distribution.
+**Reads.** The z-score of one series, as the Detector computes it — and it
+computes it against the baseline that excludes the point being scored. That
+is not a detail of another model: an in-sample z is bounded by Samuelson's
+inequality to (n-1)/√n, which is 3.18 at n=12 and does not reach 5 until
+n=29, so a threshold learned from in-sample z would be learning the shape of
+that ceiling as much as the shape of the series.
 
-The update is multiplicative and the step does not decay. Both were arrived at
-by watching the obvious version fail: an additive step has to be chosen
-against a scale nobody knows in advance, and a decaying one died long before a
-threshold starting at 3 could walk out to the one-in-ten-thousand tail — 2.8%
-of points still alerting after forty thousand samples, against a 0.1% budget.
+**Method.** One running quantile per threshold. A budget stated as a rate is
+a quantile — "alert on one point in a thousand" is "alert above this series'
+99.9th percentile of |z|" — so each threshold is the P² estimator already in
+this package ([`p2.go`](p2.go)): five markers, O(1) per point, no stored
+sample and no assumption about the shape of the distribution.
 
-**Measured** over 40,000 points per series, after a 20,000-point warm-up:
+It replaces a Robbins-Monro stochastic approximation,
+`t ← t · (1 + step · (exceeded − target))`, which chases the same quantile
+and settles in the same place — eventually. Eventually was the problem, and
+it was not a detail. Every non-exceeding point pulled a threshold down by
+`step · target` of itself: 2e-5 for the warning, 2e-6 for the page. From
+`criticalSigma`, reaching the tail of an ordinary |N(0,1)| series took on the
+order of 10⁵ points of uninterrupted downward drift. Measured on that data,
+the realised page rate was exactly zero at 2 000 points and 0.00003% at
+10 000, against a 0.01% budget — and `seasonalKey` gives each hour of the day
+its own key, so an hourly key collects about 360 points a day and the page
+threshold would have arrived some time the following year.
+
+**Readiness means converged, and each threshold earns it separately.** A
+quantile at tail probability q is estimated from the points that land beyond
+it, of which a series has seen about n·q: no method can know where the
+one-in-ten-thousand point of a distribution is from a sample that contains
+none of them. So a threshold is used instead of its constant once the series
+has two expected exceedances beyond it — 2 000 points for the warning,
+20 000 for the page — which on |N(0,1)| is where the P² estimate becomes
+worth more than the constant it replaces:
+
+| Points seen | P² warning estimate (truth 3.29) | P² page estimate (truth 3.89) |
+| --- | --- | --- |
+| 1 000 | 3.06 | 3.06 |
+| 2 000 | **3.25** | 3.25 |
+| 10 000 | 3.28 | 3.68 |
+| 20 000 | 3.28 | **3.86** |
+| 100 000 | 3.29 | 3.89 |
+
+The two columns being identical below 10 000 points is the same fact from
+the other side: with less than one expected exceedance beyond the page
+quantile, the sample holds nothing that distinguishes it from the warning
+quantile, and any number claiming otherwise would be extrapolation. Two
+expected exceedances realises 1.15× the budgeted rate at the moment of
+readiness and
+tightens from there; at one expected exceedance it would be 2.2×, which is
+why the wait is what it is. The two thresholds are therefore ready at
+different times, and the card says how many series have earned each rather
+than hiding both behind one boolean. `Snapshot`/`Restore` carries the markers
+across restarts, so the wait is paid once rather than once per restart.
+
+**Measured**, realised alert rate over the 100 000 points following n points
+of history, on |N(0,1)| across 60 series — the budget is 0.1% and 0.01%:
+
+| n | Warning, before | Warning, now | Page, before | Page, now |
+| --- | --- | --- | --- | --- |
+| 1 000 | 0.084% | 0.105% | 0.00058% | 0.00895% |
+| 2 000 | 0.083% | 0.104% | 0.00062% | 0.00908% |
+| 10 000 | 0.081% | 0.102% | 0.00075% | 0.00995% |
+
+**Measured** over 40 000 points per series after a 20 000-point warm-up, the
+comparison against the fixed pair it replaces:
 
 | Series | Fixed 3σ alerts on | Learned alerts on | Learned threshold |
 | --- | --- | --- | --- |
-| well-behaved | 0.25% of points | 0.08% | 3.41 |
-| heavy-tailed | 5.10% of points | 0.33% | 11.94 |
+| well-behaved | 0.25% of points | 0.10% | 3.32 |
+| heavy-tailed | 5.10% of points | 0.33% | 12.00 |
 
 The heavy-tailed row is the one that matters: at a ten-second interval, 5.1%
 is a page every three minutes, which is how an alert channel becomes something
@@ -431,7 +483,7 @@ design system, plus **LineChart** for the mlaas forecasts.
 ### Persisted state
 
 Every model above trains cold on every restart, which on a frequently
-restarted agent means `severityMinTrained`, `thresholdMinSamples`, and every
+restarted agent means `severityMinTrained`, `thresholdCriticalMinSamples`, and every
 other model's own warm-up never finish being paid for. `Snapshot() ([]byte,
 error)` and `Restore([]byte) error` on `Model` (`learn.go`), alongside
 `Card()`, fix that: `forsight/cmd/run.go` restores right after
@@ -444,10 +496,13 @@ with its own schema version — a version this build does not recognize, or a
 payload that does not parse as that model's own shape, is a discard (a
 logged, non-fatal event), never a misread. What comes back is the learned
 state that gates readiness on sample count alone: naive-Bayes counts and the
-trained count (`log severity`), per-series warn/critical and how many points
-each has seen (`alert thresholds` — the one model whose entire state is
-exactly what a restart used to throw away, since a calibration has no
-comparison window to re-earn), Holt's level and trend (`error-budget
+trained count (`log severity`), each series' two quantile estimators and how
+many points each has seen (`alert thresholds` — the one model whose entire
+state is exactly what a restart used to throw away, since a calibration has
+no comparison window to re-earn, and the model for which this matters most:
+a page threshold needs 20 000 points, which is weeks of a real series, so an
+agent restarted weekly would otherwise never learn one), Holt's level and
+trend (`error-budget
 forecast`), the logistic weights (`log burst paging`), each series' P²
 markers (`per-endpoint latency shape`), the mean vector and covariance
 (`host outlier`), and the two reporting counters (`culprit ranking`).
