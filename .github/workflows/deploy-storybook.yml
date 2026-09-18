@@ -1,9 +1,42 @@
 name: Deploy Storybook
 
+# Publishes the design system's Storybook to https://marcfs31.github.io/forsight/
+# — the docs for `@marcfs31/forsight` (src/, the vX.Y.Z train). It does NOT
+# document the agent in forsight/: .storybook/main.ts globs
+# ../src/**/*.stories.@(ts|tsx) only, and the agent is a separate artifact on
+# the forsight-vX.Y.Z tags. See CLAUDE.md, "two independently versioned
+# artifacts".
+#
+# The site carries:
+#   /                 the build of main
+#   /v/<tag>/         the build of each of the last RELEASES_KEPT releases
+#   /versions/        an index of both
+#   /build-info.json  what the root was built from
+#
+# Why a schedule as well as a push: a merge made with GITHUB_TOKEN raises no
+# push event that can start a workflow (dependabot-automerge.yml, header note
+# 3), so a Dependabot PR landing by native auto-merge published nothing and
+# the site sat behind main while looking perfectly fine — that is how 98c3d85
+# went unpublished. Rather than couple this to whichever workflow happens to
+# do the merging, the `check` job asks the live site what it was built from
+# and rebuilds when that no longer matches main. It heals a missed deploy
+# whatever the cause, including a run that failed halfway.
+
 on:
   push:
     branches: [main]
+  # Every two hours, not daily: for a Dependabot PR landed by native
+  # auto-merge this is not a safety net, it is the only path — no push event
+  # is raised for it at all. The `check` job below is a few seconds and
+  # rebuilds nothing when the site is already current.
+  schedule:
+    - cron: "17 */2 * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild even when the live site is already current"
+        type: boolean
+        default: false
 
 # One in-flight Pages deployment at a time; don't cancel a running one.
 concurrency:
@@ -16,16 +49,91 @@ permissions:
   id-token: write
 
 jobs:
-  build:
+  check:
+    name: Is the published site behind main?
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      stale: ${{ steps.compare.outputs.stale }}
+    steps:
+      - id: compare
+        env:
+          FORCED: ${{ github.event.inputs.force }}
+        run: |
+          set -uo pipefail
+          live=$(curl -fsS --max-time 20 "https://marcfs31.github.io/forsight/build-info.json" 2>/dev/null \
+                 | jq -r '.sha // empty' 2>/dev/null || true)
+          echo "published from: ${live:-<unknown>}"
+          echo "main is at:     ${GITHUB_SHA}"
+          if [ "$FORCED" = "true" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "forced rebuild"
+          elif [ -z "$live" ] || [ "$live" != "$GITHUB_SHA" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Publishing ${GITHUB_SHA} (site had ${live:-nothing})."
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Already current; nothing to publish."
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.stale == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # How many published versions keep their own copy of the docs. Each is a
+      # full Storybook build, and because upload-pages-artifact replaces the
+      # whole site every time, every kept version is rebuilt on every deploy.
+      # So this is a time budget, not a preference. Going much past a handful
+      # wants a gh-pages branch instead, where versions accumulate and only
+      # what changed is rebuilt.
+      RELEASES_KEPT: 2
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the release tags, for the versioned builds below
+
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
+
       - run: npm ci
       - run: npm run build-storybook
+
+      # Each released version keeps its own copy, so someone pinned to 4.1.0
+      # reads the docs that shipped with it rather than whatever main says
+      # today. A tag that no longer builds with the current toolchain is
+      # reported and skipped: an old version failing must never stop today's
+      # docs from going out.
+      - name: Build the docs of the last releases
+        id: versions
+        run: |
+          set -uo pipefail
+          mkdir -p storybook-static/v
+          built=""
+          for tag in $(git tag -l 'v[0-9]*' --sort=-v:refname | head -n "$RELEASES_KEPT"); do
+            echo "::group::$tag"
+            work="../ver-$tag"
+            if git worktree add --detach "$work" "$tag" >/dev/null 2>&1 \
+               && (cd "$work" && npm ci --silent && npm run build-storybook) \
+               && [ -d "$work/storybook-static" ]; then
+              mv "$work/storybook-static" "storybook-static/v/$tag"
+              built="$built $tag"
+              echo "built $tag"
+            else
+              echo "::warning::$tag does not build with the current toolchain; its docs are skipped"
+            fi
+            git worktree remove --force "$work" >/dev/null 2>&1 || true
+            echo "::endgroup::"
+          done
+          echo "built=$(echo $built | xargs)" >> "$GITHUB_OUTPUT"
+
+      # Provenance, and the file the `check` job reads back off the live site.
+      - name: Write the provenance and the version index
+        run: node scripts/storybook-site-metadata.mjs ${{ steps.versions.outputs.built }}
+
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
