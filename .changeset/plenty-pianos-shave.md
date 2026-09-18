@@ -1,5 +1,5 @@
 ---
-"@marcfs31/fors-observability-design-system": minor
+"@marcfs31/forsight": minor
 ---
 
 Make the focus ring meet WCAG 1.4.11, so keyboard focus is actually visible.
