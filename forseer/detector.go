@@ -119,6 +119,25 @@ func (d *Detector) Observe(points []Point) {
 }
 
 func (d *Detector) observeOneLocked(p Point, now time.Time) {
+	// A non-finite value poisons Welford permanently: once mean and m2 are
+	// NaN they stay NaN, and NaN fails every comparison in Go, so the two
+	// guards below (variance <= 0 and sigma == 0) never fire, z is NaN, and
+	// z >= warn / z >= critical are false forever. Anomaly and changepoint
+	// detection for that series go silently and permanently dead — no error,
+	// no log line, no dashboard signal, and an operator finds out by noticing
+	// alerts that never fired. One packet is enough, and the value can come
+	// from an unauthenticated UDP datagram: strconv.ParseFloat accepts the
+	// literals "NaN", "Inf", "+Inf" and "-Inf". severity.go, forecast.go,
+	// paging.go and export.go all already guard this; the streaming detector
+	// most exposed to the network was the one that did not.
+	//
+	// Before the cap bookkeeping below, deliberately: a point that will not be
+	// observed must not claim a series slot, or a stream of them would evict
+	// real series to make room for nothing.
+	if math.IsNaN(p.Value) || math.IsInf(p.Value, 0) {
+		return
+	}
+
 	base := seriesKey(p.Name, p.Labels)
 	key := seasonalKey(p.Name, p.Labels, now.Hour())
 
