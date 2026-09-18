@@ -1,5 +1,95 @@
 # @marcfs31/fors-observability-design-system
 
+## 4.2.0
+
+### Minor Changes
+
+- b5ca542: New server-safe entry `@marcfs31/forsight/chart`: the pure chart maths and
+  number formatters (`arcPath`, `areaPath`, `barPath`, `clamp`, `formatCompact`,
+  `formatDuration`, `formatPercent`, `linePath`, `niceScale`, `polar`,
+  `project`, `seriesBg`, `seriesFill`, `seriesStroke`, `SERIES_SLOTS`,
+  `splitAtGaps`, `splitAtProjection`, `ANNOTATION_TONE_CLASSES`) that back the
+  chart components.
+
+  Previously this maths was reachable only through the components entry, and
+  that entire entry ships a leading `"use client"` directive — so a React
+  Server Component that imported `clamp` or `formatCompact` to precompute a
+  mark or format a value server-side failed to build. The README already
+  called the package "RSC-ready", which this contradicted for anything that
+  touched chart maths outside a component.
+
+  The new entry mirrors `@marcfs31/forsight/theme`: no client directive, and
+  `publint`/`arethetypeswrong` validate it clean on every resolution mode,
+  including legacy `node10` (via a root `chart/package.json` stub, same as
+  `theme/`). Nothing moved — `clamp`, `niceScale`, and the rest are still
+  exported from the components entry too, for chart components and consumers
+  that already import them from there.
+
+- 45f7506: Number formatting follows the viewer's locale.
+
+  `formatCompact`, `formatDuration` and `formatPercent` — the defaults behind
+  Gauge, BarList, Heatmap, CalendarHeatmap, Delta and every chart axis and
+  tooltip — wrote their numbers with a hardcoded ASCII decimal point, so a
+  German or French reader saw `1.2k`, `940ms` and `5.5%` where their locale
+  wants `1,2k`, `940ms` and `5,5 %`. They now delegate to `Intl.NumberFormat`,
+  matching the `Intl.DateTimeFormat` the date code already used.
+
+  English output is unchanged, deliberately: the unit suffixes stay the
+  library's own rather than `Intl`'s `notation: "compact"`, whose single
+  `maximumFractionDigits` cannot keep `1240` short and `0.0123` precise at the
+  same time, whose suffixes are locale data (German renders no `k` at all), and
+  which renders `1.2K` in English.
+
+  `CalendarHeatmap`'s weekday row headers were a hardcoded English array one
+  line above a correct `Intl.DateTimeFormat` for its month labels; they are now
+  computed too.
+
+  `formatPercent`'s doc comment claimed `99.982 → "99.982%"`, which was never
+  true of its default `decimals = 1` — that returns `"100%"`. The behaviour is
+  unchanged; the comment now says so and points at `UptimeBar`, which passes
+  `2` for exactly this reason.
+
+- f4266cb: Make the focus ring meet WCAG 1.4.11, so keyboard focus is actually visible.
+
+  `--forsight-focus-ring` was the brand teal at 45% alpha in both themes. A
+  `box-shadow` is painted outside the control, against the page behind it, so
+  that alpha composited straight onto the ink surfaces and left the ring at
+  2.67:1 on dark `bg`/`surface` and 2.58:1 on `surface-2`, and 2.03/2.07/1.99:1
+  in light — all under the 3:1 floor a non-text indicator has to clear. Roughly
+  thirty components carry `focus-visible:shadow-focus-ring` as their only focus
+  affordance, so on every one of them the sole marker of keyboard focus was too
+  faint to see.
+
+  The ring is now the solid accent — `#16c7b0` dark, `#0b6c5e` light, both
+  already on the brand ramp — which measures 9.00/8.36/7.52:1 and
+  5.99/6.32/5.62:1 against `bg`/`surface`/`surface-2`. `shadow-focus-ring` keeps
+  its 3px footprint but spends the innermost pixel on a hairline of
+  `--forsight-ink-bg`, so a solid teal ring around an accent-filled control
+  (primary `Button`, a checked `Switch` or `Checkbox`) is still separated from
+  the fill instead of merging into it.
+
+  `ForsightPalette` gained `focusRing` and `focusRingAlpha`, and
+  `contrast.test.ts` now blends the ring at its declared alpha and asserts 3:1
+  against all three surfaces in both themes — the check that could not see this
+  token before.
+
+### Patch Changes
+
+- 5813d58: Fix `AlertList` so the first alert after an empty state is announced.
+
+  Previously `AlertList` rendered `EmptyState` in place of its `<ul
+aria-live="polite">` whenever `items` was empty, so the live region did
+  not exist yet at 0 items. Going from 0 to 1 alert mounted that `<ul>` for
+  the first time with its content already on it — a live region announces
+  mutations to content already inside it, not its own arrival, so most
+  AT/browser pairs never spoke the alert a responder needed to hear first.
+
+  The `<ul>` now stays mounted at every item count, the same way
+  `LogStream`'s `role="log"` region does, with the empty message rendered
+  as a child `<li>` (wrapping `EmptyState`, with its own `role="status"`
+  turned off so it doesn't compete with the list's own live region for the
+  same announcement).
+
 ## 4.1.1
 
 ### Patch Changes
