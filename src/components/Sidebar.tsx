@@ -1,6 +1,7 @@
 import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { cn } from "../lib/cn";
+import { isSafeHref } from "../lib/safe-href";
 
 const SIDEBAR_ICON_BUTTON_CLASS = cn(
   "inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-fg-muted transition-colors duration-base",
@@ -235,6 +236,15 @@ export const SidebarNav = React.forwardRef<
 SidebarNav.displayName = "SidebarNav";
 
 export interface SidebarNavItemProps extends React.ComponentPropsWithoutRef<"a"> {
+  /**
+   * The page this nav item links to. Since sidebar nav is typically driven
+   * by route data, it is treated as untrusted: an unsafe scheme
+   * (`javascript:`, `data:`, ...) is never set on the rendered element
+   * (`isSafeHref`, `../lib/safe-href`) — an `<a>` without an `href` has no
+   * `link` role and isn't focusable, the same non-link fallback `BarList`
+   * and `BreadcrumbLink` use for the same case.
+   */
+  href?: string;
   /** Marks this as the current page (`aria-current="page"`) and applies the active look. */
   active?: boolean;
   /** Decorative leading icon — `aria-hidden` is applied automatically. */
@@ -251,7 +261,7 @@ export interface SidebarNavItemProps extends React.ComponentPropsWithoutRef<"a">
  * its icon (correctly `aria-hidden`) is the only visible content.
  */
 export const SidebarNavItem = React.forwardRef<HTMLAnchorElement, SidebarNavItemProps>(
-  ({ className, active, icon, children, ...props }, ref) => {
+  ({ className, active, icon, children, href, ...props }, ref) => {
     const { collapsed } = useSidebar();
     return (
       <li>
@@ -266,6 +276,7 @@ export const SidebarNavItem = React.forwardRef<HTMLAnchorElement, SidebarNavItem
             "focus-visible:outline-none focus-visible:shadow-focus-ring",
             className
           )}
+          href={href !== undefined && isSafeHref(href) ? href : undefined}
           {...props}
         >
           {icon && (
