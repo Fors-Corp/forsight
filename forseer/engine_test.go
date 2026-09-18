@@ -168,12 +168,11 @@ func TestEngine_SlowSpan(t *testing.T) {
 	// A little jitter, not a single repeated value: a zero-spread baseline
 	// makes the very first outlier redefine the interquartile spread too,
 	// which is a degenerate case of its own and not what this test is for.
+	// Repeated to spanP99MinSamples, not minSamples: a p99 marker needs far
+	// more than a median does before it is worth judging against.
 	baseline := []float64{18, 19, 20, 21, 22, 20, 19, 21, 18, 22, 20, 19}
-	if len(baseline) != minSamples {
-		t.Fatalf("test setup: baseline has %d points, want minSamples=%d", len(baseline), minSamples)
-	}
-	for _, d := range baseline {
-		e.ObserveSpans([]SpanSample{{Name: "GET /checkout", Service: "api", DurationMs: d}})
+	for i := 0; i < spanP99MinSamples; i++ {
+		e.ObserveSpans([]SpanSample{{Name: "GET /checkout", Service: "api", DurationMs: baseline[i%len(baseline)]}})
 	}
 
 	// p99 fires on about one span in a hundred by construction, so a single
