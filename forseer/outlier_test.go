@@ -353,3 +353,64 @@ func TestHostOutlierModel_RestoreDiscardsCorruptJSON(t *testing.T) {
 		t.Fatalf("a discarded restore left n=%d, want 0", m.n)
 	}
 }
+
+// TestHostOutlierModel_QuantisedInputDoesNotFabricateAnOutlier pins the case
+// an absolute pivot floor could never catch.
+//
+// host.disk.percent is quantised and barely moves: it sits still for hours,
+// then steps a tenth of a point. Through a warm-up where it held exactly
+// constant its estimated variance is tiny but positive, so the pivot clears
+// hostOutlierSingularFloor, invert5 succeeds, and the inverse carries a
+// 1/variance term that explodes. Before hostOutlierVarFloor this produced
+// d2 = 58.0, 29.0, 19.3 against a 37.09 critical and an 18.21 warning — one
+// CRITICAL and two WARNINGs naming host.disk.percent, per quantisation step,
+// on every host. pagingModel.NoteInsights uses another detector's critical
+// as its training label, so those were poisoning a model as well as paging a
+// person.
+func TestHostOutlierModel_QuantisedInputDoesNotFabricateAnOutlier(t *testing.T) {
+	m := newHostOutlierModel()
+	sent, recv := 1e6, 2e6
+	for i := 0; i < hostOutlierMinSamples+10; i++ {
+		sent += 5e5 + float64(i%3)*1e4
+		recv += 7e5 + float64(i%4)*1e4
+		m.Observe(20+float64(i%7)*0.5, 60+float64(i%5)*0.3, 41.0, sent, recv)
+	}
+
+	for i := 0; i < 4; i++ {
+		sent += 5e5
+		recv += 7e5
+		d2, metric, ready := m.Observe(21.0, 60.5, 41.1, sent, recv)
+		if !ready {
+			t.Fatalf("tick %d: model went not-ready", i+1)
+		}
+		if d2 >= hostOutlierWarnChi2 {
+			t.Errorf("tick %d: a 0.1-point disk step scored d2=%.2f (warn=%.2f, critical=%.2f), top contributor %q",
+				i+1, d2, hostOutlierWarnChi2, hostOutlierCriticalChi2, metric)
+		}
+	}
+}
+
+// TestHostOutlierModel_FloorDoesNotBlindAGenuineMove is the other half: the
+// floor must suppress quantisation noise without deadening a real shift. Half
+// a percentage point is the movement hostOutlierVarFloor is calibrated to
+// call the smallest real one, so several points must still be unmistakable.
+func TestHostOutlierModel_FloorDoesNotBlindAGenuineMove(t *testing.T) {
+	m := newHostOutlierModel()
+	sent, recv := 1e6, 2e6
+	for i := 0; i < hostOutlierMinSamples+10; i++ {
+		sent += 5e5 + float64(i%3)*1e4
+		recv += 7e5 + float64(i%4)*1e4
+		m.Observe(20+float64(i%7)*0.5, 60+float64(i%5)*0.3, 41.0, sent, recv)
+	}
+
+	sent += 5e5
+	recv += 7e5
+	d2, _, ready := m.Observe(20.0, 60.0, 61.0, sent, recv) // disk jumps 20 points
+	if !ready {
+		t.Fatal("model went not-ready on the genuine move")
+	}
+	if d2 < hostOutlierCriticalChi2 {
+		t.Errorf("a 20-point disk jump scored only d2=%.2f, below critical %.2f — the floor is deadening real movement",
+			d2, hostOutlierCriticalChi2)
+	}
+}
