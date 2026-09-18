@@ -90,7 +90,7 @@ const forsightPreset: Partial<Config> = {
         sm: "var(--forsight-shadow-sm)",
         md: "var(--forsight-shadow-md)",
         lg: "var(--forsight-shadow-lg)",
-        "focus-ring": "0 0 0 3px var(--forsight-focus-ring)",
+        "focus-ring": "0 0 0 1px var(--forsight-ink-bg), 0 0 0 3px var(--forsight-focus-ring)",
       },
       keyframes: {
         // tailwindcss-animate's fade/zoom/slide utilities cover every other

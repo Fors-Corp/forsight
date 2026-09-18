@@ -74,7 +74,7 @@
   --shadow-sm: var(--forsight-shadow-sm);
   --shadow-md: var(--forsight-shadow-md);
   --shadow-lg: var(--forsight-shadow-lg);
-  --shadow-focus-ring: 0 0 0 3px var(--forsight-focus-ring);
+  --shadow-focus-ring: 0 0 0 1px var(--forsight-ink-bg), 0 0 0 3px var(--forsight-focus-ring);
 
   --animate-accordion-down: accordion-down var(--forsight-duration-base) ease-out;
   --animate-accordion-up: accordion-up var(--forsight-duration-base) ease-out;

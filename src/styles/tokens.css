@@ -62,7 +62,13 @@
   --forsight-warning-subtle: #332a10;
   --forsight-warning-fg: #241d08;
 
-  --forsight-focus-ring: rgba(22, 199, 176, 0.45);
+  /* The focus ring is a box-shadow drawn outside the control, so it blends
+     with the page behind it. At 45% alpha the teal washed out to 2.7:1 on the
+     ink surfaces — under WCAG 1.4.11's 3:1 floor for a non-text indicator — so
+     the ring is the solid accent, and shadow-focus-ring lays a 1px hairline of
+     --forsight-ink-bg between the control and the ring so it stays visible on
+     accent-filled controls too. */
+  --forsight-focus-ring: #16c7b0;
 
   /* Categorical data-visualization series (chart marks only — never text).
      Eight fixed slots, assigned in order and never cycled: a 9th series folds
@@ -144,7 +150,7 @@
   --forsight-warning-subtle: #fdf3d9;
   --forsight-warning-fg: #ffffff;
 
-  --forsight-focus-ring: rgba(11, 108, 94, 0.45);
+  --forsight-focus-ring: #0b6c5e;
 
   /* Light steps of the same eight hues (see the dark block). viz-3/4/5 sit
      below the 3:1 non-text contrast bar on the white surface, which the
