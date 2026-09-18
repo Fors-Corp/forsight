@@ -23,7 +23,18 @@ export interface CalendarHeatmapProps extends Omit<
   max?: number;
 }
 
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// Computed, not written out. These are the visible <th scope="row"> of the
+// grid and part of every cell's title, and they sat one line above a correct
+// Intl.DateTimeFormat for the month labels — so a German reader got German
+// months beside English weekdays. Any Sunday works as the anchor; 2026-01-04
+// is one, in UTC to match weekLabelFormat and the UTC bucketing below.
+const WEEKDAY_LABELS = (() => {
+  const format = new Intl.DateTimeFormat(undefined, { weekday: "short", timeZone: "UTC" });
+  const firstSunday = Date.UTC(2026, 0, 4);
+  return Array.from({ length: 7 }, (_, day) =>
+    format.format(new Date(firstSunday + day * 86_400_000))
+  );
+})();
 
 const weekLabelFormat = new Intl.DateTimeFormat(undefined, {
   month: "short",

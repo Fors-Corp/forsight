@@ -323,6 +323,40 @@ function round(n: number): number {
 const COMPACT_UNITS = ["", "k", "M", "B", "T"] as const;
 
 /**
+ * Formats the numeric part of the three formatters below in the viewer's
+ * locale, so the decimal separator and grouping are theirs. A German reader
+ * sees "1,2k", not "1.2k".
+ *
+ * Only the number. The unit suffixes stay ours on purpose, because
+ * `Intl.NumberFormat`'s own `notation: "compact"` cannot replace this code:
+ *   - its precision is one `maximumFractionDigits` applied AFTER compaction,
+ *     so the setting that keeps a large label short (1240 → "1.2k", not
+ *     "1.24k") is the same setting that flattens a small one: at 1 it renders
+ *     0.0123 as "0". You cannot have both, and error rates and sub-second
+ *     timings are the values that matter most on these axes;
+ *   - its compact suffixes are locale data, so German returns "12.400" rather
+ *     than anything with a "k" in it, and an axis of mixed magnitudes stops
+ *     lining up;
+ *   - and in English it renders "1.2K", silently restyling every axis in the
+ *     library for no gain.
+ *
+ * `undefined` for the locale is deliberate and matches the `Intl.DateTimeFormat`
+ * calls in Calendar and CalendarHeatmap: it resolves to the runtime's locale,
+ * so a consumer sets it the same way they set everything else.
+ */
+function localeNumber(value: number, maximumFractionDigits: number): string {
+  // No grouping: these are compact axis and tile labels, where a separator
+  // every three digits is noise — and leaving it on would be a visible change
+  // in English for the two values that reach four digits after their unit is
+  // applied (999999 renders "1000k", and a duration of hours renders as
+  // thousands of minutes).
+  return new Intl.NumberFormat(undefined, {
+    maximumFractionDigits,
+    useGrouping: false,
+  }).format(value);
+}
+
+/**
  * Axis-and-tile number format: 1_240 → "1.2k". Keeps two significant decimals
  * below 1 so sub-unit metrics (error rates, seconds) don't collapse to "0".
  */
@@ -330,27 +364,47 @@ export function formatCompact(value: number): string {
   if (!Number.isFinite(value)) return "–";
   const sign = value < 0 ? "-" : "";
   let n = Math.abs(value);
-  if (n < 1 && n > 0) return `${sign}${Number(n.toPrecision(2))}`;
+  if (n < 1 && n > 0) {
+    // Two significant decimals, then the locale's separator. toPrecision
+    // decides the precision; localeNumber decides how it is written.
+    const precise = Number(n.toPrecision(2));
+    const decimals = Math.max(0, Math.ceil(-Math.log10(precise)) + 1);
+    return `${sign}${localeNumber(precise, decimals)}`;
+  }
   let unit = 0;
   while (n >= 1000 && unit < COMPACT_UNITS.length - 1) {
     n /= 1000;
     unit++;
   }
-  const rounded = n >= 100 || unit === 0 ? Math.round(n) : Number(n.toFixed(1));
-  return `${sign}${rounded}${COMPACT_UNITS[unit]}`;
+  const decimals = n >= 100 || unit === 0 ? 0 : 1;
+  return `${sign}${localeNumber(n, decimals)}${COMPACT_UNITS[unit]}`;
 }
 
 /** Span format for traces: 940 → "940ms", 1_250 → "1.25s". */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms)) return "–";
-  if (ms < 1) return `${Number(ms.toFixed(2))}ms`;
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${Number((ms / 1000).toFixed(2))}s`;
-  return `${Number((ms / 60_000).toFixed(1))}min`;
+  if (ms < 1) return `${localeNumber(ms, 2)}ms`;
+  if (ms < 1000) return `${localeNumber(ms, 0)}ms`;
+  if (ms < 60_000) return `${localeNumber(ms / 1000, 2)}s`;
+  return `${localeNumber(ms / 60_000, 1)}min`;
 }
 
-/** Percentage with the precision uptime numbers actually need: 99.982 → "99.982%". */
+/**
+ * Percentage in the viewer's locale: 5.5 → "5.5%" in English, "5,5 %" in
+ * German, with the non-breaking space German typography wants and English
+ * does not. `style: "percent"` is what knows that, which is why this one
+ * formats the whole value rather than only its number.
+ *
+ * `decimals` is a MAXIMUM, as it always was — trailing zeros are dropped, so
+ * 50 is "50%" and not "50.0%". Note that the default of 1 rounds an uptime of
+ * 99.982 to "100%": pass `decimals` explicitly for an SLO figure, as
+ * UptimeBar does with 2. (The previous doc comment claimed 99.982 → "99.982%"
+ * for the default, which was never true.)
+ */
 export function formatPercent(value: number, decimals = 1): string {
   if (!Number.isFinite(value)) return "–";
-  return `${Number(value.toFixed(decimals))}%`;
+  return new Intl.NumberFormat(undefined, {
+    style: "percent",
+    maximumFractionDigits: decimals,
+  }).format(value / 100);
 }
