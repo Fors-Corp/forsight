@@ -69,6 +69,13 @@ func trainEngineModels(t *testing.T, e *Engine) {
 // TestEngine_SnapshotRestoreRoundTrip is roadmap item 25's engine-level
 // proof: every model's payload lands under its own key, and every model
 // with something to restore reports back as restored, at its own version.
+//
+// "Its own version" is read from what that model writes, not from a literal.
+// Each model versions its payload independently — that is the whole point of
+// a per-model version — so a test that pins every one of them to 1 breaks the
+// first time any single model changes its schema, and says nothing about the
+// wiring it is meant to be checking: that each report carries the version of
+// the payload under ITS key, rather than zero, or a neighbour's.
 func TestEngine_SnapshotRestoreRoundTrip(t *testing.T) {
 	e := NewEngine()
 	trainEngineModels(t, e)
@@ -76,6 +83,19 @@ func TestEngine_SnapshotRestoreRoundTrip(t *testing.T) {
 	data, err := e.Snapshot()
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
+	}
+
+	wantVersion := map[string]int{}
+	for _, pm := range e.persistedModels() {
+		payload, err := pm.model.Snapshot()
+		if err != nil {
+			t.Fatalf("Snapshot %s: %v", pm.key, err)
+		}
+		v := snapshotPayloadVersion(payload)
+		if v == 0 {
+			t.Fatalf("model %q writes a payload with no schema version at all", pm.key)
+		}
+		wantVersion[pm.key] = v
 	}
 
 	restored := NewEngine()
@@ -95,8 +115,8 @@ func TestEngine_SnapshotRestoreRoundTrip(t *testing.T) {
 			t.Errorf("model %q did not restore: %+v", r.Name, r)
 			continue
 		}
-		if r.Version != 1 {
-			t.Errorf("model %q restored at version %d, want 1", r.Name, r.Version)
+		if want := wantVersion[r.Name]; r.Version != want {
+			t.Errorf("model %q restored at version %d, want %d — the version it writes", r.Name, r.Version, want)
 		}
 	}
 	for key, want := range wantKeys {
