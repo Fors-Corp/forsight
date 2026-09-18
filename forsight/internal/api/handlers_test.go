@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -138,6 +139,70 @@ func TestHandleMetrics_RejectsInvalidLimitAndBefore(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400", query, rec.Code)
 		}
+	}
+}
+
+func TestHandleMetrics_RejectsLimitAndPerNameOverMax(t *testing.T) {
+	s := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil)
+	for _, query := range []string{
+		fmt.Sprintf("limit=%d", maxQueryLimit+1),
+		fmt.Sprintf("per_name=%d", maxQueryLimit+1),
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics?"+query, nil)
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", query, rec.Code)
+		}
+	}
+	// Exactly the maximum is still allowed.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/metrics?limit=%d", maxQueryLimit), nil)
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("limit=maxQueryLimit: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleMetrics_UnsetLimitDefaultsToMaxQueryLimit is a regression test:
+// a request that never sets limit used to get however much the store held
+// (up to store.DefaultMaxElements, ~200MB of metrics) instead of a genuine
+// bound. Writing one more point than maxQueryLimit and confirming the
+// response is capped at maxQueryLimit — dropping the oldest, keeping the
+// newest — is what catches a missing default; a smaller write wouldn't
+// distinguish "defaulted" from "no cap at all".
+func TestHandleMetrics_UnsetLimitDefaultsToMaxQueryLimit(t *testing.T) {
+	st := store.NewMemoryStore(24 * time.Hour)
+	st.SetMaxElements(maxQueryLimit + 10)
+	base := time.Now().Add(-time.Hour)
+	points := make([]model.Metric, maxQueryLimit+1)
+	for i := range points {
+		points[i] = model.Metric{Name: "m", Value: float64(i), Timestamp: base.Add(time.Duration(i) * time.Millisecond)}
+	}
+	if err := st.WriteMetrics(context.Background(), points); err != nil {
+		t.Fatalf("WriteMetrics: %v", err)
+	}
+	s := NewServer(st, nil, nil, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics?name=m", nil)
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var got []model.Metric
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if len(got) != maxQueryLimit {
+		t.Fatalf("no limit= at all returned %d metrics, want the default cap of %d", len(got), maxQueryLimit)
+	}
+	// The newest are kept: point 0 (the oldest) must be dropped.
+	if got[0].Value == 0 {
+		t.Errorf("oldest point (value 0) was kept; an unset limit must still keep the newest, not the first, maxQueryLimit")
+	}
+	if got[len(got)-1].Value != float64(maxQueryLimit) {
+		t.Errorf("newest point = %v, want %v (the last-written value)", got[len(got)-1].Value, maxQueryLimit)
 	}
 }
 

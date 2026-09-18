@@ -79,17 +79,21 @@ func (s *MemoryStore) QueryMetrics(_ context.Context, q MetricQuery) ([]model.Me
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	out := make([]model.Metric, 0, len(s.metrics))
-	for _, m := range s.metrics {
-		if !matchesMetric(m, q) {
-			continue
-		}
-		out = append(out, m)
+	limit, perName := q.Limit, q.PerName
+	if q.Name != "" && perName > 0 && (limit == 0 || perName < limit) {
+		// One name: the per-name cap is the cap. Mirrors BadgerStore's own
+		// QueryMetrics fold (see its comment there) so the dashboard's
+		// common single-name-with-per-name-cap read takes the same bounded
+		// path on both backends — a walk that stops at limit, rather than
+		// newestPerName's whole-store grouping walk, which this scoped case
+		// does not need.
+		limit, perName = perName, 0
 	}
-	if q.PerName > 0 {
-		return newestByTime(newestPerName(out, q.PerName), q.Limit), nil
+	match := func(m model.Metric) bool { return matchesMetric(m, q) }
+	if perName > 0 {
+		return newestByTime(newestPerName(s.metrics, perName, match), limit), nil
 	}
-	return newest(out, q.Limit), nil
+	return matchNewest(s.metrics, limit, match), nil
 }
 
 func (s *MemoryStore) WriteSpans(_ context.Context, spans []model.Span) error {
@@ -104,14 +108,7 @@ func (s *MemoryStore) QuerySpans(_ context.Context, q SpanQuery) ([]model.Span, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	out := make([]model.Span, 0, len(s.spans))
-	for _, sp := range s.spans {
-		if !matchesSpan(sp, q) {
-			continue
-		}
-		out = append(out, sp)
-	}
-	return newest(out, q.Limit), nil
+	return matchNewest(s.spans, q.Limit, func(sp model.Span) bool { return matchesSpan(sp, q) }), nil
 }
 
 func (s *MemoryStore) WriteLogs(_ context.Context, logs []model.LogEntry) error {
@@ -126,14 +123,7 @@ func (s *MemoryStore) QueryLogs(_ context.Context, q LogQuery) ([]model.LogEntry
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	out := make([]model.LogEntry, 0, len(s.logs))
-	for _, entry := range s.logs {
-		if !matchesLog(entry, q) {
-			continue
-		}
-		out = append(out, entry)
-	}
-	return newest(out, q.Limit), nil
+	return matchNewest(s.logs, q.Limit, func(entry model.LogEntry) bool { return matchesLog(entry, q) }), nil
 }
 
 // pruneMetricsLocked drops points older than the retention window, then
@@ -217,28 +207,57 @@ func (s *MemoryStore) pruneLogsLocked() {
 	s.logs = capOldest(kept, s.maxElements)
 }
 
-// newest keeps the last limit records of a slice that is in write order,
-// which for this store is the order records arrived — the collectors and
-// receivers write in time order, so the tail is the newest window. Zero
-// means everything.
-func newest[T any](xs []T, limit int) []T {
-	if limit > 0 && len(xs) > limit {
-		return xs[len(xs)-limit:]
+// matchNewest walks xs — a slice in write order, which for this store is
+// the order records arrived — from the tail, keeping every element that
+// satisfies pred until it has limit of them (or, when limit <= 0, every
+// match), then restores write order. This computes exactly what filtering
+// the whole slice and then keeping the newest limit would, but a positive
+// limit stops the walk and sizes the result buffer to limit, not to len(xs):
+// a query for the newest 1 of a store holding two million records no longer
+// allocates a buffer sized to all two million to answer it (see
+// DefaultMaxElements' comment on why that bound exists in the first place).
+func matchNewest[T any](xs []T, limit int, pred func(T) bool) []T {
+	if limit <= 0 {
+		kept := make([]T, 0)
+		for _, x := range xs {
+			if pred(x) {
+				kept = append(kept, x)
+			}
+		}
+		return kept
 	}
-	return xs
+	kept := make([]T, 0, limit)
+	for i := len(xs) - 1; i >= 0 && len(kept) < limit; i-- {
+		if pred(xs[i]) {
+			kept = append(kept, xs[i])
+		}
+	}
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	return kept
 }
 
-// newestPerName keeps the newest perName records of each metric name in xs,
-// in xs's own (write) order, which is the order the collectors wrote them.
-// A walk from the end counts each name up to the cap, so the kept set is the
-// tail of every name's run at once.
-func newestPerName(xs []model.Metric, perName int) []model.Metric {
+// newestPerName keeps the newest perName records of each metric name in xs
+// that satisfies match, in xs's own (write) order, which is the order the
+// collectors wrote them. A walk from the end counts each name up to the
+// cap, so the kept set is the tail of every name's run at once. match is
+// applied inline rather than pre-filtering xs into a separate slice first,
+// so the result buffer is sized to what is actually kept (bounded by the
+// number of distinct names times perName), never to the whole store — the
+// same reasoning as matchNewest, for the one caller (an unscoped per-name
+// read) that can't use matchNewest's early stop, because it doesn't know
+// how many distinct names it will meet until it has walked every record.
+func newestPerName(xs []model.Metric, perName int, match func(model.Metric) bool) []model.Metric {
 	if perName <= 0 {
 		return xs
 	}
 	counts := make(map[string]int)
-	kept := make([]model.Metric, 0, len(xs))
+	kept := make([]model.Metric, 0)
 	for i := len(xs) - 1; i >= 0; i-- {
+		if !match(xs[i]) {
+			continue
+		}
 		if counts[xs[i].Name] < perName {
 			counts[xs[i].Name]++
 			kept = append(kept, xs[i])

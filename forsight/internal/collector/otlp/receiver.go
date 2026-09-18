@@ -118,7 +118,11 @@ func (h *Handler) handleTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	spans := spansFromOTLP(&req)
+	spans, truncated := spansFromOTLP(&req)
+	if truncated {
+		http.Error(w, "payload contains more than the per-request span limit", http.StatusRequestEntityTooLarge)
+		return
+	}
 	if err := h.spans.WriteSpans(r.Context(), spans); err != nil {
 		http.Error(w, "failed to store spans", http.StatusInternalServerError)
 		return
@@ -219,6 +223,7 @@ func dataPointsFromMetric(m *metricspb.Metric, resourceLabels map[string]string)
 }
 
 func numberDataPoints(name string, points []*metricspb.NumberDataPoint, resourceLabels map[string]string) []model.Metric {
+	now := time.Now()
 	out := make([]model.Metric, 0, len(points))
 	for _, dp := range points {
 		value, ok := numberDataPointValue(dp)
@@ -229,7 +234,7 @@ func numberDataPoints(name string, points []*metricspb.NumberDataPoint, resource
 		out = append(out, model.Metric{
 			Name:      name,
 			Value:     value,
-			Timestamp: time.Unix(0, int64(dp.GetTimeUnixNano())),
+			Timestamp: pointTime(dp.GetTimeUnixNano(), now),
 			Labels:    labels,
 		})
 	}
@@ -343,6 +348,12 @@ const (
 	// same order as the metrics cap, so a single POST cannot pin unbounded
 	// memory before the store's own element cap runs.
 	maxLogsPerRequest = 200_000
+	// maxSpansPerRequest bounds how many spans one request may carry — same
+	// reasoning and order as maxMetricsPerRequest/maxLogsPerRequest. Unlike
+	// those two, spans had no per-request cap at all: a minimal Span message
+	// is small enough that 32MiB (the body-read limit every /v1/* endpoint
+	// already applies) decodes to on the order of ten million of them.
+	maxSpansPerRequest = 200_000
 	// maxFutureSkew is how far ahead of now an ingested timestamp may be
 	// before it is clamped. A timestamp past the retention horizon would
 	// otherwise never be pruned, making a point immortal and pinning the
@@ -391,17 +402,25 @@ func numberDataPointValue(dp *metricspb.NumberDataPoint) (float64, bool) {
 	}
 }
 
-func spansFromOTLP(req *collectortrace.ExportTraceServiceRequest) []model.Span {
+// spansFromOTLP flattens a request, stopping at maxSpansPerRequest. The
+// bool reports whether it stopped early, so the handler can reject the
+// request outright rather than silently storing a truncated prefix — same
+// contract as metricsFromOTLP/logsFromOTLP, and for the same reason: half
+// of somebody's trace is worse than a clear 413.
+func spansFromOTLP(req *collectortrace.ExportTraceServiceRequest) ([]model.Span, bool) {
 	var out []model.Span
 	for _, rs := range req.GetResourceSpans() {
 		service := serviceName(rs.GetResource())
 		for _, ss := range rs.GetScopeSpans() {
 			for _, s := range ss.GetSpans() {
 				out = append(out, spanFromOTLP(s, service))
+				if len(out) > maxSpansPerRequest {
+					return out[:maxSpansPerRequest], true
+				}
 			}
 		}
 	}
-	return out
+	return out, false
 }
 
 // logsFromOTLP flattens a request, stopping at maxLogsPerRequest. The bool
@@ -488,8 +507,17 @@ func logSeverity(num logspb.SeverityNumber, text string) model.LogSeverity {
 }
 
 func spanFromOTLP(s *tracepb.Span, service string) model.Span {
-	start := time.Unix(0, int64(s.GetStartTimeUnixNano()))
-	end := time.Unix(0, int64(s.GetEndTimeUnixNano()))
+	now := time.Now()
+	start := pointTime(s.GetStartTimeUnixNano(), now)
+	end := pointTime(s.GetEndTimeUnixNano(), now)
+	// end before start is possible both from a clamp (only one side of a
+	// pathological span gets pulled back to now) and from a malformed
+	// payload with no clamping involved at all; either way a negative
+	// Duration is nonsense a consumer must not have to guard against.
+	duration := end.Sub(start)
+	if duration < 0 {
+		duration = 0
+	}
 	return model.Span{
 		TraceID:    hex.EncodeToString(s.GetTraceId()),
 		SpanID:     hex.EncodeToString(s.GetSpanId()),
@@ -497,7 +525,7 @@ func spanFromOTLP(s *tracepb.Span, service string) model.Span {
 		Name:       s.GetName(),
 		Service:    service,
 		Start:      start,
-		Duration:   end.Sub(start),
+		Duration:   duration,
 		Status:     spanStatus(s.GetStatus()),
 		Attributes: attributesToLabels(s.GetAttributes()),
 	}
