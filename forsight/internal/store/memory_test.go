@@ -283,6 +283,80 @@ func TestMemoryStore_QueryLogsSinceExcludesOlder(t *testing.T) {
 	}
 }
 
+// TestMemoryStore_QueryDoesNotSizeResultToWholeStore is a regression test
+// for an allocation bug: QueryMetrics/QuerySpans/QueryLogs used to build
+// their result with make(..., 0, len(store)) before filtering and applying
+// Limit, so a query naming a name/service/source nothing matches, with a
+// small Limit, still allocated a buffer sized to the WHOLE store —
+// `?name=nonexistent&limit=1` against a store near its element cap
+// allocates on the order of the store's full memory footprint just to
+// answer "no results, take the newest one anyway". len() was always small
+// and never caught this; only cap() — the backing array's allocated size —
+// gives the bug away, so that is what this test asserts.
+func TestMemoryStore_QueryDoesNotSizeResultToWholeStore(t *testing.T) {
+	const storeSize = 50_000
+	const smallLimit = 1
+	const maxAllowedCap = 64 // must stay a small constant, never O(storeSize)
+
+	s := NewMemoryStore(time.Hour)
+	s.SetMaxElements(storeSize + 10)
+	ctx := context.Background()
+	now := time.Now()
+
+	metrics := make([]model.Metric, storeSize)
+	spans := make([]model.Span, storeSize)
+	logs := make([]model.LogEntry, storeSize)
+	for i := range metrics {
+		metrics[i] = model.Metric{Name: "present", Value: float64(i), Timestamp: now}
+		spans[i] = model.Span{TraceID: "t", SpanID: "s", Service: "present", Start: now}
+		logs[i] = model.LogEntry{Timestamp: now, Source: "present", Message: "m"}
+	}
+	if err := s.WriteMetrics(ctx, metrics); err != nil {
+		t.Fatalf("WriteMetrics: %v", err)
+	}
+	if err := s.WriteSpans(ctx, spans); err != nil {
+		t.Fatalf("WriteSpans: %v", err)
+	}
+	if err := s.WriteLogs(ctx, logs); err != nil {
+		t.Fatalf("WriteLogs: %v", err)
+	}
+
+	gotMetrics, err := s.QueryMetrics(ctx, MetricQuery{Name: "nonexistent", Limit: smallLimit})
+	if err != nil {
+		t.Fatalf("QueryMetrics: %v", err)
+	}
+	if cap(gotMetrics) > maxAllowedCap {
+		t.Errorf("QueryMetrics(name=nonexistent, limit=1) result cap = %d, want <= %d (a %d-element store must not size the buffer to itself)", cap(gotMetrics), maxAllowedCap, storeSize)
+	}
+
+	gotSpans, err := s.QuerySpans(ctx, SpanQuery{Service: "nonexistent", Limit: smallLimit})
+	if err != nil {
+		t.Fatalf("QuerySpans: %v", err)
+	}
+	if cap(gotSpans) > maxAllowedCap {
+		t.Errorf("QuerySpans(service=nonexistent, limit=1) result cap = %d, want <= %d", cap(gotSpans), maxAllowedCap)
+	}
+
+	gotLogs, err := s.QueryLogs(ctx, LogQuery{Source: "nonexistent", Limit: smallLimit})
+	if err != nil {
+		t.Fatalf("QueryLogs: %v", err)
+	}
+	if cap(gotLogs) > maxAllowedCap {
+		t.Errorf("QueryLogs(source=nonexistent, limit=1) result cap = %d, want <= %d", cap(gotLogs), maxAllowedCap)
+	}
+
+	// The single-name PerName case must take the same bounded path as a
+	// plain Limit (the fold borrowed from BadgerStore's QueryMetrics),
+	// rather than newestPerName's whole-store grouping walk.
+	gotPerName, err := s.QueryMetrics(ctx, MetricQuery{Name: "nonexistent", PerName: smallLimit})
+	if err != nil {
+		t.Fatalf("QueryMetrics per_name: %v", err)
+	}
+	if cap(gotPerName) > maxAllowedCap {
+		t.Errorf("QueryMetrics(name=nonexistent, per_name=1) result cap = %d, want <= %d", cap(gotPerName), maxAllowedCap)
+	}
+}
+
 func TestMemoryStore_LogElementCap(t *testing.T) {
 	s := NewMemoryStore(time.Hour)
 	s.SetMaxElements(20)
