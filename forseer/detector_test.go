@@ -1,6 +1,7 @@
 package forseer
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -228,5 +229,134 @@ func TestSeriesKey_IncludesSortedLabels(t *testing.T) {
 	c := seriesKey("docker.cpu.percent", map[string]string{"container_id": "def", "container_name": "web"})
 	if a == c {
 		t.Fatal("different container_id produced the same key")
+	}
+}
+
+// TestDetector_ADayOfOrdinaryTrafficIsNotRefused is the test whose absence
+// let the Detector go deaf after fourteen hours.
+//
+// seasonalKey suffixes every non-process series with |h=NN, so one series
+// occupies 24 keys once the agent has been up a day. The cap counted keys, so
+// an ordinary single host — the host collector's twelve names, five
+// containers, two probes, ten processes: 67 real series — needed 918 keys
+// against a cap of 512, and past it observeOneLocked returned immediately for
+// any series/hour pair not already seen. No baseline, no anomaly check, no
+// changepoint, no log line. Which series went dark, and at which hours,
+// depended on the order the cap happened to fill in.
+func TestDetector_ADayOfOrdinaryTrafficIsNotRefused(t *testing.T) {
+	d := NewDetector()
+	hour := 0
+	d.now = func() time.Time { return time.Date(2026, 9, 18, hour, 0, 0, 0, time.UTC) }
+
+	var batch []Point
+	for _, name := range []string{
+		"host.cpu.percent", "host.memory.percent", "host.disk.percent",
+		"host.disk.used_bytes", "host.fd.max", "host.fd.used",
+		"host.memory.total_bytes", "host.memory.used_bytes",
+		"host.net.bytes_recv", "host.net.bytes_sent",
+		"host.net.conn_count", "host.uptime_seconds",
+	} {
+		batch = append(batch, Point{Name: name, Value: 10})
+	}
+	for c := 0; c < 5; c++ {
+		for _, name := range []string{"docker.cpu.percent", "docker.memory.percent", "docker.memory.used_bytes"} {
+			batch = append(batch, Point{Name: name, Value: 10, Labels: map[string]string{"container": fmt.Sprintf("c%d", c)}})
+		}
+	}
+	for pr := 0; pr < 2; pr++ {
+		for _, name := range []string{
+			"probe.http.up", "probe.http.status", "probe.http.duration_ms",
+			"probe.tls.days_remaining", "probe.tls.valid",
+		} {
+			batch = append(batch, Point{Name: name, Value: 10, Labels: map[string]string{"name": fmt.Sprintf("p%d", pr)}})
+		}
+	}
+
+	// A full day, every hour bucket. The values have to move: a constant
+	// series has zero variance and SeriesBaseline reports not-ready for that
+	// reason alone, which would make this test pass or fail for nothing to do
+	// with the cap.
+	for hour = 0; hour < 24; hour++ {
+		for i := 0; i < minSamples+2; i++ {
+			jittered := make([]Point, len(batch))
+			for j, p := range batch {
+				p.Value = 10 + float64((i+j)%5)
+				jittered[j] = p
+			}
+			d.Observe(jittered)
+		}
+	}
+
+	// Every series must still have a baseline in the CURRENT hour bucket.
+	hour = 23
+	for _, p := range batch {
+		if _, _, ready := d.SeriesBaseline(p.Name, p.Labels); !ready {
+			t.Fatalf("no baseline for %s%v after a full day: the cap refused it", p.Name, p.Labels)
+		}
+	}
+
+	watching, evicted := d.SeriesCount()
+	if evicted != 0 {
+		t.Errorf("evicted %d series on a host with only %d, which is well inside maxSeries=%d",
+			evicted, watching, maxSeries)
+	}
+	if watching != len(batch) {
+		t.Errorf("watching %d series, want %d", watching, len(batch))
+	}
+}
+
+// TestDetector_EvictsWholeSeriesAndLeavesNoOrphanInsight: past the cap,
+// something must give, and what gives must go completely. An insight left
+// behind after its series is evicted can never be closed — closing happens in
+// observeOneLocked, and no further point will arrive under that key — so the
+// dashboard would show a permanent finding about a series nothing measures.
+func TestDetector_EvictsWholeSeriesAndLeavesNoOrphanInsight(t *testing.T) {
+	d := NewDetector()
+	// Eviction is by recency, so the clock must advance for "oldest" to mean
+	// anything — with a frozen clock every series ties and the victim is
+	// whichever key Go's randomized map iteration happens to yield. Staying
+	// inside one hour keeps seasonalKey from splitting the series.
+	base := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	tick := 0
+	d.now = func() time.Time { return base.Add(time.Duration(tick) * time.Millisecond) }
+
+	// One series with an open anomaly, seen first so it is the eviction victim.
+	for i := 0; i < minSamples; i++ {
+		tick++
+		d.Observe([]Point{{Name: "doomed.series", Value: 10 + float64(i%3)}})
+	}
+	tick++
+	d.Observe([]Point{{Name: "doomed.series", Value: 10_000}})
+	if len(d.Insights()) == 0 {
+		t.Fatal("setup: expected an open insight on the series about to be evicted")
+	}
+
+	for i := 0; i < maxSeries+5; i++ {
+		tick++
+		d.Observe([]Point{{Name: fmt.Sprintf("flood.%d", i), Value: 1}})
+	}
+
+	watching, evicted := d.SeriesCount()
+	if watching > maxSeries {
+		t.Errorf("watching %d series, cap is %d", watching, maxSeries)
+	}
+	if evicted == 0 {
+		t.Error("nothing was evicted, so the flood was refused instead — a new series must be able to displace a dead one")
+	}
+	for _, ins := range d.Insights() {
+		if ins.Metric == "doomed.series" {
+			t.Errorf("an insight outlived its evicted series and can never be closed: %+v", ins)
+		}
+	}
+	d.mu.Lock()
+	leftover := 0
+	for key := range d.series {
+		if strings.HasPrefix(key, "doomed.series") {
+			leftover++
+		}
+	}
+	d.mu.Unlock()
+	if leftover != 0 {
+		t.Errorf("%d hour buckets of the evicted series are still held", leftover)
 	}
 }
