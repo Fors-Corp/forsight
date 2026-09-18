@@ -29,4 +29,14 @@ describe("Card", () => {
     );
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it("renders CardTitle as an h3 by default", () => {
+    render(<CardTitle>Rapids plan</CardTitle>);
+    expect(screen.getByText("Rapids plan").tagName).toBe("H3");
+  });
+
+  it("renders CardTitle at a different heading level via `as`, to fit the page outline", () => {
+    render(<CardTitle as="h2">Rapids plan</CardTitle>);
+    expect(screen.getByText("Rapids plan").tagName).toBe("H2");
+  });
 });
