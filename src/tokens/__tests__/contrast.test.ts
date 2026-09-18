@@ -31,6 +31,23 @@ function contrastRatio(hexA: string, hexB: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function rgbToHex(rgb: [number, number, number]): string {
+  return `#${rgb.map((c) => Math.round(c).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * Composite a partly transparent color over an opaque one, the way a browser
+ * paints a translucent box-shadow against the surface behind it. An alpha of 1
+ * is the identity, so a solid token passes through unchanged.
+ */
+function blendOver(hex: string, alpha: number, backdrop: string): string {
+  const fg = hexToRgb(hex);
+  const bg = hexToRgb(backdrop);
+  return rgbToHex(
+    [0, 1, 2].map((i) => alpha * fg[i] + (1 - alpha) * bg[i]) as [number, number, number]
+  );
+}
+
 /** Every fg/bg pairing an existing component actually renders. */
 function pairsFor(p: ForsightPalette): Array<[string, string, string]> {
   return [
@@ -83,6 +100,33 @@ describe("Forsight token contrast (WCAG AA, 4.5:1)", () => {
         it(`${label} passes AA`, () => {
           const ratio = contrastRatio(fg, bg);
           expect(ratio).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+        });
+      }
+    });
+  }
+});
+
+/**
+ * The focus ring is the only thing that says which control has keyboard focus,
+ * so WCAG 1.4.11 governs it: 3:1 against the color it is drawn against. It is
+ * a box-shadow outside the control, so it composites against the page behind
+ * the control — the bare bg, a Card's surface, or surface-2 — and all three
+ * have to clear the bar at the ring's real alpha. A translucent ring is what
+ * failed here before (45% teal measured 2.0-2.7:1 in both themes), which is
+ * exactly the class of bug this file exists to catch, so the alpha is part of
+ * the mirrored token and part of the assertion.
+ */
+describe("Forsight focus ring contrast (WCAG 1.4.11, 3:1 non-text)", () => {
+  for (const [themeName, palette] of Object.entries(FORSIGHT_PALETTES)) {
+    describe(`${themeName} theme`, () => {
+      for (const [surfaceName, surface] of [
+        ["bg", palette.bg],
+        ["surface", palette.surface],
+        ["surface-2", palette.surface2],
+      ] as const) {
+        it(`focus ring on ${surfaceName} clears 3:1`, () => {
+          const painted = blendOver(palette.focusRing, palette.focusRingAlpha, surface);
+          expect(contrastRatio(painted, surface)).toBeGreaterThanOrEqual(AA_NON_TEXT);
         });
       }
     });

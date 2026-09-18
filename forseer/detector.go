@@ -14,18 +14,50 @@ const (
 	warningSigma  = 3
 	criticalSigma = 5
 	insightTTL    = 10 * time.Minute
-	maxSeries     = 512
-	cusumK        = 0.5
-	cusumH        = 5
+	// maxSeries caps how many real series the Detector watches — a base
+	// name-and-labels series, NOT one of its hour buckets.
+	//
+	// It used to count keys, which is a different and much smaller number
+	// than it reads as. seasonalKey suffixes every non-process series with
+	// |h=NN, so one series occupies 24 keys once the agent has been up for a
+	// day. On an ordinary single host — the host collector's twelve names,
+	// five containers, two probes, ten processes — that is 67 real series
+	// needing 918 keys, so 512 was reached after fourteen hours of uptime and
+	// was worth 13% of what it named. Past that, observeOneLocked returned
+	// immediately for any series/hour pair not already present: no baseline,
+	// no anomaly check, no changepoint, no threshold update, and no log line
+	// saying so. Which series lost coverage, and at which hours of the day,
+	// depended on the arbitrary order the cap happened to be reached in.
+	maxSeries = 512
+	cusumK    = 0.5
+	cusumH    = 5
 )
 
 // Detector watches a stream of metric points and opens/closes insights
 // using Welford's online mean/variance plus a CUSUM changepoint. No model
 // file, no API key.
 type Detector struct {
-	mu     sync.Mutex
+	mu sync.Mutex
+	// series is keyed by seasonalKey, so one base series holds up to 24
+	// entries here — one per hour bucket.
 	series map[string]*rolling
-	open   map[string]Insight
+	// lastSeen is keyed by the hour-free seriesKey and is what maxSeries
+	// actually counts, so the cap means what it says. It is also the
+	// eviction order: a base series unseen for hours is a dead PID or a
+	// removed container.
+	//
+	// Eviction has to happen at base-series granularity, not over the keys
+	// in `series`. A recency rule applied to hour-suffixed keys evicts
+	// exactly the wrong thing: at 02:00 the bucket for 03:00 is by
+	// construction about twenty-three hours stale, so an LRU would delete
+	// the bucket the series is about to need, turning a cap into a
+	// guaranteed miss every hour.
+	lastSeen map[string]time.Time
+	// evicted counts base series dropped to stay under the cap, so running
+	// out is visible as a number instead of inferred from alerts that never
+	// fire.
+	evicted int
+	open    map[string]Insight
 	// thresholds learns, per series, how far out of line is far enough.
 	// Until a series has enough history it hands back the fixed sigma pair,
 	// so a cold detector behaves exactly as it always did.
@@ -63,6 +95,7 @@ type rolling struct {
 func NewDetector() *Detector {
 	return &Detector{
 		series:     make(map[string]*rolling),
+		lastSeen:   make(map[string]time.Time),
 		open:       make(map[string]Insight),
 		thresholds: newThresholdModel(),
 		outlier:    newHostOutlierModel(),
@@ -97,15 +130,26 @@ func (d *Detector) observeOneLocked(p Point, now time.Time) {
 	// literals "NaN", "Inf", "+Inf" and "-Inf". severity.go, forecast.go,
 	// paging.go and export.go all already guard this; the streaming detector
 	// most exposed to the network was the one that did not.
+	//
+	// Before the cap bookkeeping below, deliberately: a point that will not be
+	// observed must not claim a series slot, or a stream of them would evict
+	// real series to make room for nothing.
 	if math.IsNaN(p.Value) || math.IsInf(p.Value, 0) {
 		return
 	}
+
+	base := seriesKey(p.Name, p.Labels)
 	key := seasonalKey(p.Name, p.Labels, now.Hour())
-	s := d.series[key]
-	if s == nil {
-		if len(d.series) >= maxSeries {
+
+	if _, known := d.lastSeen[base]; !known && len(d.lastSeen) >= maxSeries {
+		if !d.evictOldestSeriesLocked(now) {
 			return
 		}
+	}
+	d.lastSeen[base] = now
+
+	s := d.series[key]
+	if s == nil {
 		s = &rolling{}
 		d.series[key] = s
 	}
@@ -283,6 +327,57 @@ func (d *Detector) expireLocked(now time.Time) {
 			delete(d.open, k)
 		}
 	}
+}
+
+// evictOldestSeriesLocked drops the least recently seen base series — every
+// hour bucket it holds, its open insights, and its threshold state — to make
+// room for a new one. It reports false if there was nothing to evict, in
+// which case the caller refuses the point rather than exceeding the cap.
+//
+// Everything belonging to the series goes together. Leaving an open insight
+// behind would leave the dashboard showing a finding about a series nothing
+// is measuring any more, and one that can never be closed, because closing
+// happens in observeOneLocked and no further point will arrive under that
+// key.
+func (d *Detector) evictOldestSeriesLocked(now time.Time) bool {
+	var victim string
+	var oldest time.Time
+	for base, seen := range d.lastSeen {
+		if victim == "" || seen.Before(oldest) {
+			victim, oldest = base, seen
+		}
+	}
+	if victim == "" {
+		return false
+	}
+
+	delete(d.lastSeen, victim)
+	// A process series is stored under its base key; every other kind under
+	// base|h=NN. Clearing both shapes covers either without needing to know
+	// which this was.
+	keys := make([]string, 0, 25)
+	keys = append(keys, victim)
+	for hour := 0; hour < 24; hour++ {
+		keys = append(keys, fmt.Sprintf("%s|h=%02d", victim, hour))
+	}
+	for _, key := range keys {
+		delete(d.series, key)
+		delete(d.open, key)
+		delete(d.open, key+"|cusum")
+	}
+	d.thresholds.Forget(keys...)
+	d.evicted++
+	return true
+}
+
+// SeriesCount reports how many real series are being watched and how many
+// have been evicted to stay under maxSeries. A non-zero eviction count on a
+// host with fewer series than the cap means something is generating
+// unbounded cardinality.
+func (d *Detector) SeriesCount() (watching, evicted int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.lastSeen), d.evicted
 }
 
 // SeriesBaseline returns the rolling mean and standard deviation Observe has

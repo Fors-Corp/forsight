@@ -1,0 +1,5 @@
+{
+  "main": "../dist/chart.cjs",
+  "module": "../dist/chart.js",
+  "types": "../dist/chart.d.ts"
+}

@@ -98,13 +98,22 @@ func newThresholdModel() *thresholdModel {
 // Observe records one z-score for a series and moves its thresholds toward
 // the budget. It returns the pair to use for this point, and false when the
 // series has not been seen enough for them to beat the constants.
+// maxThresholdKeys is this map's backstop, in the unit this map is actually
+// keyed by: seasonalKey, so one real series is up to 24 of them. It is
+// maxSeries real series' worth, which is the most the Detector can ever ask
+// about — the Detector is what bounds real cardinality, and it calls Forget
+// for every key of a series it evicts, so in practice this ceiling is never
+// approached. Expressing it as a bare maxSeries, as it was, made this map run
+// out at about 21 real series while reading as though it held 512.
+const maxThresholdKeys = maxSeries * 24
+
 func (m *thresholdModel) Observe(key string, z float64) (warn, critical float64, ready bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	s := m.series[key]
 	if s == nil {
-		if len(m.series) >= maxSeries {
+		if len(m.series) >= maxThresholdKeys {
 			return warningSigma, criticalSigma, false
 		}
 		// Start where the constants are, so the first thousand points
@@ -205,6 +214,17 @@ type seriesThresholdSnapshot struct {
 }
 
 // Snapshot implements Model.
+// Forget drops the learned thresholds for a set of keys. The Detector passes
+// every hour bucket of a series it is evicting, so threshold state cannot
+// outlive the series it describes and slowly fill this map on its own.
+func (m *thresholdModel) Forget(keys ...string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, key := range keys {
+		delete(m.series, key)
+	}
+}
+
 func (m *thresholdModel) Snapshot() ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
