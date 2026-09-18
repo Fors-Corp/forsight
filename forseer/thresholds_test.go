@@ -150,15 +150,17 @@ func TestThresholds_CriticalIsNeverEasierThanWarning(t *testing.T) {
 func TestThresholds_BoundTheNumberOfSeriesTracked(t *testing.T) {
 	m := newThresholdModel()
 
-	for i := 0; i < maxSeries*2; i++ {
-		m.Observe(string(rune('a'+i%26))+string(rune(i)), 1)
+	// The bound is in this map's own unit — seasonalKey, of which one real
+	// series is up to 24 — not in the Detector's base-series unit.
+	for i := 0; i < maxThresholdKeys*2; i++ {
+		m.Observe(fmt.Sprintf("series-%d", i), 1)
 	}
 
 	m.mu.Lock()
 	tracked := len(m.series)
 	m.mu.Unlock()
-	if tracked > maxSeries {
-		t.Errorf("tracking %d series, cap is %d", tracked, maxSeries)
+	if tracked > maxThresholdKeys {
+		t.Errorf("tracking %d keys, cap is %d", tracked, maxThresholdKeys)
 	}
 }
 
