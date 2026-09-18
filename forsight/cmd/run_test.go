@@ -298,6 +298,44 @@ func TestResolveMlaas(t *testing.T) {
 		}
 	})
 
+	// mlaas's api_key file holds one key per line since it gained support for
+	// several, so that a key can be rotated in and an old one revoked without
+	// a moment where none works. Reading the whole file instead of its first
+	// line sends every key joined by newlines as one header value, which
+	// matches no configured key: the agent then 401s on every request
+	// indefinitely, which has already happened once here for a different
+	// reason and took twelve hours to notice.
+	t.Run("several keys in the file, the first one is used", func(t *testing.T) {
+		t.Setenv("MLAAS_API_KEY", "")
+		path := filepath.Join(t.TempDir(), "api_key")
+		body := "# rotated 2026-09-18\n\n  current-key  \nprevious-key\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, ok, err := resolveMlaas(&runOptions{
+			mlaasURL: "http://127.0.0.1:8090", mlaasAPIKeyFile: path,
+		})
+		if err != nil || !ok {
+			t.Fatalf("resolveMlaas = ok %v, err %v; want on", ok, err)
+		}
+		if cfg.APIKey != "current-key" {
+			t.Errorf("APIKey = %q, want only the first usable line", cfg.APIKey)
+		}
+	})
+
+	t.Run("a key file of only blanks and comments is no key", func(t *testing.T) {
+		t.Setenv("MLAAS_API_KEY", "")
+		path := filepath.Join(t.TempDir(), "api_key")
+		if err := os.WriteFile(path, []byte("# nothing here\n\n   \n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := resolveMlaas(&runOptions{
+			mlaasURL: "http://127.0.0.1:8090", mlaasAPIKeyFile: path,
+		}); err == nil {
+			t.Error("want an error up front, not a silent stream of 401s")
+		}
+	})
+
 	t.Run("key file, trimmed", func(t *testing.T) {
 		t.Setenv("MLAAS_API_KEY", "")
 		path := filepath.Join(t.TempDir(), "api_key")

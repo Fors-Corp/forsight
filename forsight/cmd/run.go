@@ -596,7 +596,7 @@ func resolveMlaas(opts *runOptions) (mlaas.Config, bool, error) {
 			if err != nil {
 				return mlaas.Config{}, false, fmt.Errorf("reading the mlaas API key: %w", err)
 			}
-			key = strings.TrimSpace(string(raw))
+			key = firstKeyLine(string(raw))
 		}
 	}
 	if key == "" {
@@ -609,6 +609,27 @@ func resolveMlaas(opts *runOptions) (mlaas.Config, bool, error) {
 		Prefix:       opts.mlaasPrefix,
 		SyncInterval: opts.mlaasSyncInterval,
 	}, true, nil
+}
+
+// firstKeyLine takes the key out of the contents of mlaas's api_key file.
+//
+// That file holds one key per line: since mlaas gained support for several,
+// a key can be rotated in and an old one revoked without a moment where
+// none works, and the first line is the one anything reporting a single key
+// reports. Reading the whole file and trimming it, which is what this used
+// to do, sends every line joined by newlines as one X-API-Key header value
+// the moment a second key is added - matching no configured key, so every
+// request 401s until someone notices. Blank lines and # comments are
+// skipped, as mlaas skips them.
+func firstKeyLine(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return line
+	}
+	return ""
 }
 
 // isLoopbackListenAddr reports whether addr is explicitly bound to a loopback
