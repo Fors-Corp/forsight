@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type Ref } from "react";
 import {
   Alert,
   Badge,
@@ -818,6 +818,14 @@ function JobsCard({ jobs }: { jobs: MlaasJob[] }) {
   );
 }
 
+interface ModelsProps {
+  /** Forwarded to the page's <h1> so App can move focus onto it after a
+   * route change (skipping the very first mount) per the ARIA APG
+   * client-navigation pattern — see App.tsx. Optional so the page's own
+   * tests can still render it standalone. */
+  headingRef?: Ref<HTMLHeadingElement>;
+}
+
 /**
  * The Models page: what the agent has learned, from both places it learns.
  * Forseer's models train inside the binary and gate on a fallback; mlaas's
@@ -825,7 +833,7 @@ function JobsCard({ jobs }: { jobs: MlaasJob[] }) {
  * Both kinds sit on one page so an operator can compare them on the same
  * job (log severity) and see the forecasts the agent cannot make on its own.
  */
-export default function Models() {
+export default function Models({ headingRef }: ModelsProps = {}) {
   const cards = useForseerModels(10000).data;
   const status = useMlaasStatus(10000).data;
   const forecasts = status?.forecasts ?? [];
@@ -833,7 +841,7 @@ export default function Models() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
       <header className="flex flex-col gap-2">
-        <Heading as="h1" size="xl">
+        <Heading as="h1" size="xl" ref={headingRef} tabIndex={-1}>
           Models
         </Heading>
         <Text tone="secondary">

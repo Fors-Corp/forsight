@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import {
   Heading,
   Text,
@@ -465,7 +465,15 @@ function statusFromInsights(
   return "operational";
 }
 
-export default function Overview() {
+interface OverviewProps {
+  /** Forwarded to the page's <h1> so App can move focus onto it after a
+   * route change (skipping the very first mount) per the ARIA APG
+   * client-navigation pattern — see App.tsx. Optional so the page's own
+   * tests can still render it standalone. */
+  headingRef?: Ref<HTMLHeadingElement>;
+}
+
+export default function Overview({ headingRef }: OverviewProps = {}) {
   // Every series' newest points inside a short, fixed window — not the
   // store's whole retained history. Feeds the StatCards' latest values,
   // the container/process rows, and the probe gate below. Two minutes
@@ -671,7 +679,7 @@ export default function Overview() {
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <Heading as="h1" size="xl">
+          <Heading as="h1" size="xl" ref={headingRef} tabIndex={-1}>
             forsight
           </Heading>
           <Text tone="secondary">

@@ -366,6 +366,57 @@ describe("App routing", () => {
     expect(await screen.findByText("Host CPU over time")).toBeInTheDocument();
   });
 
+  // H9: hash-route navigation swapped the whole main content with no cue a
+  // screen-reader user could pick up on — document.title never changed
+  // (every history entry and open tab read "forsight") and nothing moved
+  // focus, so the user stayed parked on the nav link they had just
+  // activated. document.title now names the route, on mount and on every
+  // navigation after it.
+  it("sets document.title to the current route and updates it on navigation", async () => {
+    window.location.hash = "#/";
+    mockFetch(endpointsWithModels);
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    expect(document.title).toBe("forsight — Overview");
+
+    window.location.hash = "#/models";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+
+    await screen.findByRole("heading", { level: 1, name: "Models" });
+    expect(document.title).toBe("forsight — Models");
+  });
+
+  // The other half of H9: focus moves to the new page's <h1> on navigation,
+  // per the ARIA APG client-navigation pattern, so the user lands somewhere
+  // that announces the page changed instead of staying on the link they
+  // just activated.
+  it("moves focus to the new page's h1 when the route changes", async () => {
+    window.location.hash = "#/";
+    mockFetch(endpointsWithModels);
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    window.location.hash = "#/models";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+
+    const heading = await screen.findByRole("heading", { level: 1, name: "Models" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+  });
+
+  // Focusing the heading on the very first render would steal focus from
+  // the top of the document the instant the page loads — its own bug, and
+  // the reason the fix above tracks "has a navigation actually happened"
+  // rather than focusing on every render.
+  it("does not move focus on first mount", async () => {
+    window.location.hash = "#/";
+    mockFetch(endpointsWithModels);
+    render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
   // Fix 3 (MEDIUM): the mobile drawer used to stay open after tapping a nav
   // link, since `<a href>` navigation only changes location.hash and never
   // touched the sidebar's mobileOpen state. Any route change — a tap, a
