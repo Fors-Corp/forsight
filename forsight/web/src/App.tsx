@@ -22,7 +22,7 @@ import {
   Text,
   useSidebar,
 } from "@marcfs31/forsight";
-import { useHashRoute, type Route } from "./route";
+import { ROUTE_LABELS, useHashRoute, type Route } from "./route";
 import { submitAuthToken, useAuthPrompt } from "./api";
 import { useTheme } from "./theme";
 import Overview from "./pages/Overview";
@@ -205,6 +205,21 @@ function AuthTokenDialog() {
 export default function App() {
   const route = useHashRoute();
 
+  // Client-navigation focus per the ARIA APG hash-routing pattern: move
+  // focus to the new page's <h1> so a screen-reader user learns the page
+  // changed instead of staying parked on the nav link they just activated.
+  // `hasNavigated` skips the very first render — focusing on initial load
+  // would steal focus from the top of the document, which is its own bug.
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  const hasNavigated = useRef(false);
+  useEffect(() => {
+    if (!hasNavigated.current) {
+      hasNavigated.current = true;
+      return;
+    }
+    headingRef.current?.focus();
+  }, [route]);
+
   return (
     <SidebarProvider>
       <AuthTokenDialog />
@@ -224,10 +239,14 @@ export default function App() {
           <div className="flex h-14 items-center gap-2 border-b border-ink-border px-3">
             <SidebarTrigger />
             <Text as="span" size="sm" tone="secondary">
-              {route === "models" ? "Models" : "Overview"}
+              {ROUTE_LABELS[route]}
             </Text>
           </div>
-          {route === "models" ? <Models /> : <Overview />}
+          {route === "models" ? (
+            <Models headingRef={headingRef} />
+          ) : (
+            <Overview headingRef={headingRef} />
+          )}
         </AppShellMain>
       </AppShell>
     </SidebarProvider>
