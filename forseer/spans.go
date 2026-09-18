@@ -12,13 +12,60 @@ const maxSpanSeries = 256
 const maxTraces = 64
 
 // spanExceedRun is how many spans in a row have to land past this endpoint's
-// own p99 before slowSpan opens an insight. p99 fires on about one span in a
-// hundred by construction — that is what "p99" means — so a single
-// exceedance is the estimator working as designed, not a finding. Three in a
-// row is roughly one in a million under a stable distribution, an alert
-// budget in the spirit of thresholds.go's learned rates without needing a
-// second learned model to get there.
+// own p99 before slowSpan opens an insight. A calibrated p99 fires on about
+// one span in a hundred by construction — that is what "p99" means — so a
+// single exceedance is the estimator working as designed, not a finding.
+// Three in a row is roughly one in a million, an alert budget in the spirit
+// of thresholds.go's learned rates without needing a second learned model to
+// get there.
+//
+// "Calibrated" is doing real work in that sentence, which is what
+// spanP99MinSamples below is for: the budget is a property of the marker
+// being near the true p99, not of the run length, and it is simply false
+// while the marker is still warming up.
 const spanExceedRun = 3
+
+// spanP99MinSamples is how many spans one series needs before its p99 marker
+// is allowed to judge anything. It is deliberately not minSamples: twelve
+// samples is plenty to place a median, and nowhere near enough to place a
+// 99th percentile.
+//
+// A P² marker converges from below on a long tail, because it has not yet
+// seen the tail it is supposed to be summarising. Measured against
+// stationary lognormal latency (median 40ms, sigma 0.6, true p99 161.5ms,
+// 2000 trials per n), the marker this code calls "p99" reports:
+//
+//	n=12    65ms, sitting at the true 79th percentile
+//	n=30    94ms, the 92nd
+//	n=100  131ms, the 98th
+//	n=200  157ms, the 98.9th
+//	n=1000 161ms, the 99.0th
+//
+// The alert budget follows the same curve. Bucketing four million spans of
+// that traffic by how many samples the series had when each was judged, the
+// share landing past the marker, and the rate at which a run of
+// spanExceedRun opens an insight:
+//
+//	n in [12,25)   13.50% exceed, one open per 323 spans
+//	n in [25,50)    6.24%, one per 2 040
+//	n in [50,100)   3.04%, one per 19 054
+//	n in [100,200)  1.51%, one per 223 405
+//	n in [200,400)  1.11%, one per 734 170
+//	n >= 400        1.05%, one per 1 156 457
+//
+// So at minSamples the "one in a million" above is off by three and a half
+// orders of magnitude, and every Description quoting a p99 quotes something
+// nearer a p79. From 200 samples on, both numbers are what the comment
+// claims. 200 rather than the 1000 that would squeeze out the last 0.06
+// percentage points, because the gate is not free: a CUSUM reset drops n to
+// zero, and the sign CUSUM below resets about once per 740 spans on
+// stationary traffic (re-measured over a million spans per case, with the
+// statistic gated exactly as observeOneLocked gates it — the same order as
+// the figure quoted there). So the share of spans judged at all falls from
+// 75.6% at a gate of 200 to 23.5% at 1000. Two hundred buys the budget back;
+// a thousand would buy another rounding error and spend two thirds of the
+// coverage on it.
+const spanP99MinSamples = 200
 
 // spanSeries is one (service, span name)'s latency shape: two P² quantile
 // trackers sharing a sample count, plus the CUSUM statistic that watches
@@ -113,48 +160,21 @@ func (w *spanWatch) observeOneLocked(sp SpanSample, now time.Time) {
 	if s.n < minSamples {
 		return
 	}
-	p99, ok := s.p99.value()
 	median, okMedian := s.p50.value()
-	if !ok || !okMedian {
+	if !okMedian {
 		return
 	}
 
-	// "Slower than this endpoint's own p99" replaces the z-score: latency is
-	// long-tailed, so a mean-and-sigma baseline sits above the median and
-	// has its spread set by the very tail it is supposed to be judging.
-	// Closing is immediate on the first span back in line — the run-length
-	// budget below only guards how an insight opens.
-	if sp.DurationMs <= p99 {
-		s.runLen = 0
-		delete(w.open, key)
+	// The median is ready long before the p99 is — see spanP99MinSamples —
+	// so the slow-span test waits while the changepoint statistic below does
+	// not. Gating both on the same count would leave the CUSUM unable to
+	// notice a regime change until the very marker set the regime change
+	// invalidates had finished warming up.
+	p99, okP99 := s.p99.value()
+	if okP99 && s.n >= spanP99MinSamples {
+		w.judgeAgainstP99Locked(sp, key, s, p99, median, now)
 	} else {
-		s.runLen++
-		if s.runLen >= spanExceedRun {
-			sev := SeverityWarning
-			if sp.Status == "error" {
-				sev = SeverityCritical
-			}
-			related := []string{sp.Name}
-			if sp.TraceID != "" {
-				related = append(related, sp.TraceID)
-				if path := CriticalPath(w.traces[sp.TraceID]); len(path) > 0 {
-					related = append(related, path...)
-				}
-			}
-			w.open[key] = Insight{
-				ID:       "span:" + key,
-				Kind:     KindSlowSpan,
-				Severity: sev,
-				Title:    fmt.Sprintf("%s is slower than its own p99, %d in a row", sp.Name, s.runLen),
-				Description: fmt.Sprintf("%.0fms vs p99 %.0fms (median %.0fms) on %s",
-					sp.DurationMs, p99, median, emptySource(sp.Service)),
-				Source:  emptySource(sp.Service),
-				Metric:  sp.Name,
-				Value:   sp.DurationMs,
-				Time:    now,
-				Related: related,
-			}
-		}
+		s.runLen = 0
 	}
 
 	// A two-sided CUSUM on the *sign* of this span's deviation from the
@@ -201,6 +221,50 @@ func (w *spanWatch) observeOneLocked(sp SpanSample, now time.Time) {
 	}
 }
 
+// judgeAgainstP99Locked is the slow-span test itself, split out only so the
+// readiness gate above reads as the one condition it is.
+//
+// "Slower than this endpoint's own p99" replaces the z-score: latency is
+// long-tailed, so a mean-and-sigma baseline sits above the median and has
+// its spread set by the very tail it is supposed to be judging. Closing is
+// immediate on the first span back in line — the run-length budget only
+// guards how an insight opens.
+func (w *spanWatch) judgeAgainstP99Locked(sp SpanSample, key string, s *spanSeries, p99, median float64, now time.Time) {
+	if sp.DurationMs <= p99 {
+		s.runLen = 0
+		delete(w.open, key)
+		return
+	}
+	s.runLen++
+	if s.runLen < spanExceedRun {
+		return
+	}
+	sev := SeverityWarning
+	if sp.Status == "error" {
+		sev = SeverityCritical
+	}
+	related := []string{sp.Name}
+	if sp.TraceID != "" {
+		related = append(related, sp.TraceID)
+		if path := CriticalPath(w.traces[sp.TraceID]); len(path) > 0 {
+			related = append(related, path...)
+		}
+	}
+	w.open[key] = Insight{
+		ID:       "span:" + key,
+		Kind:     KindSlowSpan,
+		Severity: sev,
+		Title:    fmt.Sprintf("%s is slower than its own p99, %d in a row", sp.Name, s.runLen),
+		Description: fmt.Sprintf("%.0fms vs p99 %.0fms (median %.0fms) on %s",
+			sp.DurationMs, p99, median, emptySource(sp.Service)),
+		Source:  emptySource(sp.Service),
+		Metric:  sp.Name,
+		Value:   sp.DurationMs,
+		Time:    now,
+		Related: related,
+	}
+}
+
 func (w *spanWatch) Insights() []Insight {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -227,10 +291,13 @@ func (w *spanWatch) Card() Card {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	// Against spanP99MinSamples, not minSamples: the Detail line below
+	// claims a stable p50/p99, and a series with twelve samples has a stable
+	// p50 and a p99 marker still sitting nearer its own p79.
 	ready, points := 0, 0
 	for _, s := range w.series {
 		points += s.n
-		if s.n >= minSamples {
+		if s.n >= spanP99MinSamples {
 			ready++
 		}
 	}
