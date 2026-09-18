@@ -200,13 +200,41 @@ func (f *burnForecast) exhaustedLocked() (soonest, latest time.Duration, ok bool
 		return 0, 0, false
 	}
 
-	soonest = time.Duration(remaining / fast * f.tick * float64(time.Second))
-	latest = time.Duration(remaining / slow * f.tick * float64(time.Second))
-	if soonest > forecastHorizon {
+	// Compare in seconds, as floats, BEFORE converting to a Duration.
+	//
+	// Converting first cannot work: the Go spec says a float-to-integer
+	// conversion whose value the result type cannot represent "succeeds but
+	// the result value is implementation-dependent", and the two
+	// architectures this runs on disagree in the worst possible way. A trend
+	// that is nearly flat — which is to say a budget that is emphatically not
+	// being spent — makes remaining/fast astronomically large. arm64
+	// saturates to MaxInt64, so `soonest > forecastHorizon` holds and the
+	// answer is "not on course to exhaust the budget", which is right. amd64
+	// yields MinInt64, which is less than forecastHorizon, so the guard lets
+	// it through as a large negative duration and FormatProjection's
+	// `soonest <= 0 && latest <= 0` branch reports "already spent" — the
+	// exact opposite, from the same binary logic, on the architecture the
+	// agent actually ships on.
+	//
+	// In float seconds there is no representable-range cliff: an overflow is
+	// +Inf, and every comparison below behaves.
+	horizonSec := forecastHorizon.Seconds()
+	soonestSec := remaining / fast * f.tick
+	latestSec := remaining / slow * f.tick
+	if math.IsNaN(soonestSec) || math.IsInf(soonestSec, 0) || soonestSec > horizonSec {
 		return 0, 0, false
 	}
-	if latest > forecastHorizon {
+	if soonestSec < 0 {
+		soonestSec = 0
+	}
+	soonest = time.Duration(soonestSec * float64(time.Second))
+	if math.IsNaN(latestSec) || math.IsInf(latestSec, 0) || latestSec > horizonSec {
 		latest = 0
+	} else {
+		if latestSec < 0 {
+			latestSec = 0
+		}
+		latest = time.Duration(latestSec * float64(time.Second))
 	}
 	return soonest, latest, true
 }

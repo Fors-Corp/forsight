@@ -314,3 +314,61 @@ func TestForecast_RestoreDiscardsCorruptJSON(t *testing.T) {
 		t.Fatalf("a discarded restore left n=%d, want 0", f.n)
 	}
 }
+
+// TestBurnForecast_NearlyFlatTrendIsNotOnCourse pins a bug that gave opposite
+// answers on different CPUs.
+//
+// burnForecast used to convert remaining/fast into a time.Duration before
+// checking it against forecastHorizon. The Go spec says a float-to-integer
+// conversion the result type cannot represent "succeeds but the result value
+// is implementation-dependent": arm64 saturates to MaxInt64, so the horizon
+// guard held and the answer was "not on course"; amd64 yields MinInt64, which
+// is below the horizon, so the guard passed it through as a large negative
+// duration and FormatProjection reported "already spent". A budget being
+// consumed so slowly it will outlive the hardware was announced as already
+// gone — on linux/amd64, which is what the agent ships on.
+//
+// This test therefore passes on arm64 for the wrong reason on the old code and
+// fails on amd64, which is what CI runs.
+func TestBurnForecast_NearlyFlatTrendIsNotOnCourse(t *testing.T) {
+	f := newBurnForecast()
+	at := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
+	// A budget creeping up by a billionth of a percent per minute: it will
+	// not be exhausted inside any horizon anyone cares about.
+	consumed := 1.0
+	for i := 0; i < 200; i++ {
+		f.Observe(consumed, at)
+		consumed += 1e-9
+		at = at.Add(time.Minute)
+	}
+
+	soonest, latest, ok := f.Exhausted()
+	if ok {
+		t.Fatalf("a nearly flat trend was reported as on course: soonest=%v latest=%v (%s)",
+			soonest, latest, FormatProjection(soonest, latest))
+	}
+	if soonest < 0 || latest < 0 {
+		t.Errorf("negative durations escaped: soonest=%v latest=%v", soonest, latest)
+	}
+}
+
+// TestBurnForecast_RealBurnStillProjects is the other half: the overflow guard
+// must not swallow a budget that genuinely is on course.
+func TestBurnForecast_RealBurnStillProjects(t *testing.T) {
+	f := newBurnForecast()
+	at := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
+	consumed := 10.0
+	for i := 0; i < 200; i++ {
+		f.Observe(consumed, at)
+		consumed += 0.4 // ~100% within a few hours
+		at = at.Add(time.Minute)
+	}
+
+	soonest, _, ok := f.Exhausted()
+	if !ok {
+		t.Fatal("a budget burning at 0.4%/min projected nothing")
+	}
+	if soonest <= 0 || soonest > forecastHorizon {
+		t.Errorf("soonest = %v, want a positive duration inside the %v horizon", soonest, forecastHorizon)
+	}
+}
