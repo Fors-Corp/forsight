@@ -19,3 +19,12 @@ fixtures/**/next-env.d.ts
 # See eslint.config.js's matching exclusion.
 forsight
 forseer
+
+# .claude/worktrees holds throwaway git worktrees: full repo copies, each with
+# its own node_modules and its own checked-out revision of every file here.
+# Formatting them means formatting the same files several times over, against
+# whatever revision each worktree happens to sit on — so `npm run format:check`
+# reports failures nobody can fix and nothing in CI can see, since worktrees
+# are never committed. eslint.config.js and vitest.config.ts already exclude
+# this path for the same reason; this was the one gate that did not.
+.claude/worktrees
