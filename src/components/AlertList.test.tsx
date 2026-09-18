@@ -46,10 +46,29 @@ describe("AlertList", () => {
     expect(screen.getByText("Error rate above 5%.")).toBeInTheDocument();
   });
 
-  it("renders an EmptyState instead of a list when there are no items", () => {
+  it("keeps the list itself mounted and shows the empty message inside it", () => {
+    // Was: "renders an EmptyState instead of a list when there are no items",
+    // asserting `queryByRole("list")` was absent when empty. That's the bug
+    // (H10) — swapping the live region out for an EmptyState on 0 items means
+    // going 0 -> 1 mounts the live region for the first time with content
+    // already on it, which most AT/browser pairs never announce. The list
+    // must stay mounted at every count, so this now asserts the opposite.
     render(<AlertList label="Active alerts" items={[]} emptyMessage="No active alerts." />);
-    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Active alerts" })).toBeInTheDocument();
     expect(screen.getByText("No active alerts.")).toBeInTheDocument();
+  });
+
+  it("keeps the live region as the same DOM node when the first alert arrives", () => {
+    // Pins H10: the live region has to be the one element that's already
+    // mounted when an alert lands, or AT never picks up the mutation. Node
+    // identity (not just presence) is what actually proves that — a fresh
+    // node with the same role and name would still be silently missed.
+    const { rerender } = render(<AlertList label="Active alerts" items={[]} />);
+    const liveRegion = screen.getByRole("list", { name: "Active alerts" });
+
+    rerender(<AlertList label="Active alerts" items={items} />);
+
+    expect(screen.getByRole("list", { name: "Active alerts" })).toBe(liveRegion);
   });
 
   it("defaults to a polite live region, opt-out via announce", () => {

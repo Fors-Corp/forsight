@@ -57,10 +57,6 @@ const SEVERITY_BADGE: Record<
  */
 export const AlertList = React.forwardRef<HTMLUListElement, AlertListProps>(
   ({ className, label, items, emptyMessage = "No alerts.", announce = true, ...props }, ref) => {
-    if (items.length === 0) {
-      return <EmptyState title={emptyMessage} className={className} />;
-    }
-
     return (
       <ul
         ref={ref}
@@ -70,34 +66,51 @@ export const AlertList = React.forwardRef<HTMLUListElement, AlertListProps>(
         className={cn("flex w-full min-w-0 flex-col divide-y divide-ink-border", className)}
         {...props}
       >
-        {items.map((item) => {
-          const severity = SEVERITY_BADGE[item.severity];
-          return (
-            <li key={item.id} className="flex min-w-0 flex-col gap-1 py-3">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <Badge variant={severity.variant}>{severity.label}</Badge>
-                {item.resolved ? <Badge variant="success">Resolved</Badge> : null}
-                <p
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-sm font-medium font-sans",
-                    item.resolved ? "text-fg-secondary" : "text-fg"
-                  )}
-                >
-                  {item.title}
-                </p>
-                <time className="shrink-0 font-mono text-xs text-fg-muted">{item.time}</time>
-              </div>
-              {(item.description || item.source) && (
-                <div className="flex flex-wrap items-baseline gap-x-2 text-sm font-sans text-fg-secondary">
-                  {item.description}
-                  {item.source ? (
-                    <span className="shrink-0 text-xs text-fg-muted">{item.source}</span>
-                  ) : null}
+        {items.length === 0 ? (
+          // The live region has to be this <ul> — the one element that stays
+          // mounted across the empty/populated transition — so the empty
+          // message is a child of it instead of a replacement for it. A bare
+          // <div> (what EmptyState renders) isn't valid content for a <ul>,
+          // so it's wrapped in an <li>. EmptyState's default `role="status"`
+          // is turned off here: nesting a second live region inside the
+          // <ul>'s own `aria-live` would risk AT double-announcing the same
+          // text, the exact reason EmptyState's own doc comment gives for
+          // `CommandEmpty` using `role="presentation"` too. The <ul>'s
+          // `aria-relevant="additions"` is what announces this text once,
+          // when it's added back in on a populated-to-empty transition.
+          <li>
+            <EmptyState title={emptyMessage} role="presentation" />
+          </li>
+        ) : (
+          items.map((item) => {
+            const severity = SEVERITY_BADGE[item.severity];
+            return (
+              <li key={item.id} className="flex min-w-0 flex-col gap-1 py-3">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <Badge variant={severity.variant}>{severity.label}</Badge>
+                  {item.resolved ? <Badge variant="success">Resolved</Badge> : null}
+                  <p
+                    className={cn(
+                      "min-w-0 flex-1 truncate text-sm font-medium font-sans",
+                      item.resolved ? "text-fg-secondary" : "text-fg"
+                    )}
+                  >
+                    {item.title}
+                  </p>
+                  <time className="shrink-0 font-mono text-xs text-fg-muted">{item.time}</time>
                 </div>
-              )}
-            </li>
-          );
-        })}
+                {(item.description || item.source) && (
+                  <div className="flex flex-wrap items-baseline gap-x-2 text-sm font-sans text-fg-secondary">
+                    {item.description}
+                    {item.source ? (
+                      <span className="shrink-0 text-xs text-fg-muted">{item.source}</span>
+                    ) : null}
+                  </div>
+                )}
+              </li>
+            );
+          })
+        )}
       </ul>
     );
   }
