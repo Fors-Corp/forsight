@@ -12,8 +12,11 @@ on-call operator's authenticated session when they clicked what looked like
 a normal row or link.
 
 A new `isSafeHref` helper (not exported from the package root; internal to
-these three components) parses the href against the current page's origin
-and allows only relative URLs and absolute `http:`/`https:` URLs — a
+these three components) parses the href against the current page's origin —
+or, where there is no document to read one from, against a fixed `https:`
+base, so a server render reaches the same verdict as the browser instead of
+refusing every href and rehydrating a row from `<div>` to `<a>` — and allows
+only relative URLs and absolute `http:`/`https:` URLs — a
 protocol-relative URL (`//host/path`) is allowed too, since it resolves to
 whichever of those two the current page is served over. Anything else
 (`javascript:`, `data:`, `vbscript:`, an unparseable string) falls back to

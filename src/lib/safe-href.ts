@@ -16,10 +16,25 @@
  * scheme). Every other scheme — `javascript:`, `data:`, `vbscript:`, `file:`,
  * and anything else — is rejected, along with any string `new URL` can't
  * parse at all.
+ *
+ * Resolving a relative href needs a base, and the current page's origin is
+ * the honest one — but every component that calls this sits inside the
+ * package's `"use client"` boundary, which Next.js still renders on the
+ * server, where there is no `location` to read. Reading it unguarded turned
+ * the reference into a `ReferenceError` that this `catch` swallowed, so
+ * during SSR *every* href came back unsafe, safe ones included: a `BarList`
+ * row served as a `<div>` and rehydrated into an `<a>`, a breadcrumb and a
+ * nav item served with no `href` at all. The verdict never actually depends
+ * on which origin is used — only the resolved scheme is inspected, and a
+ * protocol-relative href resolves to `http:` or `https:` against either — so
+ * a fixed `https:` base stands in wherever there is no document, and server
+ * and client agree on every input.
  */
+const SSR_BASE = "https://forsight.invalid";
+
 export function isSafeHref(href: string): boolean {
   try {
-    const url = new URL(href, location.origin);
+    const url = new URL(href, typeof location === "undefined" ? SSR_BASE : location.origin);
     return url.protocol === "http:" || url.protocol === "https:";
   } catch {
     return false;
