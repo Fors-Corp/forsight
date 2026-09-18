@@ -62,15 +62,19 @@ func record(t *testing.T, status int, body string) (*Client, *recorded) {
 }
 
 func TestClient_HealthzSendsNoKey(t *testing.T) {
-	c, got := record(t, 200, `{"ok":true}`)
-	if err := c.Healthz(context.Background()); err != nil {
+	c, got := record(t, 200, `{"ok":true,"version":"v1.8.0"}`)
+	version, err := c.Healthz(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got.path != "/healthz" || got.key != "" {
 		t.Errorf("healthz went to %s with key %q; want /healthz and no key", got.path, got.key)
 	}
+	if version != "v1.8.0" {
+		t.Errorf("Healthz version = %q, want v1.8.0", version)
+	}
 	c, _ = record(t, 503, `{"ok":false,"failed":"store"}`)
-	err := c.Healthz(context.Background())
+	_, err = c.Healthz(context.Background())
 	var ue *UpstreamError
 	if !errors.As(err, &ue) || ue.Status != 503 {
 		t.Errorf("unhealthy probe gave %v, want an UpstreamError 503", err)
@@ -346,7 +350,7 @@ func TestClient_TimeoutIsBounded(t *testing.T) {
 	c, _ := record(t, 200, `{"ok":true}`)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := c.Healthz(ctx); err == nil {
+	if _, err := c.Healthz(ctx); err == nil {
 		t.Error("a cancelled context still completed the call")
 	}
 }
