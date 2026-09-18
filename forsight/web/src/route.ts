@@ -12,6 +12,15 @@ export function routeFromHash(hash: string): Route {
   return "overview";
 }
 
+/** The one human-readable label per route — the single place that names a
+ * route, so nothing else hardcodes "Models"/"Overview" independently. Both
+ * the document title and the top bar's route label (App.tsx) read from
+ * this instead of re-deriving it from `route` themselves. */
+export const ROUTE_LABELS: Record<Route, string> = {
+  overview: "Overview",
+  models: "Models",
+};
+
 /**
  * Hash routing with no router library: the dashboard is embedded in the Go
  * binary and served from a single index.html at an arbitrary mount point
@@ -29,6 +38,14 @@ export function useHashRoute(): Route {
     window.addEventListener("hashchange", onChange);
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
+
+  // Keeps history entries and open tabs distinguishable (they were all
+  // just "forsight" before) — set on the initial render same as any other
+  // route change, unlike the heading focus move below, which mount must
+  // skip.
+  useEffect(() => {
+    document.title = `forsight — ${ROUTE_LABELS[route]}`;
+  }, [route]);
 
   return route;
 }
