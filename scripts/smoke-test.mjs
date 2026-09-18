@@ -20,6 +20,8 @@ const distTypes = path.join(root, "dist/index.d.ts");
 const distCts = path.join(root, "dist/index.d.cts");
 const distTheme = path.join(root, "dist/theme.js");
 const distThemeCjs = path.join(root, "dist/theme.cjs");
+const distChart = path.join(root, "dist/chart.js");
+const distChartCjs = path.join(root, "dist/chart.cjs");
 const distStyles = path.join(root, "dist/styles.css");
 const distFonts = path.join(root, "dist/fonts.css");
 const distTailwindCss = path.join(root, "dist/tailwind.css");
@@ -46,6 +48,9 @@ check("dist/index.d.cts exists", () => existsSync(distCts));
 check("dist/theme.js exists (server-safe entry)", () => existsSync(distTheme));
 check("dist/theme.cjs exists", () => existsSync(distThemeCjs));
 check("dist/theme.d.ts exists", () => existsSync(path.join(root, "dist/theme.d.ts")));
+check("dist/chart.js exists (server-safe entry)", () => existsSync(distChart));
+check("dist/chart.cjs exists", () => existsSync(distChartCjs));
+check("dist/chart.d.ts exists", () => existsSync(path.join(root, "dist/chart.d.ts")));
 check("dist/styles.css exists", () => existsSync(distStyles));
 check("dist/fonts.css exists", () => existsSync(distFonts));
 check("dist/tailwind.css exists (Tailwind v4 @theme entry)", () => existsSync(distTailwindCss));
@@ -60,6 +65,7 @@ check("dist/tailwind-preset.d.ts exists", () =>
 const mod = await import(path.resolve(distIndex));
 const cjs = require(path.resolve(distCjs));
 const theme = await import(path.resolve(distTheme));
+const chart = await import(path.resolve(distChart));
 
 check("CJS build exposes the same exports as ESM", () => {
   const esmKeys = Object.keys(mod).sort();
@@ -90,6 +96,22 @@ check("theme entry exports the server-safe utilities", () => {
 });
 check("theme entry is NOT re-exported from the components entry", () => {
   return mod.applyForsightTheme === undefined && mod.FORSIGHT_PALETTES === undefined;
+});
+check('chart entry has NO "use client" directive', () => {
+  const head = readFileSync(distChart, "utf8").slice(0, 200);
+  return !head.includes("use client");
+});
+check("chart entry exports the pure chart maths", () => {
+  return (
+    typeof chart.clamp === "function" &&
+    typeof chart.niceScale === "function" &&
+    typeof chart.linePath === "function" &&
+    typeof chart.formatCompact === "function" &&
+    typeof chart.formatDuration === "function" &&
+    typeof chart.formatPercent === "function" &&
+    chart.SERIES_SLOTS === 8 &&
+    typeof chart.ANNOTATION_TONE_CLASSES === "object"
+  );
 });
 check("forsightAntiFlashScript() returns a non-empty string", () => {
   return (
