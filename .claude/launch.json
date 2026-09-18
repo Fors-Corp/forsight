@@ -4,8 +4,21 @@
     {
       "name": "storybook",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "storybook"],
+      "runtimeArgs": [
+        "run",
+        "storybook"
+      ],
       "port": 6006
+    },
+    {
+      "name": "forsight-agent",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd forsight && exec ./bin/forsight run --addr 127.0.0.1:8080 --disable-docker --store badger --data-dir \"$HOME/.forsight\" --retention 168h --probe mlaas=http://127.0.0.1:8090/healthz --mlaas-url http://127.0.0.1:8090 --mlaas-api-key-file \"$HOME/.mlaas-data/api_key\""
+      ],
+      "port": 8080,
+      "url": "http://127.0.0.1:8080"
     }
   ]
 }
