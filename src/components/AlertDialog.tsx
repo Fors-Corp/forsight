@@ -89,11 +89,15 @@ export function AlertDialogFooter({ className, ...props }: React.HTMLAttributes<
   );
 }
 
+export interface AlertDialogActionProps
+  extends
+    React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action>,
+    Pick<ButtonProps, "variant" | "size"> {}
+
 /** Primary action — the destructive (or otherwise consequential) choice. Defaults to the `danger` variant; pass `variant`/`size` to override. */
 export const AlertDialogAction = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Action>,
-  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action> &
-    Pick<ButtonProps, "variant" | "size">
+  AlertDialogActionProps
 >(({ className, variant = "danger", size, ...props }, ref) => (
   <AlertDialogPrimitive.Action
     ref={ref}
@@ -103,11 +107,15 @@ export const AlertDialogAction = React.forwardRef<
 ));
 AlertDialogAction.displayName = "AlertDialogAction";
 
+export interface AlertDialogCancelProps
+  extends
+    React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Cancel>,
+    Pick<ButtonProps, "variant" | "size"> {}
+
 /** Secondary action that backs out without making the change. */
 export const AlertDialogCancel = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Cancel>,
-  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Cancel> &
-    Pick<ButtonProps, "variant" | "size">
+  AlertDialogCancelProps
 >(({ className, variant = "secondary", size, ...props }, ref) => (
   <AlertDialogPrimitive.Cancel
     ref={ref}
