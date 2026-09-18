@@ -58,8 +58,52 @@ const (
 	// or with a run of identical values in one input, the matrix can be
 	// exactly or near-singular; refusing to invert it is the same "not
 	// ready" answer a zero-variance per-series baseline gives.
+	//
+	// It is not, and never was, the guard against a NEARLY constant input.
+	// An absolute magnitude test cannot be: these five inputs span about
+	// sixteen orders of magnitude, from a disk percentage of order 1 to
+	// net-byte deltas of order 1e10, so a single threshold that is
+	// meaningful for one is meaningless for the others. See
+	// hostOutlierVarFloor.
 	hostOutlierSingularFloor = 1e-12
 )
+
+// hostOutlierVarFloor is the smallest variance each input is credited with,
+// in that input's own units.
+//
+// Without it, a quantised input that barely moves is treated as an input
+// that is genuinely precise. host.disk.percent is the clearest case: it sits
+// still for hours, so its estimated variance is tiny but positive, the pivot
+// clears hostOutlierSingularFloor, invert5 succeeds, and the inverse carries
+// a 1/variance term that explodes. Measured on a host whose disk held at
+// 41.0 through warm-up and then ticked one step to 41.1 — the most ordinary
+// event there is — d2 came out at 58.0, then 29.0, then 19.3 against
+// thresholds of 37.09 critical and 18.21 warning: one CRITICAL and two
+// WARNINGs naming host.disk.percent, per quantisation step, on every host,
+// indefinitely. Those criticals are not merely noise on the dashboard;
+// pagingModel.NoteInsights takes another detector's critical as the
+// self-supervised label for "this log burst was worth paging for", so they
+// poison that model's training data too.
+//
+// Raising only the diagonal keeps the matrix positive semi-definite. The
+// values are the smallest movement in each input that is worth calling a
+// movement: half a percentage point of cpu/memory/disk, a hundred bytes on
+// a net delta. With the 0.25 floor the 0.1-point disk step contributes 0.04
+// to d2 instead of ~68, while a genuine five-point move still contributes
+// 100.
+//
+// Scaling to a correlation matrix instead would do nothing: squared
+// Mahalanobis distance is invariant under diagonal rescaling, so d2 is
+// unchanged. A single trace-proportional ridge would not work either — the
+// trace here is dominated by net-byte variances of order 1e11, and any
+// epsilon large enough to floor disk would deaden cpu and memory entirely.
+var hostOutlierVarFloor = [hostOutlierDims]float64{
+	0.25, // host.cpu.percent — sd >= 0.5 percentage points
+	0.25, // host.memory.percent
+	0.25, // host.disk.percent
+	1e4,  // host.net.bytes_sent delta — sd >= 100 B
+	1e4,  // host.net.bytes_recv delta
+}
 
 // hostOutlierMetrics names the five inputs in vector order — Point.Name for
 // the three percentages, and what each net counter's delta is compared
@@ -168,6 +212,13 @@ func (m *hostOutlierModel) Observe(cpu, mem, disk, sent, recv float64) (d2 float
 	for i := range cov {
 		for j := range cov[i] {
 			cov[i][j] = m.m2[i][j] / divisor
+		}
+	}
+	// Floor each variance in its own units before inverting; see
+	// hostOutlierVarFloor for why an absolute pivot test cannot do this job.
+	for i := 0; i < hostOutlierDims; i++ {
+		if cov[i][i] < hostOutlierVarFloor[i] {
+			cov[i][i] = hostOutlierVarFloor[i]
 		}
 	}
 	inv, ok := invert5(cov)
