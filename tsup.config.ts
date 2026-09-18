@@ -3,14 +3,15 @@ import { forsightTreeshakePlugin } from "./scripts/forsight-treeshake-plugin";
 
 export default defineConfig({
   // `index` is the client component bundle (its source starts with
-  // "use client", which tsup preserves per-entry); `theme` is the
-  // server-safe utilities entry with no directive; `tailwind-preset` is the
-  // Tailwind v3 JS preset (build-time only, never imported by app code).
+  // "use client", which tsup preserves per-entry); `theme` and `chart` are
+  // server-safe utilities entries with no directive; `tailwind-preset` is
+  // the Tailwind v3 JS preset (build-time only, never imported by app code).
   // The library's own v4 build loads it via `@config` rather than as a
   // runtime import.
   entry: {
     index: "src/index.ts",
     theme: "src/theme-entry.ts",
+    chart: "src/chart-entry.ts",
     "tailwind-preset": "src/tailwind-preset.ts",
   },
   // ESM is the primary target; the CJS build is a compatibility shim so
