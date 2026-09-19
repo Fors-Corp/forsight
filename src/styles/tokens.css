@@ -90,7 +90,7 @@
   /* Type families (theme-independent). Override --forsight-font-sans /
      --forsight-font-heading on :root to swap in self-hosted faces — e.g. point
      them at a next/font CSS variable. The names below match what
-     "@marcfs31/forsight/fonts.css" loads from Google Fonts. */
+     "@fors-corp/forsight/fonts.css" loads from Google Fonts. */
   --forsight-font-sans: "Inter", system-ui, -apple-system, sans-serif;
   --forsight-font-heading: "Space Grotesk", var(--forsight-font-sans);
   --forsight-font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;

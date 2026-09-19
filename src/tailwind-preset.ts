@@ -2,7 +2,7 @@ import type { Config } from "tailwindcss";
 import animate from "tailwindcss-animate";
 
 /**
- * Tailwind v3 preset, exported as "@marcfs31/forsight/tailwind-preset".
+ * Tailwind v3 preset, exported as "@fors-corp/forsight/tailwind-preset".
  *
  * Maps the Forsight tokens (CSS custom properties in src/styles/tokens.css) into
  * the `bg-*` / `text-*` / `border-*` / `rounded-*` / `shadow-*` utility
@@ -10,12 +10,12 @@ import animate from "tailwindcss-animate";
  * can use the same class names in its own markup:
  *
  *   // tailwind.config.ts
- *   import forsightPreset from "@marcfs31/forsight/tailwind-preset";
+ *   import forsightPreset from "@fors-corp/forsight/tailwind-preset";
  *   export default { presets: [forsightPreset], content: [...] };
  *
  * This repo's own build loads the same preset via `@config` in
  * src/styles/package.css and globals.css. Tailwind v4 consumers use the
- * "@marcfs31/forsight/tailwind.css" export instead. Keep both in sync.
+ * "@fors-corp/forsight/tailwind.css" export instead. Keep both in sync.
  */
 const forsightPreset: Partial<Config> = {
   theme: {

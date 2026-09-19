@@ -1,7 +1,7 @@
 /**
  * Optional convenience: loads the brand faces (Inter + Space Grotesk) from
  * Google Fonts, matching the family names in the type tokens. Exported as
- * "@marcfs31/forsight/fonts.css".
+ * "@fors-corp/forsight/fonts.css".
  *
  * Quick start / non-framework use:  import both stylesheets.
  * Next.js / production:  skip this, load the faces with `next/font` (or

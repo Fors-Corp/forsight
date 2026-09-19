@@ -147,8 +147,8 @@ which CI runs as the required `go` and `web` checks:
 - A change under `forsight/web/` ships its rebuilt embed on the same PR —
   `make build-web` in `forsight/`, then a clean `git status` under
   `forsight/internal/api/webdist/`. A design-system change does not: the
-  dashboard pins a published `@marcfs31/forsight` and picks a new release up
-  as an ordinary dependency bump (`CLAUDE.md`, "The embed is a snapshot").
+  dashboard pins a published release of the design system and picks a new one
+  up as an ordinary dependency bump (`CLAUDE.md`, "The embed is a snapshot").
   `make build-web` supplies its own `npm.pkg.github.com` credential —
   `NODE_AUTH_TOKEN` if set, otherwise `gh auth token` — into a temporary npm
   user config it removes on exit, so no local `.npmrc` setup is needed.
