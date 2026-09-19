@@ -1,8 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "../test-utils/axe";
+import * as chartLib from "../lib/chart";
 import { ComboChart, type ComboChartSeries } from "./ComboChart";
+
+// Wraps (never replaces) niceScale so every existing assertion below still
+// exercises the real geometry — this only adds a call-count probe for the
+// memoization test at the bottom of the file.
+vi.mock("../lib/chart", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/chart")>();
+  return { ...actual, niceScale: vi.fn(actual.niceScale) };
+});
 
 const labels = ["12:00", "13:00", "14:00"];
 const series: ComboChartSeries[] = [
@@ -112,5 +121,27 @@ describe("ComboChart", () => {
       <ComboChart label="Traffic" description="By hour" labels={labels} series={series} />
     );
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("does not recompute either scale on a re-render with unchanged series/labels", () => {
+    const niceScale = chartLib.niceScale as unknown as ReturnType<typeof vi.fn>;
+    niceScale.mockClear();
+
+    const { rerender } = render(<ComboChart label="Traffic" labels={labels} series={series} />);
+    const callsAfterMount = niceScale.mock.calls.length;
+    // Two domains (bar + line) share one call site.
+    expect(callsAfterMount).toBe(2);
+
+    rerender(<ComboChart label="Traffic" labels={labels} series={series} />);
+    expect(niceScale.mock.calls.length).toBe(callsAfterMount);
+
+    rerender(
+      <ComboChart
+        label="Traffic"
+        labels={labels}
+        series={[{ name: "Requests", type: "bar", values: [9000, 1800, 1400] }]}
+      />
+    );
+    expect(niceScale.mock.calls.length).toBeGreaterThan(callsAfterMount);
   });
 });
