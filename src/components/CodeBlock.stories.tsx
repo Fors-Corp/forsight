@@ -16,7 +16,7 @@ export default meta;
 type Story = StoryObj<typeof CodeBlock>;
 
 export const Command: Story = {
-  render: () => <CodeBlock code="npm install @marcfs31/forsight" />,
+  render: () => <CodeBlock code="npm install @fors-corp/forsight" />,
 };
 
 export const WithLabel: Story = {

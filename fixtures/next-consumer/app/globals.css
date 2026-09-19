@@ -2,4 +2,4 @@
    @theme mapping so token utilities (bg-accent, text-fg, rounded-md, ...)
    are generated for this app's own markup. */
 @import "tailwindcss";
-@import "@marcfs31/forsight/tailwind.css";
+@import "@fors-corp/forsight/tailwind.css";

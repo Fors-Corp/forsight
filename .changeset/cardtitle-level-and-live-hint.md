@@ -1,5 +1,5 @@
 ---
-"@marcfs31/forsight": minor
+"@fors-corp/forsight": minor
 ---
 
 `CardTitle` can now pick its heading level, and `Input`'s hint announces itself once it becomes an error.

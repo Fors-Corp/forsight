@@ -57,7 +57,7 @@ observability platform.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/marcfs31/forsight/main/forsight/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Fors-Corp/forsight/main/forsight/install.sh | sh
 forsight run
 ```
 
@@ -247,7 +247,7 @@ be terminating TLS in front of the agent.
 ## mlaas integration
 
 `forsight` can hand a handful of models to
-[mlaas](https://github.com/marcfs31/mlaas) — Marc's separate ML-as-a-Service
+[mlaas](https://github.com/Fors-Corp/mlaas) — Marc's separate ML-as-a-Service
 — instead of training everything in-binary. The split is deliberate:
 Forseer's detectors (see [`forseer/`](../forseer/)) are stdlib-only, train
 online on the ingest path, and carry no weights, so each one gates on a
@@ -467,9 +467,11 @@ gh release create forsight-v1.0.0 dist/*.tar.gz dist/sha256sums.txt --title "for
 Release" step attaches `dist/sha256sums.txt` alongside the archives (since
 #115), so a release cut through the workflow verifies the same way the
 local path above does. That same workflow also builds `forsight/Dockerfile`
-from the repo root and pushes `ghcr.io/marcfs31/forsight`, tagged with the
+from the repo root and pushes `ghcr.io/fors-corp/forsight`, tagged with the
 release version and as `latest` — the image `deploy/k8s/daemonset.yaml`
-pulls.
+pulls. (No image exists at that path until the repo's `ghcr.io` rename PR
+merges and the next `forsight-vX.Y.Z` tag is cut; until then the last image
+published is `ghcr.io/marcfs31/forsight`.)
 
 ## Scope: what's real vs. what's roadmap
 

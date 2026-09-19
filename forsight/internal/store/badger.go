@@ -11,7 +11,7 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // BadgerStore is a Store implementation backed by a single embedded Badger

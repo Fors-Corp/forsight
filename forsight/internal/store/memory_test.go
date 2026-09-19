@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // TestMemoryStore_Conformance runs the shared Store query-semantics suite
