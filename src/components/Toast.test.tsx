@@ -44,7 +44,11 @@ describe("Toast", () => {
     expect(viewport).toHaveClass("sm:max-w-sm");
   });
 
-  it("close button has adequate touch target size", async () => {
+  it("applies the close button's size utility classes (min-h-9 min-w-9)", async () => {
+    // Class-name assertion only — jsdom has no layout engine. The real
+    // touch-target-size assertion is a Storybook play test (see
+    // Toast.stories.tsx), which runs in a real browser via
+    // test:storybook:ci.
     const { container } = render(<Toaster />);
     enqueue({ title: "Test", description: "Test toast" });
     await waitFor(() => expect(screen.getByText("Test")).toBeInTheDocument());

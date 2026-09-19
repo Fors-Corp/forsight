@@ -30,7 +30,11 @@ describe("RadioGroup", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it("has minimum 24px touch target size", () => {
+  it("applies the size utility classes (h-6 w-6)", () => {
+    // Class-name assertion only — jsdom has no layout engine. The real
+    // touch-target-size assertion is a Storybook play test (see
+    // RadioGroup.stories.tsx), which runs in a real browser via
+    // test:storybook:ci.
     render(
       <RadioGroup defaultValue="hobby" aria-label="Plan">
         <RadioGroupItem value="hobby" aria-label="Hobby" />

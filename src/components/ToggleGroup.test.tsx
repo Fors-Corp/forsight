@@ -79,7 +79,11 @@ describe("ToggleGroup", () => {
     expect(table).toHaveAttribute("aria-checked", "false");
   });
 
-  it("has minimum 24px touch target size at the default (sm) size", () => {
+  it("applies the default (sm) size utility class", () => {
+    // Class-name assertion only — jsdom has no layout engine. The real
+    // touch-target-size assertion is a Storybook play test (see
+    // ToggleGroup.stories.tsx), which runs in a real browser via
+    // test:storybook:ci.
     render(
       <ToggleGroup type="single" defaultValue="table" aria-label="View mode">
         <ToggleGroupItem value="table">Table</ToggleGroupItem>
