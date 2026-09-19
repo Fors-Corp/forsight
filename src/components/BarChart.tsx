@@ -4,10 +4,12 @@ import {
   ANNOTATION_TONE_CLASSES,
   barPath,
   clamp,
+  formatActiveReading,
   formatCompact,
   niceScale,
   project,
   seriesFill,
+  seriesLegendItems,
   type ChartAnnotation,
 } from "../lib/chart";
 import { useChartCursor } from "../lib/chart-hooks";
@@ -33,6 +35,8 @@ export interface BarChartProps extends Omit<React.HTMLAttributes<HTMLDivElement>
   valueFormat?: (value: number) => string;
   /** Reference lines — an SLO threshold (`value`) or a deploy marker (`label`). */
   annotations?: ChartAnnotation[];
+  /** Read for a `null`/missing sample in the cursor readout and data table. Defaults to `"no data"` — override to localize it. */
+  noDataLabel?: string;
 }
 
 const PAD_LEFT = 44;
@@ -71,6 +75,7 @@ export const BarChart = React.forwardRef<HTMLDivElement, BarChartProps>(
       height = 220,
       valueFormat = formatCompact,
       annotations = [],
+      noDataLabel = "no data",
       ...props
     },
     ref
@@ -98,6 +103,7 @@ export const BarChart = React.forwardRef<HTMLDivElement, BarChartProps>(
     };
 
     const active = cursor.active;
+    const legendItems = seriesLegendItems(series);
 
     return (
       <div ref={ref} className={cn("flex w-full min-w-0 flex-col gap-3", className)} {...props}>
@@ -125,7 +131,7 @@ export const BarChart = React.forwardRef<HTMLDivElement, BarChartProps>(
             columns={labels}
             rows={series.map((s) => ({
               header: s.name,
-              cells: s.values.map((v) => (v === null ? "no data" : valueFormat(v))),
+              cells: s.values.map((v) => (v === null ? noDataLabel : valueFormat(v))),
             }))}
           >
             {({ width }) => {
@@ -315,16 +321,10 @@ export const BarChart = React.forwardRef<HTMLDivElement, BarChartProps>(
         </div>
 
         <div role="status" className="sr-only">
-          {active === null
-            ? ""
-            : `${labels[active]}: ${series
-                .map((s) => `${s.name} ${valueFormat(valueAt(s, active))}`)
-                .join(", ")}`}
+          {formatActiveReading(labels, series, active, () => valueFormat, noDataLabel)}
         </div>
 
-        {series.length > 1 ? (
-          <ChartLegend items={series.map((s, seriesIndex) => ({ label: s.name, seriesIndex }))} />
-        ) : null}
+        {legendItems ? <ChartLegend items={legendItems} /> : null}
       </div>
     );
   }

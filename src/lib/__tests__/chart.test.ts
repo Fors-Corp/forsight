@@ -4,6 +4,7 @@ import {
   areaPath,
   barPath,
   clamp,
+  formatActiveReading,
   formatCompact,
   formatDuration,
   formatPercent,
@@ -13,8 +14,10 @@ import {
   project,
   seriesBg,
   seriesFill,
+  seriesLegendItems,
   seriesStroke,
   SERIES_SLOTS,
+  splitAtGaps,
   splitAtProjection,
   type Point,
 } from "../chart";
@@ -32,6 +35,23 @@ describe("series colors", () => {
     expect(seriesFill(SERIES_SLOTS)).toBe("fill-fg-muted");
     expect(seriesStroke(99)).toBe("stroke-fg-muted");
     expect(seriesBg(SERIES_SLOTS)).toBe("bg-fg-muted");
+  });
+});
+
+describe("seriesLegendItems", () => {
+  it("returns null for zero or one series — nothing to key", () => {
+    expect(seriesLegendItems([])).toBeNull();
+    expect(seriesLegendItems([{ name: "us-east" }])).toBeNull();
+  });
+
+  it("maps each series to its label and slot index once there's more than one", () => {
+    expect(
+      seriesLegendItems([{ name: "us-east" }, { name: "eu-west" }, { name: "ap-south" }])
+    ).toEqual([
+      { label: "us-east", seriesIndex: 0 },
+      { label: "eu-west", seriesIndex: 1 },
+      { label: "ap-south", seriesIndex: 2 },
+    ]);
   });
 });
 
@@ -217,6 +237,46 @@ describe("splitAtProjection", () => {
   });
 });
 
+describe("splitAtGaps", () => {
+  const toPoint = (index: number, value: number): Point => [index, value];
+
+  it("returns one run when there are no gaps", () => {
+    expect(splitAtGaps([10, 20, 30], toPoint)).toEqual([
+      [
+        [0, 10],
+        [1, 20],
+        [2, 30],
+      ],
+    ]);
+  });
+
+  it("splits into two runs around a gap in the middle", () => {
+    expect(splitAtGaps([10, null, 30], toPoint)).toEqual([[[0, 10]], [[2, 30]]]);
+  });
+
+  it("starts with no leading run when the first sample is a gap", () => {
+    expect(splitAtGaps([null, 20, 30], toPoint)).toEqual([
+      [
+        [1, 20],
+        [2, 30],
+      ],
+    ]);
+  });
+
+  it("drops a trailing gap without an empty trailing run", () => {
+    expect(splitAtGaps([10, 20, null], toPoint)).toEqual([
+      [
+        [0, 10],
+        [1, 20],
+      ],
+    ]);
+  });
+
+  it("returns no runs for an empty array", () => {
+    expect(splitAtGaps([], toPoint)).toEqual([]);
+  });
+});
+
 describe("formatters", () => {
   it("abbreviates large numbers", () => {
     expect(formatCompact(999)).toBe("999");
@@ -308,5 +368,47 @@ describe("locale-aware number formatting", () => {
     const sep = num(1.1, 1).replace(/1/g, "");
     expect(formatCompact(1_100)).toBe(`1${sep}1k`);
     expect(formatDuration(1_100)).toBe(`1${sep}1s`);
+  });
+});
+
+describe("formatActiveReading", () => {
+  const labels = ["12:00", "13:00"];
+  const series = [
+    { name: "us-east", values: [120, 180] },
+    { name: "eu-west", values: [90, null] },
+  ];
+
+  it("returns an empty string when nothing is active", () => {
+    expect(formatActiveReading(labels, series, null, () => formatCompact)).toBe("");
+  });
+
+  it("names the category, then every series' reading, in order", () => {
+    expect(formatActiveReading(labels, series, 0, () => formatCompact)).toBe(
+      "12:00: us-east 120, eu-west 90"
+    );
+  });
+
+  it("speaks a null or undefined sample as the no-data label instead of formatting it", () => {
+    expect(formatActiveReading(labels, series, 1, () => formatCompact)).toBe(
+      "13:00: us-east 180, eu-west no data"
+    );
+  });
+
+  it("lets the no-data label be overridden", () => {
+    expect(formatActiveReading(labels, series, 1, () => formatCompact, "sem dados")).toBe(
+      "13:00: us-east 180, eu-west sem dados"
+    );
+  });
+
+  it("picks the formatter per series, for a chart mixing two value kinds", () => {
+    const mixed = [
+      { name: "Requests", values: [1200] },
+      { name: "p99 latency", values: [340] },
+    ];
+    const formatFor = (s: (typeof mixed)[number]) =>
+      s.name === "Requests" ? formatCompact : (v: number) => `${v}ms`;
+    expect(formatActiveReading(["now"], mixed, 0, formatFor)).toBe(
+      "now: Requests 1.2k, p99 latency 340ms"
+    );
   });
 });

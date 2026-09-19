@@ -249,11 +249,13 @@ func (s *Syncer) Run(ctx context.Context) {
 	}
 }
 
-// pass is one export-and-feedback cycle: probe, list what mlaas has,
-// export each dataset and upload it when it grew, register and train
-// missing models, then run the two feedback loops. The first error is kept
-// for the page; later ones are logged. Every step that fails is skipped,
-// not fatal, because the next pass retries all of it anyway.
+// pass is one export-and-feedback cycle: probe, list what mlaas has, hand
+// each managed model to syncModel (export, upload when grown, register and
+// train), then run the two feedback loops over what syncModel produced. The
+// first error is kept for the page; later ones are logged. Every step that
+// fails is skipped, not fatal, because the next pass retries all of it
+// anyway. pass owns only the orchestration — firstErr/note, and finish,
+// which writes it to the snapshot.
 func (s *Syncer) pass(ctx context.Context) {
 	var firstErr error
 	note := func(err error) {
@@ -322,114 +324,7 @@ func (s *Syncer) pass(ctx context.Context) {
 
 	exports := map[string][]row{}
 	for _, m := range managed {
-		name, ds := m.name(s.cfg.Prefix), m.dataset(s.cfg.Prefix)
-		rows, err := s.export(ctx, m, loadLogs)
-		if err != nil {
-			s.logger.Warn("mlaas: export", "dataset", ds, "err", err)
-			note(err)
-			continue
-		}
-		enough := m.enough(rows)
-		s.mu.Lock()
-		s.exported[name] = enough
-		s.mu.Unlock()
-		if !enough {
-			continue
-		}
-		exports[name] = rows
-		have, dsKnown := rowsByDataset[ds]
-		needUpload := !dsKnown || have != len(rows)
-		if !needUpload && m.task == taskForecast {
-			// The count alone freezes here: once the export hits
-			// maxForecastRows the row count stops changing forever, but the
-			// window is still sliding — a bucket ages out for every one
-			// that arrives. Re-upload whenever the newest exported bucket
-			// is one mlaas has not seen yet (see uploadedThrough's doc).
-			s.mu.Lock()
-			last := s.uploadedThrough[ds]
-			s.mu.Unlock()
-			needUpload = !rows[len(rows)-1].at.Equal(last)
-		}
-		if needUpload {
-			csvBytes, err := writeCSV(m.header(), rows)
-			if err != nil {
-				note(err)
-				continue
-			}
-			if _, err := s.client.UploadDataset(ctx, ds, csvBytes); err != nil {
-				s.logger.Warn("mlaas: upload dataset", "dataset", logsafe.String(ds), "err", logsafe.Err(err))
-				note(err)
-				continue
-			}
-			s.logger.Info("mlaas: uploaded dataset", "dataset", ds, "rows", len(rows))
-			rowsByDataset[ds] = len(rows)
-			if m.task == taskForecast {
-				s.mu.Lock()
-				s.uploadedThrough[ds] = rows[len(rows)-1].at
-				s.mu.Unlock()
-			}
-		}
-
-		wm, known := byName[name]
-		var health *wireHealth
-		if !known {
-			created, err := s.client.CreateModel(ctx, m.spec(s.cfg.Prefix))
-			switch {
-			case err == nil:
-				s.logger.Info("mlaas: created model", "model", name)
-				wm = created
-			case upstreamStatus(err) == 409:
-				// Registered by an earlier run, or by another agent with
-				// the same prefix; it was just not in the list we read.
-				// Recover the real model rather than a bare
-				// wireModel{Name: name} — in particular its Classes, which
-				// the feedback loop below needs this same pass to filter a
-				// declared level mlaas has never seen out of the batch
-				// instead of sending it and having the whole batch refused.
-				got, err := s.client.GetModel(ctx, name)
-				if err != nil {
-					s.logger.Warn("mlaas: get model", "model", logsafe.String(name), "err", logsafe.Err(err))
-					note(err)
-					continue
-				}
-				wm = got
-			default:
-				s.logger.Warn("mlaas: create model", "model", logsafe.String(name), "err", logsafe.Err(err))
-				note(err)
-				continue
-			}
-			// Re-read: the health answer carries the champion (there may
-			// be one behind a 409) and whether a job is already running.
-			h, err := s.client.GetHealth(ctx, name)
-			if err != nil {
-				s.logger.Warn("mlaas: model health", "model", logsafe.String(name), "err", logsafe.Err(err))
-				note(err)
-				continue
-			}
-			wm.Champion = h.Champion
-			health = &h
-			byName[name] = wm
-		}
-		if wm.Champion == nil {
-			if health == nil {
-				h, err := s.client.GetHealth(ctx, name)
-				if err != nil {
-					s.logger.Warn("mlaas: model health", "model", logsafe.String(name), "err", logsafe.Err(err))
-					note(err)
-					continue
-				}
-				health = &h
-			}
-			if !health.ActiveJob {
-				ref, err := s.client.Train(ctx, name)
-				if err != nil {
-					s.logger.Warn("mlaas: train", "model", logsafe.String(name), "err", logsafe.Err(err))
-					note(err)
-					continue
-				}
-				s.logger.Info("mlaas: queued training", "model", name, "job", ref.JobID)
-			}
-		}
+		s.syncModel(ctx, m, byName, rowsByDataset, exports, loadLogs, note)
 	}
 
 	for _, m := range managed {
@@ -466,6 +361,128 @@ func (s *Syncer) pass(ctx context.Context) {
 	// next poll rather than a snapshot from up to 15s before the pass.
 	s.refresh(ctx, true)
 	finish()
+}
+
+// syncModel is pass's per-model step: export the dataset, upload it when it
+// grew (with a forecast-specific re-upload rule — see uploadedThrough's
+// doc), register the model with mlaas if it is not in byName yet (recovering
+// the real model on a concurrent-registration 409 rather than assuming a
+// bare one), and queue training when there is no champion yet. byName,
+// rowsByDataset and exports are the maps pass built for the whole batch;
+// syncModel reads and updates them in place so later models in the same
+// pass, and pass's own forecast/feedback loops afterward, see the result.
+// Every failure calls note and returns, exactly like pass's own continue-on-
+// error loop did before the split, because the next pass retries all of it
+// anyway.
+func (s *Syncer) syncModel(ctx context.Context, m managedModel, byName map[string]wireModel, rowsByDataset map[string]int, exports map[string][]row, loadLogs func() ([]model.LogEntry, error), note func(error)) {
+	name, ds := m.name(s.cfg.Prefix), m.dataset(s.cfg.Prefix)
+	rows, err := s.export(ctx, m, loadLogs)
+	if err != nil {
+		s.logger.Warn("mlaas: export", "dataset", ds, "err", err)
+		note(err)
+		return
+	}
+	enough := m.enough(rows)
+	s.mu.Lock()
+	s.exported[name] = enough
+	s.mu.Unlock()
+	if !enough {
+		return
+	}
+	exports[name] = rows
+	have, dsKnown := rowsByDataset[ds]
+	needUpload := !dsKnown || have != len(rows)
+	if !needUpload && m.task == taskForecast {
+		// The count alone freezes here: once the export hits
+		// maxForecastRows the row count stops changing forever, but the
+		// window is still sliding — a bucket ages out for every one
+		// that arrives. Re-upload whenever the newest exported bucket
+		// is one mlaas has not seen yet (see uploadedThrough's doc).
+		s.mu.Lock()
+		last := s.uploadedThrough[ds]
+		s.mu.Unlock()
+		needUpload = !rows[len(rows)-1].at.Equal(last)
+	}
+	if needUpload {
+		csvBytes, err := writeCSV(m.header(), rows)
+		if err != nil {
+			note(err)
+			return
+		}
+		if _, err := s.client.UploadDataset(ctx, ds, csvBytes); err != nil {
+			s.logger.Warn("mlaas: upload dataset", "dataset", logsafe.String(ds), "err", logsafe.Err(err))
+			note(err)
+			return
+		}
+		s.logger.Info("mlaas: uploaded dataset", "dataset", ds, "rows", len(rows))
+		rowsByDataset[ds] = len(rows)
+		if m.task == taskForecast {
+			s.mu.Lock()
+			s.uploadedThrough[ds] = rows[len(rows)-1].at
+			s.mu.Unlock()
+		}
+	}
+
+	wm, known := byName[name]
+	var health *wireHealth
+	if !known {
+		created, err := s.client.CreateModel(ctx, m.spec(s.cfg.Prefix))
+		switch {
+		case err == nil:
+			s.logger.Info("mlaas: created model", "model", name)
+			wm = created
+		case upstreamStatus(err) == 409:
+			// Registered by an earlier run, or by another agent with
+			// the same prefix; it was just not in the list we read.
+			// Recover the real model rather than a bare
+			// wireModel{Name: name} — in particular its Classes, which
+			// the feedback loop below needs this same pass to filter a
+			// declared level mlaas has never seen out of the batch
+			// instead of sending it and having the whole batch refused.
+			got, err := s.client.GetModel(ctx, name)
+			if err != nil {
+				s.logger.Warn("mlaas: get model", "model", logsafe.String(name), "err", logsafe.Err(err))
+				note(err)
+				return
+			}
+			wm = got
+		default:
+			s.logger.Warn("mlaas: create model", "model", logsafe.String(name), "err", logsafe.Err(err))
+			note(err)
+			return
+		}
+		// Re-read: the health answer carries the champion (there may
+		// be one behind a 409) and whether a job is already running.
+		h, err := s.client.GetHealth(ctx, name)
+		if err != nil {
+			s.logger.Warn("mlaas: model health", "model", logsafe.String(name), "err", logsafe.Err(err))
+			note(err)
+			return
+		}
+		wm.Champion = h.Champion
+		health = &h
+		byName[name] = wm
+	}
+	if wm.Champion == nil {
+		if health == nil {
+			h, err := s.client.GetHealth(ctx, name)
+			if err != nil {
+				s.logger.Warn("mlaas: model health", "model", logsafe.String(name), "err", logsafe.Err(err))
+				note(err)
+				return
+			}
+			health = &h
+		}
+		if !health.ActiveJob {
+			ref, err := s.client.Train(ctx, name)
+			if err != nil {
+				s.logger.Warn("mlaas: train", "model", logsafe.String(name), "err", logsafe.Err(err))
+				note(err)
+				return
+			}
+			s.logger.Info("mlaas: queued training", "model", name, "job", ref.JobID)
+		}
+	}
 }
 
 // export reads the store and builds a managed model's dataset rows.

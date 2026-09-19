@@ -3,7 +3,9 @@ package forseer
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -402,6 +404,146 @@ func TestDetector_NonFiniteValueDoesNotPoisonTheSeries(t *testing.T) {
 			mean, stddev, ready := d.SeriesBaseline("host.cpu.percent", nil)
 			if !ready || math.IsNaN(mean) || math.IsNaN(stddev) {
 				t.Fatalf("baseline is mean=%v stddev=%v ready=%v", mean, stddev, ready)
+			}
+		})
+	}
+}
+
+// TestDetector_ConcurrentObserveAndRead: production runs Observe from the
+// ingest path (one call per collector tick) while Insights/SeriesCount/
+// SeriesBaseline are read from API handler goroutines at the same time, and
+// no test exercised that shape — every other test in this file drives a
+// Detector from a single goroutine. d.mu is the only thing standing between
+// this and a torn read of series/lastSeen/open, so this test is a check
+// that it is enough on its own; run with -race.
+func TestDetector_ConcurrentObserveAndRead(t *testing.T) {
+	d := NewDetector()
+	const iterations = 200
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			name := "host.cpu.percent"
+			if i%7 == 0 {
+				// Occasionally a different series, to exercise the
+				// eviction/lastSeen bookkeeping alongside the steady one.
+				name = "proc.cpu.percent." + strconv.Itoa(i%5)
+			}
+			d.Observe([]Point{{Name: name, Value: float64(i % 100)}})
+		}
+	}()
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = d.Insights()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_, _ = d.SeriesCount()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_, _, _ = d.SeriesBaseline("host.cpu.percent", nil)
+		}
+	}()
+
+	wg.Wait()
+}
+
+// wobble returns n points of a 10±1 baseline: a real series' worth of
+// jitter, deliberately not a constant, so the series has an honest standard
+// deviation to be far from.
+func wobble(n int) []float64 {
+	pattern := []float64{9, 10, 11, 10}
+	out := make([]float64, n)
+	for i := range out {
+		out[i] = pattern[i%len(pattern)]
+	}
+	return out
+}
+
+func severityOfAnomaly(t *testing.T, d *Detector, metric string) string {
+	t.Helper()
+	for _, ins := range d.Insights() {
+		if ins.Kind == KindAnomaly && ins.Metric == metric {
+			return ins.Severity
+		}
+	}
+	return ""
+}
+
+// TestDetector_SeverityTracksTheSizeOfTheSpike is the in-sample-z
+// regression.
+//
+// observeOneLocked used to fold the arriving point into the Welford
+// statistics and then score it against them. Samuelson's inequality bounds
+// every member of a sample to within (n-1)/sqrt(n) sample standard
+// deviations of that sample's own mean, so the z it computed could not
+// exceed 3.18 at n=12 whatever the value was — a spike to a billion on a
+// baseline of ten scored exactly what a spike to thirteen scored, and both
+// came out "warning". criticalSigma is 5, which n=12 cannot reach at all.
+func TestDetector_SeverityTracksTheSizeOfTheSpike(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		spike float64
+		want  string
+	}{
+		{"a few sigma out is a warning", 13, SeverityWarning},
+		{"orders of magnitude out is a page", 1e9, SeverityCritical},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := NewDetector()
+			fixed := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+			d.now = func() time.Time { return fixed }
+
+			for _, v := range wobble(minSamples - 1) {
+				d.Observe([]Point{{Name: "host.cpu.percent", Value: v}})
+			}
+			d.Observe([]Point{{Name: "host.cpu.percent", Value: tc.spike}})
+
+			if got := severityOfAnomaly(t, d, "host.cpu.percent"); got != tc.want {
+				t.Errorf("a spike to %g on a 10±1 baseline was graded %q, want %q",
+					tc.spike, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDetector_SpikeSeverityDoesNotDependOnHowLongTheSeriesHasRun: the same
+// spike on the same baseline is the same event whether the series has
+// eleven points of history or thirty-nine, and an operator reading the
+// alert has no way to know which.
+//
+// Under in-sample scoring it was not: the Samuelson ceiling is 3.18 at n=12
+// and 6.17 at n=40, so criticalSigma (5) was unreachable below n=29 and
+// reachable above it, and the identical spike arrived as a warning in the
+// morning and a page in the afternoon. seasonalKey makes that worse than a
+// warm-up: every non-process series starts a fresh baseline for each hour
+// of the day, so the sub-29 window is re-entered on 24 keys a day for as
+// long as the agent runs.
+func TestDetector_SpikeSeverityDoesNotDependOnHowLongTheSeriesHasRun(t *testing.T) {
+	for _, history := range []int{minSamples - 1, 39} {
+		t.Run(fmt.Sprintf("%d points of history", history), func(t *testing.T) {
+			d := NewDetector()
+			fixed := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+			d.now = func() time.Time { return fixed }
+
+			for _, v := range wobble(history) {
+				d.Observe([]Point{{Name: "host.memory.percent", Value: v}})
+			}
+			d.Observe([]Point{{Name: "host.memory.percent", Value: 1e9}})
+
+			if got := severityOfAnomaly(t, d, "host.memory.percent"); got != SeverityCritical {
+				t.Errorf("spike graded %q after %d points of history, want %q",
+					got, history, SeverityCritical)
 			}
 		})
 	}

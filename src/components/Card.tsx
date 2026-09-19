@@ -34,22 +34,34 @@ export const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<
 );
 CardHeader.displayName = "CardHeader";
 
+type CardTitleElement = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+
+export interface CardTitleProps extends React.HTMLAttributes<HTMLHeadingElement> {
+  /**
+   * Semantic heading level. Defaults to `h3`, the level that fits a Card
+   * nested a couple of levels below a page's own `h1`/`h2`. Card is used
+   * at every depth of a dashboard though, so a fixed `h3` reliably skips a
+   * level wherever a Card's title is meant to be the top heading on the
+   * page (or one level under it) — pass `as` to pick the level the
+   * surrounding outline actually needs, e.g. `as="h1"`.
+   */
+  as?: CardTitleElement;
+}
+
 /**
- * Card section heading, always rendered as an `<h3>`. Ensure this fits
- * the document heading outline where used; override with `className` or
- * wrap/replace if a different level is needed (e.g., on a page where
- * `CardTitle` is the main `<h1>`).
+ * Card section heading. Renders as `<h3>` by default; pass `as` (matching
+ * `Heading`'s convention) to fit the level `CardTitle` needs in the
+ * document outline where it's used.
  */
-export const CardTitle = React.forwardRef<
-  HTMLHeadingElement,
-  React.HTMLAttributes<HTMLHeadingElement>
->(({ className, ...props }, ref) => (
-  <h3
-    ref={ref}
-    className={cn("font-heading text-lg font-semibold text-fg", className)}
-    {...props}
-  />
-));
+export const CardTitle = React.forwardRef<HTMLHeadingElement, CardTitleProps>(
+  ({ className, as: Comp = "h3", ...props }, ref) => (
+    <Comp
+      ref={ref}
+      className={cn("font-heading text-lg font-semibold text-fg", className)}
+      {...props}
+    />
+  )
+);
 CardTitle.displayName = "CardTitle";
 
 export const CardDescription = React.forwardRef<

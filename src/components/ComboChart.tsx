@@ -3,11 +3,13 @@ import { cn } from "../lib/cn";
 import {
   barPath,
   clamp,
+  formatActiveReading,
   formatCompact,
   linePath,
   niceScale,
   project,
   seriesFill,
+  seriesLegendItems,
   seriesStroke,
   splitAtGaps,
 } from "../lib/chart";
@@ -46,6 +48,8 @@ export interface ComboChartProps extends Omit<React.HTMLAttributes<HTMLDivElemen
   valueFormat?: (value: number) => string;
   /** Formats the right axis (line series), and their tooltip/table values. Defaults to `valueFormat`. */
   secondaryValueFormat?: (value: number) => string;
+  /** Read for a `null`/missing sample in the cursor readout, tooltip and data table. Defaults to `"no data"` — override to localize it. */
+  noDataLabel?: string;
 }
 
 const PAD_LEFT = 44;
@@ -80,6 +84,7 @@ export const ComboChart = React.forwardRef<HTMLDivElement, ComboChartProps>(
       height = 240,
       valueFormat = formatCompact,
       secondaryValueFormat = valueFormat,
+      noDataLabel = "no data",
       ...props
     },
     ref
@@ -117,6 +122,7 @@ export const ComboChart = React.forwardRef<HTMLDivElement, ComboChartProps>(
     };
 
     const active = cursor.active;
+    const legendItems = seriesLegendItems(series);
 
     return (
       <div ref={ref} className={cn("flex w-full min-w-0 flex-col gap-3", className)} {...props}>
@@ -146,7 +152,7 @@ export const ComboChart = React.forwardRef<HTMLDivElement, ComboChartProps>(
             columns={labels}
             rows={series.map((s) => ({
               header: s.name,
-              cells: s.values.map((v) => (v === null ? "no data" : formatFor(s)(v))),
+              cells: s.values.map((v) => (v === null ? noDataLabel : formatFor(s)(v))),
             }))}
           >
             {({ width }) => {
@@ -308,7 +314,7 @@ export const ComboChart = React.forwardRef<HTMLDivElement, ComboChartProps>(
                   seriesIndex,
                   value:
                     s.values[active] === null || s.values[active] === undefined
-                      ? "no data"
+                      ? noDataLabel
                       : formatFor(s)(s.values[active] as number),
                 }))}
               />
@@ -317,19 +323,10 @@ export const ComboChart = React.forwardRef<HTMLDivElement, ComboChartProps>(
         </div>
 
         <div role="status" className="sr-only">
-          {active === null
-            ? ""
-            : `${labels[active]}: ${series
-                .map((s) => {
-                  const value = s.values[active];
-                  return `${s.name} ${value === null || value === undefined ? "no data" : formatFor(s)(value)}`;
-                })
-                .join(", ")}`}
+          {formatActiveReading(labels, series, active, formatFor, noDataLabel)}
         </div>
 
-        {series.length > 1 ? (
-          <ChartLegend items={series.map((s, seriesIndex) => ({ label: s.name, seriesIndex }))} />
-        ) : null}
+        {legendItems ? <ChartLegend items={legendItems} /> : null}
       </div>
     );
   }
