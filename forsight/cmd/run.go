@@ -167,7 +167,7 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 	// The severity model competes against the tailer's substring rule on the
 	// same stream, and is used only while it is winning.
 	eng = eng.WithSeverityFallback(func(message string) string {
-		return string(filelog.FallbackSeverity(message))
+		return string(model.FallbackSeverity(message))
 	})
 	if slo := resolveErrorSLO(opts.errorSLO); slo > 0 {
 		eng.SetErrorSLO(slo)

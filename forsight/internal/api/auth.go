@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"net/http"
 	"strings"
@@ -51,19 +52,26 @@ func isAnonymous(ctx context.Context) bool {
 }
 
 // BearerAuth wraps next so every route except the public paths above
-// requires Authorization: Bearer <token>, compared with
-// ConstantTimeCompare. An empty token disables auth entirely and returns
-// next unchanged. A public path is served either way, but a correct
-// bearer on one still counts: the comparison happens first so /readyz can
-// tell an operator with the token from anything that can reach the port.
+// requires Authorization: Bearer <token>. The header is never compared
+// against the expected value directly: ConstantTimeCompare returns 0
+// immediately when the two slices' lengths differ, so a raw comparison
+// still leaks the token's length through timing — a header a byte too
+// short or too long comes back faster than one of the right length. Both
+// sides are hashed to a fixed 32-byte SHA-256 digest first, and it is the
+// digests that go through ConstantTimeCompare, so every comparison costs
+// the same regardless of what the caller sent. An empty token disables
+// auth entirely and returns next unchanged. A public path is served
+// either way, but a correct bearer on one still counts: the comparison
+// happens first so /readyz can tell an operator with the token from
+// anything that can reach the port.
 func BearerAuth(token string, next http.Handler) http.Handler {
 	if token == "" {
 		return next
 	}
-	want := []byte("Bearer " + token)
+	want := sha256.Sum256([]byte("Bearer " + token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := []byte(r.Header.Get("Authorization"))
-		presented := subtle.ConstantTimeCompare(got, want) == 1
+		got := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+		presented := subtle.ConstantTimeCompare(got[:], want[:]) == 1
 		if isPublicPath(r.Method, r.URL.Path) {
 			if !presented {
 				r = r.WithContext(context.WithValue(r.Context(), anonymousKey, true))
