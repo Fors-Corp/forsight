@@ -1,6 +1,9 @@
 package forseer
 
-import "sort"
+import (
+	"math"
+	"sort"
+)
 
 // p2Estimator is the P² ("piecewise-parabolic") algorithm — Jain & Chlamtac,
 // "The P² Algorithm for Dynamic Calculation of Quantiles and Histograms
@@ -53,6 +56,52 @@ func (e *p2Estimator) value() (float64, bool) {
 func (e *p2Estimator) reset() {
 	p := e.p
 	*e = p2Estimator{p: p, initial: make([]float64, 0, 5)}
+}
+
+// restoreP2Checked rebuilds an estimator from the snapshot shape spans.go
+// already defines (p2EstimatorSnapshot, snapshotP2, restoreP2), reporting
+// false for any state this algorithm could not have produced — including one
+// tracking a different quantile than the caller expects.
+//
+// The check is not defensive politeness. A snapshot is a file on disk that
+// an operator can edit and a truncated write can corrupt, and the P² update
+// divides by differences between marker positions: positions that are equal
+// or out of order produce ±Inf and then NaN heights. A NaN threshold
+// compares false against every z forever, so the series would never alert
+// again — silently, with no error and nothing on the card to read. Rejecting
+// the state costs that series its learned calibration and it re-earns it;
+// accepting it costs that series every future alert.
+func restoreP2Checked(s p2EstimatorSnapshot, wantP float64) (*p2Estimator, bool) {
+	if s.P != wantP || s.N < 0 || len(s.Initial) > 5 {
+		return nil, false
+	}
+	for _, v := range s.Initial {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, false
+		}
+	}
+	if s.N < 5 {
+		// Still buffering the first five observations: the markers are not
+		// in use yet, so the buffer is the whole state.
+		if len(s.Initial) != s.N {
+			return nil, false
+		}
+		return restoreP2(s), true
+	}
+	if len(s.Initial) != 5 || s.Pos[0] != 1 || s.Pos[4] != s.N {
+		return nil, false
+	}
+	for i := 0; i < 5; i++ {
+		if math.IsNaN(s.Height[i]) || math.IsInf(s.Height[i], 0) ||
+			math.IsNaN(s.Desired[i]) || math.IsInf(s.Desired[i], 0) ||
+			math.IsNaN(s.Incr[i]) || math.IsInf(s.Incr[i], 0) {
+			return nil, false
+		}
+		if i > 0 && (s.Pos[i] <= s.Pos[i-1] || s.Height[i] < s.Height[i-1]) {
+			return nil, false
+		}
+	}
+	return restoreP2(s), true
 }
 
 // observe feeds one value into the estimator.
