@@ -6,7 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"encoding/json"
+	"errors"
+	"github.com/marcfs31/forsight/forsight/internal/collector"
 	"github.com/marcfs31/forsight/forsight/internal/store"
+	"strings"
 )
 
 func TestBearerAuth_NoTokenLeavesRoutesOpen(t *testing.T) {
@@ -154,5 +158,100 @@ func assertUnauthorized(t *testing.T, rec *httptest.ResponseRecorder) {
 	}
 	if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
 		t.Errorf("WWW-Authenticate = %q, want Bearer", got)
+	}
+}
+
+// readyzInternalsServer is a server whose /readyz has something to leak:
+// a store whose ping error names a path, and a registry with a collector
+// in it. The status itself is meant to be public; these two fields are not.
+func readyzInternalsServer(t *testing.T) http.Handler {
+	t.Helper()
+	failing := pingFailingStore{
+		Store: store.NewMemoryStore(time.Hour),
+		err:   errors.New("badger: /var/lib/forsight/data: disk full"),
+	}
+	registry := collector.NewRegistry(failing, time.Hour, nil, fakeCollector{name: "docker"})
+	return NewServer(failing, nil, nil, nil).WithRegistry(registry).Handler()
+}
+
+func readyzRaw(t *testing.T, h http.Handler, authorization string) (int, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decoding /readyz body %q: %v", rec.Body.String(), err)
+	}
+	return rec.Code, raw
+}
+
+// TestBearerAuth_ReadyzHidesInternalsFromAnAnonymousCaller: the readiness
+// probe stays reachable without a token — that is the point of the
+// exemption — but on a server that HAS a token, a caller without it gets
+// the status and nothing else. Before this, the same request returned the
+// store's on-disk path in storeError and the whole collector inventory.
+func TestBearerAuth_ReadyzHidesInternalsFromAnAnonymousCaller(t *testing.T) {
+	code, raw := readyzRaw(t, BearerAuth("secret", readyzInternalsServer(t)), "")
+
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503: the status code itself must stay public", code)
+	}
+	if raw["status"] != "unavailable" {
+		t.Errorf("status = %v, want unavailable: the readiness answer must stay public", raw["status"])
+	}
+	if v, ok := raw["storeError"]; ok {
+		t.Errorf("storeError leaked to an anonymous caller: %v", v)
+	}
+	if v, ok := raw["collectors"]; ok {
+		t.Errorf("collector inventory leaked to an anonymous caller: %v", v)
+	}
+}
+
+// TestBearerAuth_ReadyzShowsInternalsToTheBearer: presenting the token on
+// the public path is still worth something.
+func TestBearerAuth_ReadyzShowsInternalsToTheBearer(t *testing.T) {
+	code, raw := readyzRaw(t, BearerAuth("secret", readyzInternalsServer(t)), "Bearer secret")
+
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", code)
+	}
+	if se, _ := raw["storeError"].(string); !strings.Contains(se, "/var/lib/forsight") {
+		t.Errorf("storeError = %q, want the store's own error text for an authenticated operator", se)
+	}
+	cs, _ := raw["collectors"].([]any)
+	if len(cs) != 1 {
+		t.Errorf("collectors = %v, want the one registered collector", raw["collectors"])
+	}
+}
+
+// TestBearerAuth_ReadyzWrongBearerIsPublicButBlind: a bad token on a public
+// path must not turn a health probe into a 401 — but it earns nothing.
+func TestBearerAuth_ReadyzWrongBearerIsPublicButBlind(t *testing.T) {
+	code, raw := readyzRaw(t, BearerAuth("secret", readyzInternalsServer(t)), "Bearer wrong")
+
+	if code == http.StatusUnauthorized {
+		t.Fatal("a public path answered 401 to a wrong bearer; the probe must still be served")
+	}
+	if _, ok := raw["collectors"]; ok {
+		t.Error("a wrong bearer was treated as authenticated")
+	}
+}
+
+// TestBearerAuth_ReadyzShowsInternalsWhenAuthIsOff pins the default: no
+// token configured means no distinction between callers, so the operator
+// who runs without auth still gets the full probe body. Hiding is something
+// only the hardened middleware asks for.
+func TestBearerAuth_ReadyzShowsInternalsWhenAuthIsOff(t *testing.T) {
+	_, raw := readyzRaw(t, BearerAuth("", readyzInternalsServer(t)), "")
+
+	if _, ok := raw["storeError"]; !ok {
+		t.Error("storeError hidden with auth disabled")
+	}
+	if _, ok := raw["collectors"]; !ok {
+		t.Error("collectors hidden with auth disabled")
 	}
 }

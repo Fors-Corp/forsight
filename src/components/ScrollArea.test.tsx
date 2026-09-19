@@ -40,4 +40,28 @@ describe("ScrollArea", () => {
     );
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  // `orientation` decides which of our own <ScrollBar> wrappers get mounted
+  // (vertical only, horizontal only, or both) — that's real branching in
+  // this component regardless of whether Radix's Scrollbar primitive ends up
+  // drawing anything under jsdom (see the note above), so what's verifiable
+  // and worth guarding here is that every combination still renders its
+  // content correctly rather than throwing or silently dropping it.
+  it("still renders its content configured for a horizontal-only scrollbar", () => {
+    render(
+      <ScrollArea orientation="horizontal">
+        <p>Wide table</p>
+      </ScrollArea>
+    );
+    expect(screen.getByText("Wide table")).toBeInTheDocument();
+  });
+
+  it("still renders its content configured for both scrollbars", () => {
+    render(
+      <ScrollArea orientation="both">
+        <p>Both axes</p>
+      </ScrollArea>
+    );
+    expect(screen.getByText("Both axes")).toBeInTheDocument();
+  });
 });
