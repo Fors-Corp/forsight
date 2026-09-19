@@ -1,5 +1,58 @@
 # @marcfs31/fors-observability-design-system
 
+## 4.3.0
+
+### Minor Changes
+
+- 1b1a70b: `Tabs.Root`/`List`/`Trigger`/`Panel` and `SidebarHeader`/`SidebarContent`/
+  `SidebarFooter`/`SidebarNav`/`AppShell`/`AppShellMain` are now built with
+  `React.forwardRef`, matching every other compound component in the library
+  (`Card`, `Dialog`, `AlertDialog`, `Command`, `Table`, `Drawer`,
+  `DropdownMenu`, `Breadcrumb`, `RadioGroup`, `ToggleGroup`) — they were the
+  last two that weren't. A consumer passing `ref={ref}` to any of them
+  previously failed to typecheck (`ref` was not part of the declared prop
+  type), so a TypeScript app could not measure a tab list, scroll a panel into
+  view, or focus the sidebar's `<nav>` from outside. Each part also now sets
+  `displayName`, so React DevTools and test-runner error messages name it
+  instead of showing `Anonymous`.
+
+  New named, exported prop types, closing gaps where a type existed in source
+  but wasn't part of the public API (or, for `DialogContent`/`AlertDialogAction`/
+  `AlertDialogCancel`/`DrawerContent`, existed only as an inline, unnamed
+  intersection): `TabsRootProps`, `TabsTriggerProps`, `TabsPanelProps`,
+  `TableHeadProps`, `SliderProps`, `DialogContentProps`,
+  `AlertDialogActionProps`, `AlertDialogCancelProps`, `DrawerContentProps`. A
+  new test (`src/__tests__/prop-exports.test.ts`) asserts every exported
+  `*Props` type defined in `src/components/*.tsx` is re-exported from
+  `src/index.ts` unless explicitly allow-listed, so a future gap like this is
+  a decision instead of an oversight.
+
+### Patch Changes
+
+- 4496b43: `BarList`, `BreadcrumbLink` and `SidebarNavItem` now refuse to render an
+  unsafe `href` as a clickable link. All three accept an `href` documented as
+  a drill-down or nav destination — data that in practice traces back to a
+  route, service name, tag or error code echoed from request input, so a
+  consumer that renders one of these components with attacker-influenced data
+  was one `javascript:` or `data:text/html` URI away from running script in an
+  on-call operator's authenticated session when they clicked what looked like
+  a normal row or link.
+
+  A new `isSafeHref` helper (not exported from the package root; internal to
+  these three components) parses the href against the current page's origin —
+  or, where there is no document to read one from, against a fixed `https:`
+  base, so a server render reaches the same verdict as the browser instead of
+  refusing every href and rehydrating a row from `<div>` to `<a>` — and allows
+  only relative URLs and absolute `http:`/`https:` URLs — a
+  protocol-relative URL (`//host/path`) is allowed too, since it resolves to
+  whichever of those two the current page is served over. Anything else
+  (`javascript:`, `data:`, `vbscript:`, an unparseable string) falls back to
+  the same non-link rendering each component already uses when no `href` is
+  given at all: `BarList` renders its existing plain `<div>` row instead of an
+  `<a>`, and `BreadcrumbLink`/`SidebarNavItem` render an `<a>` with no `href`
+  attribute (which, per the HTML spec, has no `link` role and isn't focusable
+  — not a link, the same as `BarList`'s fallback).
+
 ## 4.2.0
 
 ### Minor Changes
