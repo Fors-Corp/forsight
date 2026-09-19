@@ -7,7 +7,7 @@
 # internal/api/dashboard.go's doc comment on why webdist/ is checked in).
 
 VERSION ?= dev
-LDFLAGS := -X github.com/marcfs31/forsight/forsight/internal/version.Version=$(VERSION)
+LDFLAGS := -X github.com/Fors-Corp/forsight/forsight/internal/version.Version=$(VERSION)
 
 .PHONY: help build build-web build-go release dev demo test test-install lint vet clean
 
@@ -71,9 +71,9 @@ dev:
 demo:
 	go run . demo
 
-## Run the Go test suite.
+## Run the Go test suite with the race detector.
 test:
-	go test ./...
+	go test -race ./...
 
 # install.sh's own tests (checksum verification, the systemd unit and its
 # never-overwritten env file) — bats-core, not go test, since install.sh is

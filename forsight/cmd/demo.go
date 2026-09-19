@@ -15,11 +15,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/marcfs31/forsight/forseer"
-	"github.com/marcfs31/forsight/forsight/internal/api"
-	"github.com/marcfs31/forsight/forsight/internal/collector/filelog"
-	"github.com/marcfs31/forsight/forsight/internal/model"
-	"github.com/marcfs31/forsight/forsight/internal/store"
+	"github.com/Fors-Corp/forsight/forseer"
+	"github.com/Fors-Corp/forsight/forsight/internal/api"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/store"
 )
 
 // demoHost is the label every synthetic point carries, so nothing this
@@ -95,7 +94,7 @@ func runDemo(ctx context.Context, opts *demoOptions, logger *slog.Logger) error 
 
 	retention := demoRetention(opts.backfill, opts.retention)
 	eng := forseer.NewEngine().WithSeverityFallback(func(message string) string {
-		return string(filelog.FallbackSeverity(message))
+		return string(model.FallbackSeverity(message))
 	})
 	st := observingStore{Store: store.NewMemoryStore(retention), eng: eng}
 
@@ -395,7 +394,7 @@ func mergeLabels(base map[string]string, k, v string) map[string]string {
 
 // demoLogLine is one rotating log template. declared is false for the one
 // template meant to exercise the severity-fallback path (see
-// filelog.FallbackSeverity) rather than train the severity model on it.
+// model.FallbackSeverity) rather than train the severity model on it.
 type demoLogLine struct {
 	message  string
 	severity model.LogSeverity
@@ -423,7 +422,7 @@ func (g *demoGenerator) logLines(ts time.Time, index int) []model.LogEntry {
 		if tmpl.declared {
 			entry.Severity = tmpl.severity
 		} else {
-			entry.Severity = filelog.FallbackSeverity(tmpl.message)
+			entry.Severity = model.FallbackSeverity(tmpl.message)
 			entry.SeverityInferred = true
 		}
 		out = append(out, entry)

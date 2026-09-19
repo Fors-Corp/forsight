@@ -77,3 +77,16 @@ export const DeployFeed: Story = {
 export const Empty: Story = {
   args: { label: "checkout-api production logs", entries: [] },
 };
+
+const manyEntries: LogEntry[] = Array.from({ length: 2000 }, (_, i) => ({
+  id: String(i),
+  timestamp: `14:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}`,
+  level: (["debug", "info", "info", "warn", "error"] as const)[i % 5],
+  message: `request ${2000 - i} — ${i % 7 === 0 ? "slow query on replica-3" : "handled"}`,
+  source: i % 3 === 0 ? "checkout-7f9" : undefined,
+}));
+
+export const LargeVolume: Story = {
+  name: "2000 entries (windowed)",
+  args: { label: "checkout-api production logs", entries: manyEntries },
+};

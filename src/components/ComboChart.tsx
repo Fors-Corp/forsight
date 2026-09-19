@@ -3,13 +3,16 @@ import { cn } from "../lib/cn";
 import {
   barPath,
   clamp,
+  formatActiveReading,
   formatCompact,
   linePath,
   niceScale,
   project,
   seriesFill,
+  seriesLegendItems,
   seriesStroke,
   splitAtGaps,
+  type Point,
 } from "../lib/chart";
 import { useChartCursor } from "../lib/chart-hooks";
 import { ChartFrame } from "./ChartFrame";
@@ -46,6 +49,8 @@ export interface ComboChartProps extends Omit<React.HTMLAttributes<HTMLDivElemen
   valueFormat?: (value: number) => string;
   /** Formats the right axis (line series), and their tooltip/table values. Defaults to `valueFormat`. */
   secondaryValueFormat?: (value: number) => string;
+  /** Read for a `null`/missing sample in the cursor readout, tooltip and data table. Defaults to `"no data"` — override to localize it. */
+  noDataLabel?: string;
 }
 
 const PAD_LEFT = 44;
@@ -69,269 +74,291 @@ const MARK_GAP = 2;
  * The plot has the same cursor as the other charts — hover, or focus it and
  * use Arrow/Home/End (Escape clears) — and always renders its data table.
  */
-export const ComboChart = React.forwardRef<HTMLDivElement, ComboChartProps>(
-  (
-    {
-      className,
-      label,
-      description,
-      labels,
-      series,
-      height = 240,
-      valueFormat = formatCompact,
-      secondaryValueFormat = valueFormat,
-      ...props
-    },
-    ref
-  ) => {
-    const cursor = useChartCursor(labels.length);
-    const plotRef = React.useRef<HTMLDivElement>(null);
+export const ComboChart = React.memo(
+  React.forwardRef<HTMLDivElement, ComboChartProps>(
+    (
+      {
+        className,
+        label,
+        description,
+        labels,
+        series,
+        height = 240,
+        valueFormat = formatCompact,
+        secondaryValueFormat = valueFormat,
+        noDataLabel = "no data",
+        ...props
+      },
+      ref
+    ) => {
+      const cursor = useChartCursor(labels.length);
+      const plotRef = React.useRef<HTMLDivElement>(null);
 
-    const barSeries = series.filter((s): s is ComboChartBarSeries => s.type === "bar");
-    const lineSeries = series.filter((s): s is ComboChartLineSeries => s.type === "line");
-    const formatFor = (s: ComboChartSeries) =>
-      s.type === "bar" ? valueFormat : secondaryValueFormat;
+      // Keyed on `series` alone — the cursor re-renders this component on
+      // every hover/key event without the series lists or either domain
+      // actually changing.
+      const { barSeries, lineSeries, barScale, lineScale } = React.useMemo(() => {
+        const bars = series.filter((s): s is ComboChartBarSeries => s.type === "bar");
+        const lines = series.filter((s): s is ComboChartLineSeries => s.type === "line");
 
-    const barHighest = Math.max(0, ...barSeries.flatMap((s) => s.values.map((v) => v ?? 0)));
-    const barScale = niceScale(0, barHighest);
+        const barHighest = Math.max(0, ...bars.flatMap((s) => s.values.map((v) => v ?? 0)));
 
-    let lineMin = Infinity;
-    let lineMax = -Infinity;
-    for (const s of lineSeries) {
-      for (const value of s.values) {
-        if (value === null) continue;
-        if (value < lineMin) lineMin = value;
-        if (value > lineMax) lineMax = value;
-      }
-    }
-    const lineScale = niceScale(lineMin, lineMax);
+        let lineMin = Infinity;
+        let lineMax = -Infinity;
+        for (const s of lines) {
+          for (const value of s.values) {
+            if (value === null) continue;
+            if (value < lineMin) lineMin = value;
+            if (value > lineMax) lineMax = value;
+          }
+        }
 
-    const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-      const box = plotRef.current?.getBoundingClientRect();
-      if (!box || labels.length === 0) return;
-      const plotWidth = Math.max(1, box.width - PAD_LEFT - PAD_RIGHT);
-      const band = plotWidth / labels.length;
-      const index = Math.floor((event.clientX - box.left - PAD_LEFT) / band);
-      if (!Number.isFinite(index)) return;
-      cursor.setActive(clamp(index, 0, labels.length - 1));
-    };
+        return {
+          barSeries: bars,
+          lineSeries: lines,
+          barScale: niceScale(0, barHighest),
+          lineScale: niceScale(lineMin, lineMax),
+        };
+      }, [series]);
 
-    const active = cursor.active;
+      const formatFor = (s: ComboChartSeries) =>
+        s.type === "bar" ? valueFormat : secondaryValueFormat;
 
-    return (
-      <div ref={ref} className={cn("flex w-full min-w-0 flex-col gap-3", className)} {...props}>
-        <div
-          ref={plotRef}
-          tabIndex={0}
-          onKeyDown={cursor.onKeyDown}
-          onBlur={cursor.onBlur}
-          onPointerMove={handlePointerMove}
-          onPointerLeave={() => cursor.setActive(null)}
-          className="relative rounded-md focus-visible:outline-none focus-visible:shadow-focus-ring"
-        >
-          <ChartFrame
-            label={label}
-            description={[
-              description,
-              barSeries.length > 0 && lineSeries.length > 0
-                ? `${barSeries.map((s) => s.name).join(", ")} use the left axis; ${lineSeries
-                    .map((s) => s.name)
-                    .join(", ")} use the right axis.`
-                : null,
-              "Use arrow keys to read individual points.",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            height={height}
-            columns={labels}
-            rows={series.map((s) => ({
-              header: s.name,
-              cells: s.values.map((v) => (v === null ? "no data" : formatFor(s)(v))),
-            }))}
+      // Which points are gapped vs. connected, split into runs in
+      // value-space (x = index, y = value) — independent of plot width, so
+      // it doesn't need to be redone on the width-dependent draw below.
+      const projectedLineSeries = React.useMemo(
+        () => lineSeries.map((s) => splitAtGaps(s.values, (index, value): Point => [index, value])),
+        [lineSeries]
+      );
+
+      const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+        const box = plotRef.current?.getBoundingClientRect();
+        if (!box || labels.length === 0) return;
+        const plotWidth = Math.max(1, box.width - PAD_LEFT - PAD_RIGHT);
+        const band = plotWidth / labels.length;
+        const index = Math.floor((event.clientX - box.left - PAD_LEFT) / band);
+        if (!Number.isFinite(index)) return;
+        cursor.setActive(clamp(index, 0, labels.length - 1));
+      };
+
+      const active = cursor.active;
+      const legendItems = React.useMemo(() => seriesLegendItems(series), [series]);
+
+      return (
+        <div ref={ref} className={cn("flex w-full min-w-0 flex-col gap-3", className)} {...props}>
+          <div
+            ref={plotRef}
+            tabIndex={0}
+            onKeyDown={cursor.onKeyDown}
+            onBlur={cursor.onBlur}
+            onPointerMove={handlePointerMove}
+            onPointerLeave={() => cursor.setActive(null)}
+            className="relative rounded-md focus-visible:outline-none focus-visible:shadow-focus-ring"
           >
-            {({ width }) => {
-              const plotWidth = Math.max(1, width - PAD_LEFT - PAD_RIGHT);
-              const plotHeight = Math.max(1, height - PAD_TOP - PAD_BOTTOM);
-              const baselineY = PAD_TOP + plotHeight;
-              const band = plotWidth / Math.max(1, labels.length);
-              const groupWidth = band * 0.6;
-              const barWidth =
-                barSeries.length > 0
-                  ? Math.max(1, (groupWidth - MARK_GAP * (barSeries.length - 1)) / barSeries.length)
-                  : 0;
-              const bandStart = (index: number) =>
-                PAD_LEFT + index * band + (band - groupWidth) / 2;
-              const centerOf = (index: number) => PAD_LEFT + index * band + band / 2;
-              const barLengthOf = (value: number) =>
-                project(value, barScale.min, barScale.max, plotHeight);
-              const lineYAt = (value: number) =>
-                baselineY - project(value, lineScale.min, lineScale.max, plotHeight);
+            <ChartFrame
+              label={label}
+              description={[
+                description,
+                barSeries.length > 0 && lineSeries.length > 0
+                  ? `${barSeries.map((s) => s.name).join(", ")} use the left axis; ${lineSeries
+                      .map((s) => s.name)
+                      .join(", ")} use the right axis.`
+                  : null,
+                "Use arrow keys to read individual points.",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              height={height}
+              columns={labels}
+              rows={series.map((s) => ({
+                header: s.name,
+                cells: s.values.map((v) => (v === null ? noDataLabel : formatFor(s)(v))),
+              }))}
+            >
+              {({ width }) => {
+                const plotWidth = Math.max(1, width - PAD_LEFT - PAD_RIGHT);
+                const plotHeight = Math.max(1, height - PAD_TOP - PAD_BOTTOM);
+                const baselineY = PAD_TOP + plotHeight;
+                const band = plotWidth / Math.max(1, labels.length);
+                const groupWidth = band * 0.6;
+                const barWidth =
+                  barSeries.length > 0
+                    ? Math.max(
+                        1,
+                        (groupWidth - MARK_GAP * (barSeries.length - 1)) / barSeries.length
+                      )
+                    : 0;
+                const bandStart = (index: number) =>
+                  PAD_LEFT + index * band + (band - groupWidth) / 2;
+                const centerOf = (index: number) => PAD_LEFT + index * band + band / 2;
+                const barLengthOf = (value: number) =>
+                  project(value, barScale.min, barScale.max, plotHeight);
+                const lineYAt = (value: number) =>
+                  baselineY - project(value, lineScale.min, lineScale.max, plotHeight);
 
-              return (
-                <>
-                  {barSeries.length > 0 &&
-                    barScale.ticks.map((tick) => {
-                      const y = baselineY - barLengthOf(tick);
-                      return (
-                        <g key={`left-${tick}`}>
-                          <line
-                            x1={PAD_LEFT}
-                            x2={PAD_LEFT + plotWidth}
-                            y1={y}
-                            y2={y}
-                            className="stroke-ink-border-subtle"
-                            strokeWidth={1}
-                          />
-                          <text
-                            x={PAD_LEFT - 8}
-                            y={y}
-                            textAnchor="end"
-                            dominantBaseline="middle"
-                            className="fill-fg-muted text-xs font-sans"
-                          >
-                            {valueFormat(tick)}
-                          </text>
-                        </g>
-                      );
-                    })}
+                return (
+                  <>
+                    {barSeries.length > 0 &&
+                      barScale.ticks.map((tick) => {
+                        const y = baselineY - barLengthOf(tick);
+                        return (
+                          <g key={`left-${tick}`}>
+                            <line
+                              x1={PAD_LEFT}
+                              x2={PAD_LEFT + plotWidth}
+                              y1={y}
+                              y2={y}
+                              className="stroke-ink-border-subtle"
+                              strokeWidth={1}
+                            />
+                            <text
+                              x={PAD_LEFT - 8}
+                              y={y}
+                              textAnchor="end"
+                              dominantBaseline="middle"
+                              className="fill-fg-muted text-xs font-sans"
+                            >
+                              {valueFormat(tick)}
+                            </text>
+                          </g>
+                        );
+                      })}
 
-                  {lineSeries.length > 0 &&
-                    lineScale.ticks.map((tick) => (
+                    {lineSeries.length > 0 &&
+                      lineScale.ticks.map((tick) => (
+                        <text
+                          key={`right-${tick}`}
+                          x={PAD_LEFT + plotWidth + 8}
+                          y={lineYAt(tick)}
+                          textAnchor="start"
+                          dominantBaseline="middle"
+                          className="fill-fg-muted text-xs font-sans"
+                        >
+                          {secondaryValueFormat(tick)}
+                        </text>
+                      ))}
+
+                    {labels.map((categoryLabel, index) => (
+                      <g
+                        key={categoryLabel}
+                        opacity={active === null || active === index ? 1 : 0.45}
+                      >
+                        {barSeries.map((s, i) => {
+                          const value = s.values[index] ?? 0;
+                          const barLength = barLengthOf(value);
+                          const seriesIndex = series.indexOf(s);
+                          return (
+                            <path
+                              key={s.name}
+                              d={barPath(
+                                bandStart(index) + i * (barWidth + MARK_GAP),
+                                baselineY - barLength,
+                                barWidth,
+                                barLength
+                              )}
+                              className={seriesFill(seriesIndex)}
+                            />
+                          );
+                        })}
+                      </g>
+                    ))}
+
+                    <line
+                      x1={PAD_LEFT}
+                      x2={PAD_LEFT + plotWidth}
+                      y1={baselineY}
+                      y2={baselineY}
+                      className="stroke-ink-border"
+                      strokeWidth={1}
+                    />
+
+                    {pickLabelIndices(labels.length, plotWidth).map((index) => (
                       <text
-                        key={`right-${tick}`}
-                        x={PAD_LEFT + plotWidth + 8}
-                        y={lineYAt(tick)}
-                        textAnchor="start"
-                        dominantBaseline="middle"
+                        key={labels[index]}
+                        x={centerOf(index)}
+                        y={height - 6}
+                        textAnchor="middle"
                         className="fill-fg-muted text-xs font-sans"
                       >
-                        {secondaryValueFormat(tick)}
+                        {labels[index]}
                       </text>
                     ))}
 
-                  {labels.map((categoryLabel, index) => (
-                    <g key={categoryLabel} opacity={active === null || active === index ? 1 : 0.45}>
-                      {barSeries.map((s, i) => {
-                        const value = s.values[index] ?? 0;
-                        const barLength = barLengthOf(value);
-                        const seriesIndex = series.indexOf(s);
-                        return (
-                          <path
-                            key={s.name}
-                            d={barPath(
-                              bandStart(index) + i * (barWidth + MARK_GAP),
-                              baselineY - barLength,
-                              barWidth,
-                              barLength
-                            )}
-                            className={seriesFill(seriesIndex)}
-                          />
-                        );
-                      })}
-                    </g>
-                  ))}
+                    {lineSeries.map((s, i) => {
+                      const seriesIndex = series.indexOf(s);
+                      // The gap-splitting itself already happened, keyed on
+                      // `lineSeries` alone, above — this only projects the
+                      // cached value-space points into pixel space.
+                      const segments = projectedLineSeries[i].map((segment) =>
+                        segment.map(([index, value]): Point => [centerOf(index), lineYAt(value)])
+                      );
+                      return (
+                        <g key={s.name}>
+                          {segments.map((segment, i) => (
+                            <path
+                              key={i}
+                              d={linePath(segment)}
+                              fill="none"
+                              strokeWidth={2}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className={seriesStroke(seriesIndex)}
+                            />
+                          ))}
+                          {active !== null && s.values[active] !== null && (
+                            <circle
+                              cx={centerOf(active)}
+                              cy={lineYAt(s.values[active] as number)}
+                              r={4}
+                              strokeWidth={2}
+                              className={cn(seriesFill(seriesIndex), "stroke-ink-bg")}
+                            />
+                          )}
+                        </g>
+                      );
+                    })}
+                  </>
+                );
+              }}
+            </ChartFrame>
 
-                  <line
-                    x1={PAD_LEFT}
-                    x2={PAD_LEFT + plotWidth}
-                    y1={baselineY}
-                    y2={baselineY}
-                    className="stroke-ink-border"
-                    strokeWidth={1}
-                  />
+            {active === null ? null : (
+              // Parked on the side opposite the cursor so the readout never
+              // covers the category being read. Physical left/right, not logical
+              // start/end: the cursor's x position is a physical pixel (the
+              // plot never mirrors under RTL — see ChartFrame), so which side
+              // avoids it is a physical question too. A logical class would
+              // resolve to the same side as the category under `dir="rtl"`.
+              <div
+                className={cn(
+                  "absolute top-2 z-10",
+                  active > (labels.length - 1) / 2 ? "left-2" : "right-2"
+                )}
+              >
+                <ChartTooltip
+                  title={labels[active]}
+                  rows={series.map((s, seriesIndex) => ({
+                    label: s.name,
+                    seriesIndex,
+                    value:
+                      s.values[active] === null || s.values[active] === undefined
+                        ? noDataLabel
+                        : formatFor(s)(s.values[active] as number),
+                  }))}
+                />
+              </div>
+            )}
+          </div>
 
-                  {pickLabelIndices(labels.length, plotWidth).map((index) => (
-                    <text
-                      key={labels[index]}
-                      x={centerOf(index)}
-                      y={height - 6}
-                      textAnchor="middle"
-                      className="fill-fg-muted text-xs font-sans"
-                    >
-                      {labels[index]}
-                    </text>
-                  ))}
+          <div role="status" className="sr-only">
+            {formatActiveReading(labels, series, active, formatFor, noDataLabel)}
+          </div>
 
-                  {lineSeries.map((s) => {
-                    const seriesIndex = series.indexOf(s);
-                    const segments = splitAtGaps(s.values, (index, value) => [
-                      centerOf(index),
-                      lineYAt(value),
-                    ]);
-                    return (
-                      <g key={s.name}>
-                        {segments.map((segment, i) => (
-                          <path
-                            key={i}
-                            d={linePath(segment)}
-                            fill="none"
-                            strokeWidth={2}
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            className={seriesStroke(seriesIndex)}
-                          />
-                        ))}
-                        {active !== null && s.values[active] !== null && (
-                          <circle
-                            cx={centerOf(active)}
-                            cy={lineYAt(s.values[active] as number)}
-                            r={4}
-                            strokeWidth={2}
-                            className={cn(seriesFill(seriesIndex), "stroke-ink-bg")}
-                          />
-                        )}
-                      </g>
-                    );
-                  })}
-                </>
-              );
-            }}
-          </ChartFrame>
-
-          {active === null ? null : (
-            // Parked on the side opposite the cursor so the readout never
-            // covers the category being read. Physical left/right, not logical
-            // start/end: the cursor's x position is a physical pixel (the
-            // plot never mirrors under RTL — see ChartFrame), so which side
-            // avoids it is a physical question too. A logical class would
-            // resolve to the same side as the category under `dir="rtl"`.
-            <div
-              className={cn(
-                "absolute top-2 z-10",
-                active > (labels.length - 1) / 2 ? "left-2" : "right-2"
-              )}
-            >
-              <ChartTooltip
-                title={labels[active]}
-                rows={series.map((s, seriesIndex) => ({
-                  label: s.name,
-                  seriesIndex,
-                  value:
-                    s.values[active] === null || s.values[active] === undefined
-                      ? "no data"
-                      : formatFor(s)(s.values[active] as number),
-                }))}
-              />
-            </div>
-          )}
+          {legendItems ? <ChartLegend items={legendItems} /> : null}
         </div>
-
-        <div role="status" className="sr-only">
-          {active === null
-            ? ""
-            : `${labels[active]}: ${series
-                .map((s) => {
-                  const value = s.values[active];
-                  return `${s.name} ${value === null || value === undefined ? "no data" : formatFor(s)(value)}`;
-                })
-                .join(", ")}`}
-        </div>
-
-        {series.length > 1 ? (
-          <ChartLegend items={series.map((s, seriesIndex) => ({ label: s.name, seriesIndex }))} />
-        ) : null}
-      </div>
-    );
-  }
+      );
+    }
+  )
 );
 ComboChart.displayName = "ComboChart";

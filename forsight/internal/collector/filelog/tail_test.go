@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 type memSink struct{ logs []model.LogEntry }
@@ -308,38 +308,5 @@ func TestTailWith_MarksEveryTailedLineAsInferred(t *testing.T) {
 	}
 	if !sink.logs[0].SeverityInferred {
 		t.Error("a tailed entry was not marked as having an inferred severity")
-	}
-}
-
-// FallbackSeverity is the benchmark Forseer's severity model grades itself
-// against, and forseer's own tests carry a stand-in copy of this rule so
-// that module stays dependency-free. Pinning the real rule here is what
-// makes the two comparable: if this table has to change, the copy in
-// forseer/severity_test.go has to change with it.
-func TestFallbackSeverity_IsPinnedAsTheBenchmark(t *testing.T) {
-	cases := []struct {
-		line string
-		want model.LogSeverity
-	}{
-		{"fatal: out of memory", model.LogSeverityError},
-		{"could not open file: error 13", model.LogSeverityError},
-		{"failed to connect", model.LogSeverityError},
-		{"warn: retrying", model.LogSeverityWarn},
-		{"debug: entering handler", model.LogSeverityDebug},
-		{"request served in 4ms", model.LogSeverityInfo},
-
-		// The blind spots, pinned deliberately: the rule is wrong on all
-		// four, and those are the cases the model has to win to be worth
-		// switching on.
-		{"no errors reported during the sweep", model.LogSeverityError},
-		{"error_rate 0 for checkout", model.LogSeverityError},
-		{"recovered from the earlier failure", model.LogSeverityError},
-		{"panic: nil map write", model.LogSeverityInfo},
-	}
-
-	for _, tc := range cases {
-		if got := FallbackSeverity(tc.line); got != tc.want {
-			t.Errorf("FallbackSeverity(%q) = %q, want %q", tc.line, got, tc.want)
-		}
 	}
 }

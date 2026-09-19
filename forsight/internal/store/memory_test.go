@@ -2,10 +2,11 @@ package store
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // TestMemoryStore_Conformance runs the shared Store query-semantics suite
@@ -380,4 +381,63 @@ func TestMemoryStore_LogElementCap(t *testing.T) {
 	if len(got) != 20 {
 		t.Fatalf("stored %d logs, want the cap of 20", len(got))
 	}
+}
+
+// TestMemoryStore_ConcurrentWriteAndQueryAcrossCollections drives one writer
+// and one reader per collection (metrics, spans, logs) plus a concurrent
+// SetMaxElements — the one method that touches all three — at once, the
+// same shape production traffic takes: ingest writes while the dashboard's
+// pollers read, on all three collections simultaneously. Each
+// metrics/spans/logs pair guards a disjoint field with its own RWMutex,
+// and SetMaxElements is the only method that ever needs more than one, so
+// this is also a check that its fixed three-lock acquisition order is
+// enough on its own. Run with -race: a shared single mutex would also pass
+// this test functionally, so what -race actually verifies is that the
+// three-lock split introduced no race on maxElements or on a field crossing
+// its own lock.
+func TestMemoryStore_ConcurrentWriteAndQueryAcrossCollections(t *testing.T) {
+	s := NewMemoryStore(time.Hour)
+	ctx := context.Background()
+	now := time.Now()
+
+	const iterations = 200
+	var wg sync.WaitGroup
+
+	writeRead := func(write func(), read func()) {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			write()
+			read()
+		}
+	}
+
+	wg.Add(3)
+	go writeRead(
+		func() {
+			_ = s.WriteMetrics(ctx, []model.Metric{{Name: "cpu", Value: 1, Timestamp: now}})
+		},
+		func() { _, _ = s.QueryMetrics(ctx, MetricQuery{Name: "cpu"}) },
+	)
+	go writeRead(
+		func() {
+			_ = s.WriteSpans(ctx, []model.Span{{TraceID: "t", SpanID: "s", Name: "op", Service: "svc", Start: now}})
+		},
+		func() { _, _ = s.QuerySpans(ctx, SpanQuery{Service: "svc"}) },
+	)
+	go writeRead(
+		func() {
+			_ = s.WriteLogs(ctx, []model.LogEntry{{Timestamp: now, Severity: model.LogSeverityInfo, Source: "svc", Message: "m"}})
+		},
+		func() { _, _ = s.QueryLogs(ctx, LogQuery{Source: "svc"}) },
+	)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations/10; i++ {
+			s.SetMaxElements(1000)
+		}
+	}()
+
+	wg.Wait()
 }

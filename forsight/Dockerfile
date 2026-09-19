@@ -11,13 +11,13 @@
 # real dashboard, with no Node stage in this Dockerfile.
 #
 # Build from the REPO ROOT, not from forsight/: go.mod replaces
-# github.com/marcfs31/forsight/forseer with ../forseer (a sibling module),
+# github.com/Fors-Corp/forsight/forseer with ../forseer (a sibling module),
 # so the build context has to contain both directories.
 #
 #   docker build -f forsight/Dockerfile -t forsight .
 #
 # .github/workflows/forsight-release.yml builds and pushes this on every
-# forsight-vX.Y.Z tag, as ghcr.io/marcfs31/forsight:<version> and :latest.
+# forsight-vX.Y.Z tag, as ghcr.io/fors-corp/forsight:<version> and :latest.
 
 FROM golang:1.27-alpine AS builder
 WORKDIR /src

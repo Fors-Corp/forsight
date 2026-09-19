@@ -3,6 +3,7 @@ package otlp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -20,7 +21,7 @@ import (
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 type fakeSink struct {
@@ -43,6 +44,17 @@ func (f *fakeSink) WriteLogs(_ context.Context, logs []model.LogEntry) error {
 	f.logs = append(f.logs, logs...)
 	return nil
 }
+
+// failingSink implements MetricSink, SpanSink and LogSink, always returning
+// err from whichever Write method the handler under test calls. It stands in
+// for a store that is down (disk full, connection refused, ...) — a
+// condition every handler must turn into a 500, not a 200 with data quietly
+// dropped.
+type failingSink struct{ err error }
+
+func (f *failingSink) WriteMetrics(context.Context, []model.Metric) error { return f.err }
+func (f *failingSink) WriteSpans(context.Context, []model.Span) error     { return f.err }
+func (f *failingSink) WriteLogs(context.Context, []model.LogEntry) error  { return f.err }
 
 func stringAttr(key, value string) *commonpb.KeyValue {
 	return &commonpb.KeyValue{
@@ -182,6 +194,49 @@ func TestHandleTraces_MapsSpanFields(t *testing.T) {
 	}
 	if got.Duration.Milliseconds() != 500 {
 		t.Errorf("span duration = %v, want 500ms", got.Duration)
+	}
+}
+
+// TestHandleTraces_RejectsInvalidBody is the traces equivalent of
+// TestHandleMetrics_RejectsInvalidBody: handleTraces is the same
+// read-body/unmarshal/store shape as handleMetrics and handleLogs, but only
+// its happy path was covered.
+func TestHandleTraces_RejectsInvalidBody(t *testing.T) {
+	sink := &fakeSink{}
+	h := NewHandler(sink, sink, sink)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	rec := httptest.NewRecorder()
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader([]byte("not protobuf")))
+	mux.ServeHTTP(rec, httpReq)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if len(sink.spans) != 0 {
+		t.Errorf("stored %d spans from a rejected request, want 0", len(sink.spans))
+	}
+}
+
+// TestHandleTraces_RejectsInvalidJSONBody is the traces equivalent of
+// TestHandleMetrics_RejectsInvalidJSONBody.
+func TestHandleTraces_RejectsInvalidJSONBody(t *testing.T) {
+	sink := &fakeSink{}
+	h := NewHandler(sink, sink, sink)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if len(sink.spans) != 0 {
+		t.Errorf("stored %d spans from a rejected request, want 0", len(sink.spans))
 	}
 }
 
@@ -417,6 +472,43 @@ func TestHandleMetrics_RejectsInvalidJSONBody(t *testing.T) {
 	}
 }
 
+// TestHandleMetrics_StoreFailureReturns500 covers the branch no handler had
+// a test for: the sink accepted a well-formed request but failed to write
+// it (disk full, store closed, ...). The handler must answer 500, not the
+// 200 it would give a successful write.
+func TestHandleMetrics_StoreFailureReturns500(t *testing.T) {
+	sink := &failingSink{err: errors.New("store unavailable")}
+	h := NewHandler(sink, sink, sink)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	req := &collectormetrics.ExportMetricsServiceRequest{
+		ResourceMetrics: []*metricspb.ResourceMetrics{{
+			ScopeMetrics: []*metricspb.ScopeMetrics{{
+				Metrics: []*metricspb.Metric{{
+					Name: "requests.count",
+					Data: &metricspb.Metric_Sum{Sum: &metricspb.Sum{
+						DataPoints: []*metricspb.NumberDataPoint{{
+							TimeUnixNano: uint64(time.Now().UnixNano()),
+							Value:        &metricspb.NumberDataPoint_AsInt{AsInt: 1},
+						}},
+					}},
+				}},
+			}},
+		}},
+	}
+	body, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatalf("proto.Marshal: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/metrics", bytes.NewReader(body)))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
 // histogramRequest builds one OTLP request carrying a single histogram data
 // point with the given number of explicit bounds — the shape that made a
 // small body expand into millions of metrics.
@@ -642,6 +734,39 @@ func TestPerRequestSpanCapRejectsRatherThanTruncates(t *testing.T) {
 	}
 }
 
+// TestHandleTraces_StoreFailureReturns500 is the traces sibling of
+// TestHandleMetrics_StoreFailureReturns500: a well-formed request whose
+// spans the sink refuses to persist must surface as a 500.
+func TestHandleTraces_StoreFailureReturns500(t *testing.T) {
+	sink := &failingSink{err: errors.New("store unavailable")}
+	h := NewHandler(sink, sink, sink)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	req := &collectortrace.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Spans: []*tracepb.Span{{
+					TraceId:           []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+					SpanId:            []byte{1, 2, 3, 4, 5, 6, 7, 8},
+					Name:              "charge",
+					StartTimeUnixNano: uint64(time.Now().UnixNano()),
+				}},
+			}},
+		}},
+	}
+	body, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatalf("proto.Marshal: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(body)))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleLogs_MapsLogFields(t *testing.T) {
 	sink := &fakeSink{}
 	h := NewHandler(sink, sink, sink)
@@ -787,6 +912,37 @@ func TestHandleLogs_RejectsInvalidBody(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestHandleLogs_StoreFailureReturns500 is the logs sibling of
+// TestHandleMetrics_StoreFailureReturns500: a well-formed request whose
+// records the sink refuses to persist must surface as a 500.
+func TestHandleLogs_StoreFailureReturns500(t *testing.T) {
+	sink := &failingSink{err: errors.New("store unavailable")}
+	h := NewHandler(sink, sink, sink)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	req := &collectorlogs.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			ScopeLogs: []*logspb.ScopeLogs{{
+				LogRecords: []*logspb.LogRecord{{
+					TimeUnixNano: uint64(time.Now().UnixNano()),
+					Body:         &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "payment failed"}},
+				}},
+			}},
+		}},
+	}
+	body, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatalf("proto.Marshal: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/logs", bytes.NewReader(body)))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 

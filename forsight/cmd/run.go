@@ -14,25 +14,26 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/marcfs31/forsight/forseer"
-	"github.com/marcfs31/forsight/forsight/internal/api"
-	"github.com/marcfs31/forsight/forsight/internal/collector"
-	dockercollector "github.com/marcfs31/forsight/forsight/internal/collector/docker"
-	"github.com/marcfs31/forsight/forsight/internal/collector/filelog"
-	hostcollector "github.com/marcfs31/forsight/forsight/internal/collector/host"
-	"github.com/marcfs31/forsight/forsight/internal/collector/otlp"
-	"github.com/marcfs31/forsight/forsight/internal/collector/probe"
-	proccollector "github.com/marcfs31/forsight/forsight/internal/collector/proc"
-	"github.com/marcfs31/forsight/forsight/internal/collector/promscrape"
-	"github.com/marcfs31/forsight/forsight/internal/collector/statsd"
-	"github.com/marcfs31/forsight/forsight/internal/mlaas"
-	"github.com/marcfs31/forsight/forsight/internal/model"
-	"github.com/marcfs31/forsight/forsight/internal/store"
+	"github.com/Fors-Corp/forsight/forseer"
+	"github.com/Fors-Corp/forsight/forsight/internal/api"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector"
+	dockercollector "github.com/Fors-Corp/forsight/forsight/internal/collector/docker"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector/filelog"
+	hostcollector "github.com/Fors-Corp/forsight/forsight/internal/collector/host"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector/otlp"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector/probe"
+	proccollector "github.com/Fors-Corp/forsight/forsight/internal/collector/proc"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector/promscrape"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector/statsd"
+	"github.com/Fors-Corp/forsight/forsight/internal/mlaas"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/store"
 )
 
 type runOptions struct {
@@ -114,7 +115,7 @@ func newRunCmd() *cobra.Command {
 		`directory for the Badger database when --store=badger (ignored otherwise); `+
 			"created if it doesn't exist")
 	cmd.Flags().StringVar(&opts.mlaasURL, "mlaas-url", "",
-		"base URL of an mlaas server (github.com/marcfs31/mlaas) that trains and serves models from this agent's own stream, "+
+		"base URL of an mlaas server (github.com/Fors-Corp/mlaas) that trains and serves models from this agent's own stream, "+
 			"e.g. http://127.0.0.1:8090; also read from MLAAS_URL when the flag is empty (off by default)")
 	cmd.Flags().StringVar(&opts.mlaasAPIKeyFile, "mlaas-api-key-file", "",
 		"file holding the mlaas API key (mlaas writes it to <data>/api_key); also read from MLAAS_API_KEY_FILE, "+
@@ -166,7 +167,7 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 	// The severity model competes against the tailer's substring rule on the
 	// same stream, and is used only while it is winning.
 	eng = eng.WithSeverityFallback(func(message string) string {
-		return string(filelog.FallbackSeverity(message))
+		return string(model.FallbackSeverity(message))
 	})
 	if slo := resolveErrorSLO(opts.errorSLO); slo > 0 {
 		eng.SetErrorSLO(slo)
@@ -213,6 +214,13 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 		}
 	}
 
+	// Every background goroutine started below (StatsD, the registry, each
+	// log tailer, the mlaas syncer) writes into st/backingStore and must have
+	// fully stopped before shutdown reaches closeBadgerStore — see wg.Wait()
+	// in the two shutdown branches below, and cmd/demo.go's runDemo, which
+	// already gets this right with its own single liveDone channel.
+	var wg sync.WaitGroup
+
 	// StatsD is push-based: Listen accumulates packets continuously in its own
 	// goroutine while Collect drains and resets that accumulator on the
 	// registry's tick. That is why it is started separately from being
@@ -225,7 +233,9 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 			logger.Warn("StatsD receiver not started", "addr", opts.statsdAddr, "error", err)
 		} else {
 			collectors = append(collectors, statsdCollector)
+			wg.Add(1)
 			go func() {
+				defer wg.Done()
 				if err := statsdCollector.Serve(ctx); err != nil && ctx.Err() == nil {
 					logger.Error("StatsD receiver stopped", "addr", opts.statsdAddr, "error", err)
 				}
@@ -235,11 +245,19 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 	}
 
 	registry := collector.NewRegistry(st, opts.collectInterval, logger, collectors...)
-	go registry.Run(ctx)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		registry.Run(ctx)
+	}()
 
 	for _, path := range opts.logFiles {
 		logPath := path
-		go tailWithRetry(ctx, logPath, st, eng, logger)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tailWithRetry(ctx, logPath, st, eng, logger)
+		}()
 		logger.Info("tailing log file", "path", logPath)
 	}
 
@@ -261,7 +279,11 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		go syncer.Run(ctx)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			syncer.Run(ctx)
+		}()
 		server = server.WithMlaas(syncer)
 		logger.Info("mlaas integration on", "url", syncer.DisplayURL(), "prefix", cfg.Prefix, "sync-interval", cfg.SyncInterval)
 	}
@@ -301,9 +323,22 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		shutdownErr := httpServer.Shutdown(shutdownCtx)
+		// ctx is already cancelled (that's why we're here), so every
+		// goroutine wg tracks is already unwinding on its own ctx.Done()
+		// check; this just waits for the last of them to actually return
+		// before the store they write through closes underneath them.
+		wg.Wait()
 		writeForseerSnapshot(eng, snapshotPath, logger)
 		return errors.Join(shutdownErr, closeBadgerStore(badgerStore, logger))
 	case err := <-serveErr:
+		// stop() cancels ctx too (signal.NotifyContext's stop, called above
+		// via defer, is exactly this — calling it here just does it early),
+		// so the registry/tailers/syncer's own ctx-scoped loops unwind
+		// instead of racing a WriteBatch against the store this function is
+		// about to close. Mirrors runDemo's identical shutdown path in
+		// cmd/demo.go.
+		stop()
+		wg.Wait()
 		writeForseerSnapshot(eng, snapshotPath, logger)
 		return errors.Join(err, closeBadgerStore(badgerStore, logger))
 	}

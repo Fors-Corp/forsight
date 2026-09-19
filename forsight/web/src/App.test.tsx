@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "./test-utils/axe";
 import App from "./App";
 import { submitAuthToken, type ForseerQueryFacet } from "./api";
 import { THEME_STORAGE_KEY } from "./theme";
@@ -42,6 +43,24 @@ function fetchedUrls(fetchMock: ReturnType<typeof mockFetch>): string[] {
 // Every hook App() mounts polls once on the first render; stub them all to
 // an empty-but-successful response so a test only has to override the one
 // endpoint it cares about.
+/**
+ * Lets every poller the freshly-rendered tree mounted deliver its first
+ * response, deterministically.
+ *
+ * `mockFetch`'s responses resolve on microtasks alone — no timers are
+ * involved — so draining the microtask queue inside `act()` runs the whole
+ * chain (fetch -> json -> setState -> re-render -> commit) to quiescence.
+ * The wait is then bounded by the work, not by the clock. Same inline idiom
+ * the connection-state and auth-gate tests below already use; it is named
+ * here because the render-error-boundary tests need it for a reason of
+ * their own (see that describe).
+ */
+async function flushPolls() {
+  await act(async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  });
+}
+
 const emptyEndpoints: FetchResponses = {
   "/api/v1/metrics": [],
   "/api/v1/logs": [],
@@ -822,7 +841,7 @@ describe("Overview probe strips", () => {
     expect(await screen.findByRole("heading", { name: "Probes" })).toBeInTheDocument();
     // A single, almost-current sample holds the smallest range on offer
     // (15m — see "Overview time range" above), not the 1h default.
-    expect(screen.getByText("checkout, last 15m")).toBeInTheDocument();
+    expect(await screen.findByText("checkout, last 15m")).toBeInTheDocument();
   });
 
   it("shows a warning-toned TLS expiry badge when the certificate is valid but expiring soon", async () => {
@@ -901,7 +920,7 @@ describe("Overview bounded metrics reads", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Probes" })).toBeInTheDocument();
-    expect(screen.getByText("checkout, last 15m")).toBeInTheDocument();
+    expect(await screen.findByText("checkout, last 15m")).toBeInTheDocument();
 
     const urls = fetchedUrls(fetchMock);
     for (const name of ["probe.http.up", "probe.tls.days_remaining", "probe.tls.valid"]) {
@@ -1144,6 +1163,19 @@ const brokenMlaasStatus = {
  * `getDerivedStateFromError`, so an uncaught render error anywhere under a
  * page unmounted the whole React root and left a blank tab — no heading,
  * no sidebar, nothing a user could act on.
+ *
+ * Every test here asserts on something that exists only *after* a crash,
+ * and the crash itself only happens once `useMlaasStatus`'s first poll
+ * resolves — the broken row can't render before its data arrives. Written
+ * with a `findBy*`, that made the whole chain (effect fires the request ->
+ * response resolves -> setState -> Models re-renders -> the drift cell
+ * throws -> React's error recovery retries and commits the fallback) a race
+ * against a fixed 1s budget that nothing in the test was advancing, which is
+ * why it timed out about one run in nine on a loaded runner even though an
+ * idle machine gets there in 11-72ms. `flushPolls()` drives that chain
+ * instead of sampling the DOM until a deadline: the mocked fetch resolves on
+ * microtasks alone, so draining them inside `act()` is bounded by the work,
+ * not by the clock, and the assertions below are plain synchronous queries.
  */
 describe("Render error boundary", () => {
   afterEach(() => {
@@ -1166,8 +1198,9 @@ describe("Render error boundary", () => {
     });
 
     render(<App />);
+    await flushPolls();
 
-    expect(await screen.findByText("Something went wrong")).toBeInTheDocument();
+    expect(screen.getByText("Something went wrong")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reload page" })).toBeInTheDocument();
     // The shell survives — only the crashed page's slot was replaced, not
     // the whole React root the pre-fix blank page was.
@@ -1189,7 +1222,8 @@ describe("Render error boundary", () => {
 
     const user = userEvent.setup();
     render(<App />);
-    const reloadButton = await screen.findByRole("button", { name: "Reload page" });
+    await flushPolls();
+    const reloadButton = screen.getByRole("button", { name: "Reload page" });
 
     // jsdom's location.reload is real but non-configurable and logs "Not
     // implemented: navigation" instead of doing anything mockable, and
@@ -1223,16 +1257,61 @@ describe("Render error boundary", () => {
     });
 
     render(<App />);
-    await screen.findByText("Something went wrong");
+    await flushPolls();
+    expect(screen.getByText("Something went wrong")).toBeInTheDocument();
 
-    window.location.hash = "#/";
-    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await act(async () => {
+      window.location.hash = "#/";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await flushPolls();
 
     // The boundary is keyed on route, so navigating away starts the new
     // page's boundary fresh instead of carrying the old error forward.
-    expect(await screen.findByText("Host CPU over time")).toBeInTheDocument();
+    expect(screen.getByText("Host CPU over time")).toBeInTheDocument();
     expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
 
     consoleError.mockRestore();
+  });
+});
+
+/**
+ * Regression coverage for the whole shell: sidebar, nav, and whichever page
+ * is routed in, all together — the level a single page's own render tree
+ * (see Overview.test.tsx and Models.test.tsx) can't catch, like the app
+ * chrome's own landmark/heading structure around a routed page's <h1>.
+ */
+describe("App accessibility", () => {
+  afterEach(() => {
+    window.location.hash = "";
+    vi.unstubAllGlobals();
+  });
+
+  it("has no axe violations on the overview route", async () => {
+    mockFetch(emptyEndpoints);
+    const { container } = render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations on the models route", async () => {
+    window.location.hash = "#/models";
+    mockFetch({
+      ...emptyEndpoints,
+      "/api/v1/forseer/models": [],
+      "/api/v1/mlaas/status": {
+        configured: false,
+        reachable: false,
+        models: [],
+        forecasts: [],
+        predictions: [],
+        jobs: [],
+      },
+    });
+    const { container } = render(<App />);
+    await screen.findByText("mlaas is not configured");
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

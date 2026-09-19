@@ -12,7 +12,7 @@ import (
 
 	"github.com/shirou/gopsutil/v4/process"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 const defaultLimit = 40

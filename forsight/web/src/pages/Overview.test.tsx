@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { coveredSpanMs, offeredTimeRanges, probeUptime } from "./Overview";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { axe } from "../test-utils/axe";
+import Overview, { coveredSpanMs, offeredTimeRanges, probeUptime } from "./Overview";
 import type { Metric } from "../api";
 
 function iso(ms: number): string {
@@ -160,5 +162,55 @@ describe("coveredSpanMs", () => {
     // 6h is still the first range that covers a 3h span, so the range the
     // user just chose does not vanish from the list out from under them.
     expect(offeredTimeRanges(span2).map((r) => r.value)).toEqual(["15m", "1h", "6h"]);
+  });
+});
+
+// Every hook Overview() mounts polls once on the first render; stub them all
+// to an empty-but-successful response, the same shape App.test.tsx's
+// emptyEndpoints uses, so a render exercises the page's real DOM rather than
+// its loading state.
+const emptyEndpoints: Record<string, unknown> = {
+  "/api/v1/metrics": [],
+  "/api/v1/logs": [],
+  "/api/v1/traces": [],
+  "/api/v1/forseer/insights": [],
+  "/api/v1/forseer/clusters": [],
+  "/api/v1/forseer/summary": { enabled: false, summary: "" },
+  "/api/v1/forseer/budget": { label: "Error-log budget", consumed: 0 },
+  "/api/v1/forseer/timeline": [],
+};
+
+function mockFetch(responses: Record<string, unknown>) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const path = url.split("?")[0];
+    if (path in responses) {
+      return new Response(JSON.stringify(responses[path]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response("", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+describe("Overview accessibility", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Regression coverage for the section-heading outline: every Card on this
+  // page sits as a direct child of the page, right under its own <h1>
+  // ("forsight"), so each CardSectionHeading must render as an <h2> — a
+  // <h3> (CardTitle's own default) would jump a level and axe's
+  // heading-order rule catches exactly that.
+  it("has no axe violations once the page has rendered its cards", async () => {
+    mockFetch(emptyEndpoints);
+    const { container } = render(<Overview />);
+    await screen.findByText("Host CPU over time");
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

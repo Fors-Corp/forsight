@@ -82,7 +82,11 @@ spec:
       serviceAccountName: forsight
       containers:
         - name: forsight
-          image: ghcr.io/marcfs31/forsight:latest
+          # No image exists at ghcr.io/fors-corp/forsight until the repo's
+          # ghcr.io rename lands and the next forsight-vX.Y.Z tag is cut;
+          # pinned deployments should keep using ghcr.io/marcfs31/forsight
+          # until then.
+          image: ghcr.io/fors-corp/forsight:latest
           args: ["run"]
           env:
             - name: HOST_PROC

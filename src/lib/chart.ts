@@ -65,6 +65,20 @@ export function seriesBg(index: number): string {
   return SERIES_BG[index] ?? "bg-fg-muted";
 }
 
+/**
+ * Legend items for `ChartLegend`, or `null` when there's nothing to key —
+ * one series already names itself on the axis/table, so `LineChart`,
+ * `BarChart` and `ComboChart` all skip rendering a legend then. Shared so
+ * the "only past one series" rule can't drift between the three.
+ */
+export function seriesLegendItems<S extends { name: string }>(
+  series: readonly S[]
+): Array<{ label: string; seriesIndex: number }> | null {
+  return series.length > 1
+    ? series.map((s, seriesIndex) => ({ label: s.name, seriesIndex }))
+    : null;
+}
+
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -407,4 +421,35 @@ export function formatPercent(value: number, decimals = 1): string {
     style: "percent",
     maximumFractionDigits: decimals,
   }).format(value / 100);
+}
+
+/**
+ * The `role="status"` sentence `LineChart`, `BarChart` and `ComboChart`
+ * announce when their cursor lands on a point: the category label, then
+ * every series' reading at that index, `null`/`undefined` spoken as
+ * `noDataLabel` rather than silently formatted as if it were zero. `""`
+ * when nothing is active, matching the empty live region the three charts
+ * shared before this was factored out.
+ *
+ * `formatFor` picks the formatter per series rather than taking one
+ * formatter for all of them, because `ComboChart` reads bar series on one
+ * axis/format and line series on another — `LineChart` and `BarChart` just
+ * return their single `valueFormat` regardless of the series passed in.
+ */
+export function formatActiveReading<
+  S extends { name: string; values: ReadonlyArray<number | null> },
+>(
+  labels: readonly string[],
+  series: readonly S[],
+  active: number | null,
+  formatFor: (s: S) => (value: number) => string,
+  noDataLabel = "no data"
+): string {
+  if (active === null) return "";
+  return `${labels[active]}: ${series
+    .map((s) => {
+      const value = s.values[active];
+      return `${s.name} ${value === null || value === undefined ? noDataLabel : formatFor(s)(value)}`;
+    })
+    .join(", ")}`;
 }

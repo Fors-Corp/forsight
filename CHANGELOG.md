@@ -1,5 +1,135 @@
 # @marcfs31/fors-observability-design-system
 
+## 5.0.0
+
+### Major Changes
+
+- 260a6ec: The package is now published as `@fors-corp/forsight`. Consumers must change the dependency name in `package.json`, update the `@marcfs31:registry` line in their `.npmrc` to `@fors-corp:registry`, and update every import specifier — including the `/theme`, `/chart`, `/styles.css`, `/tailwind.css`, `/fonts.css` and `/tailwind-preset` subpaths — to the new scope. Nothing about the API, the exports map, or the design tokens changes: this is a rename, not a rewrite. `@marcfs31/forsight` is frozen at 4.2.0 and receives no further releases.
+
+### Minor Changes
+
+- 52c66fb: `CardTitle` can now pick its heading level, and `Input`'s hint announces itself once it becomes an error.
+
+  `CardTitle` always rendered an `<h3>`, so any page where it needed to be the
+  top (or second) heading — the dashboard's every section does this — skipped
+  straight from `h1` to `h3`. It now takes an `as` prop (`"h1"`–`"h6"`, same
+  convention as `Heading`'s), defaulting to `h3` — nothing changes unless you
+  pass it.
+
+  `Input`'s hint was linked to the field only through `aria-describedby`, so a
+  hint that turns into an error message after submit — the common validation
+  pattern, used by the dashboard's Ask Forseer flow and `AuthTokenDialog` —
+  was never announced to a screen-reader user who had already tabbed past the
+  field (WCAG 4.1.3). The hint now carries `aria-live="polite"` while
+  `invalid` is set, and is silent otherwise so it doesn't announce every
+  keystroke-driven hint change (e.g. a character counter).
+
+- 413d2b2: Share the chart cursor's screen-reader summary and legend guard, cover
+  `splitAtGaps` with unit tests, and let consumers localize "no data".
+
+  `LineChart`, `BarChart` and `ComboChart` each built their own copy of the
+  `role="status"` sentence the cursor announces on focus/hover, and each
+  repeated the same `series.length > 1 ? <ChartLegend /> : null` guard. Those
+  are now `formatActiveReading` and `seriesLegendItems` in `src/lib/chart.ts`,
+  called from all three — `BarChart`'s copy also silently formatted a `null`
+  sample as `0` instead of announcing it as missing, unlike its own data table
+  and unlike the other two charts' announcements; it now matches them.
+
+  `splitAtGaps` — the null-gap splitter `ComboChart`'s line series has used
+  since it shipped — had no unit tests of its own, unlike `splitAtProjection`.
+
+  New `noDataLabel?: string` prop on `LineChart`, `BarChart`, `ComboChart` and
+  `Heatmap` (default `"no data"`, threaded the way `valueFormat` already is)
+  lets a consumer translate the literal that appears in the cursor readout,
+  tooltip, data table and (for `Heatmap`) each cell's title and accessible
+  name.
+
+### Patch Changes
+
+- 4956ea9: Memoize the plotted charts' geometry so the cursor doesn't recompute it on every move.
+
+  `LineChart`, `BarChart`, `ComboChart`, `DonutChart` and `Sparkline` recomputed
+  their scale (an extent scan plus `niceScale`), and `LineChart`/`ComboChart`
+  their per-series solid/dashed or gapped point runs, on every render — including
+  the renders their own hover/keyboard cursor triggers many times a second,
+  where none of that geometry had actually changed. Each component is now
+  wrapped in `React.memo` (so an unrelated parent re-render with unchanged props
+  is skipped entirely), and the geometry itself is computed once via `useMemo`,
+  keyed on the props that actually determine it (`series`/`labels`/`stacked` for
+  the scale, `series` alone for the per-series runs) rather than on the cursor's
+  `active` index. No rendered output changes — every existing DOM assertion and
+  snapshot passes unchanged.
+
+- ca1c2fa: Window `LogStream` past 200 entries so a large feed doesn't mount thousands of DOM rows.
+
+  `LogStream` mounted one row per entry unconditionally, which meant a 2000-line
+  feed (the dashboard's own use case, reconciled every few seconds) mounted
+  2000 DOM nodes on every render. Past 200 entries, only the rows near the
+  current scroll position (plus a small overscan buffer) actually mount now,
+  with a pair of empty spacer rows standing in for the rest so the scrollbar
+  still represents the true total — a fixed-estimate scroll window, not a full
+  virtualizer, so no new dependency. At or under 200 entries, rendering is
+  byte-identical to before.
+
+  Accessibility is unchanged: each mounted row carries `aria-setsize`/
+  `aria-posinset` once windowed (the ARIA-specified technique for a list where
+  not every item is in the DOM), the region's keyboard reachability and
+  `aria-live`/`aria-relevant` semantics are unaffected either way, and axe
+  reports no violations at 2000 entries.
+
+## 4.3.0
+
+### Minor Changes
+
+- 1b1a70b: `Tabs.Root`/`List`/`Trigger`/`Panel` and `SidebarHeader`/`SidebarContent`/
+  `SidebarFooter`/`SidebarNav`/`AppShell`/`AppShellMain` are now built with
+  `React.forwardRef`, matching every other compound component in the library
+  (`Card`, `Dialog`, `AlertDialog`, `Command`, `Table`, `Drawer`,
+  `DropdownMenu`, `Breadcrumb`, `RadioGroup`, `ToggleGroup`) — they were the
+  last two that weren't. A consumer passing `ref={ref}` to any of them
+  previously failed to typecheck (`ref` was not part of the declared prop
+  type), so a TypeScript app could not measure a tab list, scroll a panel into
+  view, or focus the sidebar's `<nav>` from outside. Each part also now sets
+  `displayName`, so React DevTools and test-runner error messages name it
+  instead of showing `Anonymous`.
+
+  New named, exported prop types, closing gaps where a type existed in source
+  but wasn't part of the public API (or, for `DialogContent`/`AlertDialogAction`/
+  `AlertDialogCancel`/`DrawerContent`, existed only as an inline, unnamed
+  intersection): `TabsRootProps`, `TabsTriggerProps`, `TabsPanelProps`,
+  `TableHeadProps`, `SliderProps`, `DialogContentProps`,
+  `AlertDialogActionProps`, `AlertDialogCancelProps`, `DrawerContentProps`. A
+  new test (`src/__tests__/prop-exports.test.ts`) asserts every exported
+  `*Props` type defined in `src/components/*.tsx` is re-exported from
+  `src/index.ts` unless explicitly allow-listed, so a future gap like this is
+  a decision instead of an oversight.
+
+### Patch Changes
+
+- 4496b43: `BarList`, `BreadcrumbLink` and `SidebarNavItem` now refuse to render an
+  unsafe `href` as a clickable link. All three accept an `href` documented as
+  a drill-down or nav destination — data that in practice traces back to a
+  route, service name, tag or error code echoed from request input, so a
+  consumer that renders one of these components with attacker-influenced data
+  was one `javascript:` or `data:text/html` URI away from running script in an
+  on-call operator's authenticated session when they clicked what looked like
+  a normal row or link.
+
+  A new `isSafeHref` helper (not exported from the package root; internal to
+  these three components) parses the href against the current page's origin —
+  or, where there is no document to read one from, against a fixed `https:`
+  base, so a server render reaches the same verdict as the browser instead of
+  refusing every href and rehydrating a row from `<div>` to `<a>` — and allows
+  only relative URLs and absolute `http:`/`https:` URLs — a
+  protocol-relative URL (`//host/path`) is allowed too, since it resolves to
+  whichever of those two the current page is served over. Anything else
+  (`javascript:`, `data:`, `vbscript:`, an unparseable string) falls back to
+  the same non-link rendering each component already uses when no `href` is
+  given at all: `BarList` renders its existing plain `<div>` row instead of an
+  `<a>`, and `BreadcrumbLink`/`SidebarNavItem` render an `<a>` with no `href`
+  attribute (which, per the HTML spec, has no `link` role and isn't focusable
+  — not a link, the same as `BarList`'s fallback).
+
 ## 4.2.0
 
 ### Minor Changes

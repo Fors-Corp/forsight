@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
-	"github.com/marcfs31/forsight/forsight/internal/store"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/store"
 )
 
 // fakeMlaas is an in-memory mlaas: the routes the integration uses, with
@@ -750,6 +750,122 @@ func TestFirstPass_UploadsCreatesAndTrains(t *testing.T) {
 	}
 	if len(st.Forecasts) != 0 || len(st.Predictions) != 0 {
 		t.Errorf("forecasts/predictions before any champion: %+v %+v", st.Forecasts, st.Predictions)
+	}
+}
+
+// TestSyncModel_CreatesUploadsAndTrains exercises syncModel directly on a
+// single managed model — the block pass used to inline before the split —
+// rather than through a whole pass, so a regression here points straight at
+// syncModel instead of somewhere in pass's other three model iterations. It
+// checks both syncModel's own side effects on mlaas (dataset uploaded, model
+// created, training queued) and the maps pass depends on afterward
+// (exports, byName, rowsByDataset), which is exactly what pass's later
+// forecast/feedback loops and second visit to a model read.
+func TestSyncModel_CreatesUploadsAndTrains(t *testing.T) {
+	f := newFakeMlaas(t)
+	s := newSyncer(t, f, seedStore(t))
+	m := managed[0] // cpu-forecast: plain create-and-train, no 409 to recover from
+	name, ds := m.name(s.cfg.Prefix), m.dataset(s.cfg.Prefix)
+
+	byName := map[string]wireModel{}
+	rowsByDataset := map[string]int{}
+	exports := map[string][]row{}
+	loadLogs := func() ([]model.LogEntry, error) {
+		t.Fatal("a forecast model's syncModel must not read logs")
+		return nil, nil
+	}
+	var errs []error
+	note := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	s.syncModel(context.Background(), m, byName, rowsByDataset, exports, loadLogs, note)
+
+	if len(errs) != 0 {
+		t.Fatalf("syncModel noted errors: %v", errs)
+	}
+	if rows, ok := exports[name]; !ok || len(rows) != 40 {
+		t.Errorf("exports[%s] = %v, want 40 rows", name, rows)
+	}
+	if got := rowsByDataset[ds]; got != 40 {
+		t.Errorf("rowsByDataset[%s] = %d, want 40 (updated after upload)", ds, got)
+	}
+	wm, known := byName[name]
+	if !known {
+		t.Fatalf("byName[%s] not set after syncModel created it", name)
+	}
+	if wm.Champion != nil {
+		t.Errorf("Champion = %+v, want nil before any training completes", wm.Champion)
+	}
+
+	f.mu.Lock()
+	fm := f.models[name]
+	trained := f.activeLocked(name)
+	d := f.datasets[ds]
+	f.mu.Unlock()
+	if fm == nil {
+		t.Fatalf("model %s not created upstream", name)
+	}
+	if !trained {
+		t.Errorf("model %s has no training job queued", name)
+	}
+	if d == nil || len(d.rows) != 40 {
+		t.Errorf("dataset %s = %+v, want 40 rows uploaded", ds, d)
+	}
+
+	s.mu.Lock()
+	enough := s.exported[name]
+	s.mu.Unlock()
+	if !enough {
+		t.Errorf("s.exported[%s] = false, want true", name)
+	}
+}
+
+// TestSyncModel_NotEnoughDataSkipsUploadAndCreate checks syncModel's early
+// return: with nothing in the store, the export is too small to register,
+// so mlaas must never see a create or an upload, and exports/byName must
+// stay untouched for pass's later loops to read as "not exported this pass".
+func TestSyncModel_NotEnoughDataSkipsUploadAndCreate(t *testing.T) {
+	f := newFakeMlaas(t)
+	s := newSyncer(t, f, store.NewMemoryStore(time.Hour)) // empty: no metrics, no logs
+	m := managed[0]                                       // cpu-forecast
+	name := m.name(s.cfg.Prefix)
+
+	byName := map[string]wireModel{}
+	rowsByDataset := map[string]int{}
+	exports := map[string][]row{}
+	loadLogs := func() ([]model.LogEntry, error) { return nil, nil }
+	var errs []error
+	note := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	s.syncModel(context.Background(), m, byName, rowsByDataset, exports, loadLogs, note)
+
+	if len(errs) != 0 {
+		t.Fatalf("syncModel noted errors on the not-enough-data path: %v", errs)
+	}
+	if _, ok := exports[name]; ok {
+		t.Errorf("exports[%s] set despite not enough rows", name)
+	}
+	if _, ok := byName[name]; ok {
+		t.Errorf("byName[%s] set despite not enough rows: model must not be created", name)
+	}
+	f.mu.Lock()
+	created := f.models[name] != nil
+	f.mu.Unlock()
+	if created {
+		t.Errorf("model %s created upstream despite not enough data", name)
+	}
+	s.mu.Lock()
+	enough := s.exported[name]
+	s.mu.Unlock()
+	if enough {
+		t.Errorf("s.exported[%s] = true, want false", name)
 	}
 }
 

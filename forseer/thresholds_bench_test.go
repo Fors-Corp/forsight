@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// BenchmarkThresholdModel_ObserveWarmingUp measures the update path — the
-// Robbins-Monro multiplicative step on both thresholds plus the hit-count
-// bookkeeping — while a series is still below thresholdMinSamples and
-// walking away from the fixed sigma constants toward its own tail.
+// BenchmarkThresholdModel_ObserveWarmingUp measures the update path — one
+// P² marker update per threshold plus the hit-count bookkeeping — while a
+// series is still answering with the fixed sigma constants and building the
+// quantile estimates that will replace them.
 func BenchmarkThresholdModel_ObserveWarmingUp(b *testing.B) {
 	m := newThresholdModel()
 	rng := rand.New(rand.NewSource(1))
@@ -21,13 +21,13 @@ func BenchmarkThresholdModel_ObserveWarmingUp(b *testing.B) {
 	}
 }
 
-// BenchmarkThresholdModel_ObserveCalibrated measures the same path once the
-// series has passed thresholdMinSamples, the steady state an agent spends
-// almost all its time in.
+// BenchmarkThresholdModel_ObserveCalibrated measures the same path once both
+// thresholds are learned, the steady state an agent spends almost all its
+// time in.
 func BenchmarkThresholdModel_ObserveCalibrated(b *testing.B) {
 	m := newThresholdModel()
 	rng := rand.New(rand.NewSource(2))
-	for i := 0; i < thresholdMinSamples; i++ {
+	for i := 0; i < thresholdCriticalMinSamples; i++ {
 		m.Observe("host.cpu", absNormal(rng))
 	}
 

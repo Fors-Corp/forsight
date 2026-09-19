@@ -11,7 +11,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // MetricQuery filters a metrics read. A zero value matches everything within

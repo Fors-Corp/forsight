@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcfs31/forsight/forseer"
-	"github.com/marcfs31/forsight/forsight/internal/model"
-	"github.com/marcfs31/forsight/forsight/internal/store"
+	"github.com/Fors-Corp/forsight/forseer"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/store"
 )
 
 func TestDemoRetention(t *testing.T) {
@@ -223,7 +223,7 @@ func TestDemoGenerator_DeclaredAndInferredSeverity(t *testing.T) {
 			if l.SeverityInferred {
 				inferred++
 				if l.Severity == "" {
-					t.Errorf("tick %d: inferred log has no severity — filelog.FallbackSeverity must always return one", i)
+					t.Errorf("tick %d: inferred log has no severity — model.FallbackSeverity must always return one", i)
 				}
 			} else {
 				declared++

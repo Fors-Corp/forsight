@@ -37,135 +37,139 @@ export interface DonutChartProps extends Omit<React.HTMLAttributes<HTMLDivElemen
  * readers actually want. Every slice's share is printed in the legend, so no
  * one has to judge angles.
  */
-export const DonutChart = React.forwardRef<HTMLDivElement, DonutChartProps>(
-  (
-    {
-      className,
-      label,
-      description,
-      data,
-      size = 200,
-      centerValue,
-      centerLabel,
-      valueFormat = formatCompact,
-      ...props
-    },
-    ref
-  ) => {
-    const cursor = useChartCursor(data.length);
-    const total = data.reduce((sum, slice) => sum + slice.value, 0);
-    const shareOf = (value: number) => (total > 0 ? (value / total) * 100 : 0);
-    const active = cursor.active;
+export const DonutChart = React.memo(
+  React.forwardRef<HTMLDivElement, DonutChartProps>(
+    (
+      {
+        className,
+        label,
+        description,
+        data,
+        size = 200,
+        centerValue,
+        centerLabel,
+        valueFormat = formatCompact,
+        ...props
+      },
+      ref
+    ) => {
+      const cursor = useChartCursor(data.length);
+      // Keyed on `data` alone — hovering a slice re-renders this component
+      // without the totals actually changing.
+      const total = React.useMemo(() => data.reduce((sum, slice) => sum + slice.value, 0), [data]);
+      const shareOf = (value: number) => (total > 0 ? (value / total) * 100 : 0);
+      const active = cursor.active;
 
-    return (
-      <div
-        ref={ref}
-        className={cn("flex w-full min-w-0 flex-col items-center gap-3", className)}
-        {...props}
-      >
+      return (
         <div
-          tabIndex={0}
-          onKeyDown={cursor.onKeyDown}
-          onBlur={cursor.onBlur}
-          className="w-full rounded-md focus-visible:outline-none focus-visible:shadow-focus-ring"
+          ref={ref}
+          className={cn("flex w-full min-w-0 flex-col items-center gap-3", className)}
+          {...props}
         >
-          <ChartFrame
-            label={label}
-            description={[description, "Use arrow keys to read individual slices."]
-              .filter(Boolean)
-              .join(" ")}
-            height={size}
-            columns={["Value", "Share"]}
-            rows={data.map((slice) => ({
-              header: slice.name,
-              cells: [valueFormat(slice.value), formatPercent(shareOf(slice.value))],
-            }))}
+          <div
+            tabIndex={0}
+            onKeyDown={cursor.onKeyDown}
+            onBlur={cursor.onBlur}
+            className="w-full rounded-md focus-visible:outline-none focus-visible:shadow-focus-ring"
           >
-            {({ width }) => {
-              const cx = width / 2;
-              const cy = size / 2;
-              const outer = Math.max(8, Math.min(width, size) / 2 - 2);
-              const inner = outer * 0.62;
-              let angle = 0;
+            <ChartFrame
+              label={label}
+              description={[description, "Use arrow keys to read individual slices."]
+                .filter(Boolean)
+                .join(" ")}
+              height={size}
+              columns={["Value", "Share"]}
+              rows={data.map((slice) => ({
+                header: slice.name,
+                cells: [valueFormat(slice.value), formatPercent(shareOf(slice.value))],
+              }))}
+            >
+              {({ width }) => {
+                const cx = width / 2;
+                const cy = size / 2;
+                const outer = Math.max(8, Math.min(width, size) / 2 - 2);
+                const inner = outer * 0.62;
+                let angle = 0;
 
-              return (
-                <>
-                  {total === 0 ? (
-                    <circle
-                      cx={cx}
-                      cy={cy}
-                      r={(outer + inner) / 2}
-                      fill="none"
-                      strokeWidth={outer - inner}
-                      className="stroke-ink-surface-2"
-                    />
-                  ) : (
-                    data.map((slice, index) => {
-                      const sweep = (slice.value / total) * 360;
-                      const path = arcPath(cx, cy, outer, inner, angle, angle + sweep);
-                      angle += sweep;
-                      return (
-                        <path
-                          key={slice.name}
-                          d={path}
-                          strokeWidth={2}
-                          onPointerEnter={() => cursor.setActive(index)}
-                          onPointerLeave={() => cursor.setActive(null)}
-                          className={cn(
-                            seriesFill(index),
-                            "stroke-ink-bg",
-                            active !== null && active !== index && "opacity-45"
-                          )}
-                        />
-                      );
-                    })
-                  )}
-                  <text
-                    x={cx}
-                    y={cy}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    className="fill-fg text-xl font-semibold font-heading"
-                  >
-                    {active === null
-                      ? (centerValue ?? valueFormat(total))
-                      : formatPercent(shareOf(data[active].value))}
-                  </text>
-                  {centerLabel === undefined && active === null ? null : (
+                return (
+                  <>
+                    {total === 0 ? (
+                      <circle
+                        cx={cx}
+                        cy={cy}
+                        r={(outer + inner) / 2}
+                        fill="none"
+                        strokeWidth={outer - inner}
+                        className="stroke-ink-surface-2"
+                      />
+                    ) : (
+                      data.map((slice, index) => {
+                        const sweep = (slice.value / total) * 360;
+                        const path = arcPath(cx, cy, outer, inner, angle, angle + sweep);
+                        angle += sweep;
+                        return (
+                          <path
+                            key={slice.name}
+                            d={path}
+                            strokeWidth={2}
+                            onPointerEnter={() => cursor.setActive(index)}
+                            onPointerLeave={() => cursor.setActive(null)}
+                            className={cn(
+                              seriesFill(index),
+                              "stroke-ink-bg",
+                              active !== null && active !== index && "opacity-45"
+                            )}
+                          />
+                        );
+                      })
+                    )}
                     <text
                       x={cx}
-                      y={cy + 20}
+                      y={cy}
                       textAnchor="middle"
                       dominantBaseline="middle"
-                      className="fill-fg-muted text-xs font-sans"
+                      className="fill-fg text-xl font-semibold font-heading"
                     >
-                      {active === null ? centerLabel : data[active].name}
+                      {active === null
+                        ? (centerValue ?? valueFormat(total))
+                        : formatPercent(shareOf(data[active].value))}
                     </text>
-                  )}
-                </>
-              );
-            }}
-          </ChartFrame>
-        </div>
+                    {centerLabel === undefined && active === null ? null : (
+                      <text
+                        x={cx}
+                        y={cy + 20}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        className="fill-fg-muted text-xs font-sans"
+                      >
+                        {active === null ? centerLabel : data[active].name}
+                      </text>
+                    )}
+                  </>
+                );
+              }}
+            </ChartFrame>
+          </div>
 
-        <div role="status" className="sr-only">
-          {active === null
-            ? ""
-            : `${data[active].name}: ${valueFormat(data[active].value)}, ${formatPercent(
-                shareOf(data[active].value)
-              )} of total`}
-        </div>
+          <div role="status" className="sr-only">
+            {active === null
+              ? ""
+              : `${data[active].name}: ${valueFormat(data[active].value)}, ${formatPercent(
+                  shareOf(data[active].value)
+                )} of total`}
+          </div>
 
-        <ChartLegend
-          className="justify-center"
-          items={data.map((slice, index) => ({
-            label: slice.name,
-            seriesIndex: index,
-            value: formatPercent(shareOf(slice.value)),
-          }))}
-        />
-      </div>
-    );
-  }
+          <ChartLegend
+            className="justify-center"
+            items={data.map((slice, index) => ({
+              label: slice.name,
+              seriesIndex: index,
+              value: formatPercent(shareOf(slice.value)),
+            }))}
+          />
+        </div>
+      );
+    }
+  )
 );
 DonutChart.displayName = "DonutChart";

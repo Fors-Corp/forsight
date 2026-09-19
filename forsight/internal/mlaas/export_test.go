@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // base is a fixed instant well inside a minute, so bucket boundaries in

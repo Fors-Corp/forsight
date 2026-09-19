@@ -1,46 +1,48 @@
 # Forsight
 
-[![CI](https://github.com/marcfs31/forsight/actions/workflows/ci.yml/badge.svg)](https://github.com/marcfs31/forsight/actions/workflows/ci.yml)
-[![Storybook](https://img.shields.io/badge/Storybook-live-16C7B0)](https://marcfs31.github.io/forsight/)
+[![CI](https://github.com/Fors-Corp/forsight/actions/workflows/ci.yml/badge.svg)](https://github.com/Fors-Corp/forsight/actions/workflows/ci.yml)
+[![Storybook](https://img.shields.io/badge/Storybook-live-16C7B0)](https://fors-corp.github.io/forsight/)
 
 One repo, two independently versioned artifacts:
 
 | Artifact                          | What it is                                                               | Built by        | Versioned as          |
 | --------------------------------- | ------------------------------------------------------------------------ | --------------- | --------------------- |
-| [`@marcfs31/forsight`](#install)  | Observability design system (npm, GitHub Packages)                       | `npm run build` | Changesets → `vX.Y.Z` |
+| [`@fors-corp/forsight`](#install) | Observability design system (npm, GitHub Packages)                       | `npm run build` | Changesets → `vX.Y.Z` |
 | [`forsight/`](forsight/README.md) | One Go binary: collectors, in-memory store, HTTP API, embedded dashboard | `make build`    | `forsight-vX.Y.Z`     |
 
-**Forseer** (`forseer/`) is the AI/ML module compiled into the agent. It scores the stream; the dashboard renders those scores with the design-system components in [Storybook → Forseer](https://marcfs31.github.io/forsight/?path=/docs/forsight-forseer--docs).
+**Forseer** (`forseer/`) is the AI/ML module compiled into the agent. It scores the stream; the dashboard renders those scores with the design-system components in [Storybook → Forseer](https://fors-corp.github.io/forsight/?path=/docs/forsight-forseer--docs). See [`forseer/MODELS.md`](forseer/MODELS.md) for what a model is and how each one is scored.
 
-**[Browse the component library →](https://marcfs31.github.io/forsight/)** (Storybook, deployed from `main`)
+**[Browse the component library →](https://fors-corp.github.io/forsight/)** (Storybook, deployed from `main`)
 
-Published **v3.0.0**. The package build is Tailwind **v4**; a Tailwind v3 `tailwind-preset` is still exported for older consumers. React 18 and 19 · Next.js App Router, [RSC-ready](#using-with-nextjs) · ESM + CJS.
+The published version tracks [`CHANGELOG.md`](CHANGELOG.md) and the [npm package page](https://github.com/Fors-Corp/forsight/pkgs/npm/forsight) on GitHub Packages rather than a number pinned in this file — nothing stamps a version into the README at release time, so a hardcoded number here goes stale the moment a Changesets release runs. The package build is Tailwind **v4**; a Tailwind v3 `tailwind-preset` is still exported for older consumers. React 18 and 19 · Next.js App Router, [RSC-ready](#using-with-nextjs) · ESM + CJS.
 
-This package is the observability continuation of [`@marcfs31/fors-design-system`](https://github.com/marcfs31/fors-design-system): same tokens and base components, plus [data visualization](#data-visualization) (plain SVG, no charting library) and [observability](#observability) primitives. Import paths are `@marcfs31/forsight`.
+This package is the observability continuation of [`@marcfs31/fors-design-system`](https://github.com/Fors-Corp/fors-design-system): same tokens and base components, plus [data visualization](#data-visualization) (plain SVG, no charting library) and [observability](#observability) primitives. Import paths are `@fors-corp/forsight`.
 
 **Brand.** _Fors_ is Swedish/Norwegian for rapids — force, flow, clarity — and foresight is what an observability tool is for. Dark-first: near-black ink, Rapids Teal accent, Spark Amber secondary, Inter for UI, Space Grotesk for headings. Light theme included — see [Theming](#theming).
 
 ## Install
 
-Published to GitHub Packages under the `@marcfs31` scope. Add to the consuming repo's `.npmrc`:
+The package was published as `@marcfs31/forsight` through 4.2.0 and is `@fors-corp/forsight` from 5.0.0 onward, following the repository's move to the Fors-Corp organization. The old name is frozen at 4.2.0 and receives no further releases.
+
+Published to GitHub Packages under the `@fors-corp` scope. Add to the consuming repo's `.npmrc`:
 
 ```
-@marcfs31:registry=https://npm.pkg.github.com
+@fors-corp:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${NPM_TOKEN}
 ```
 
 `NPM_TOKEN` is a classic GitHub personal access token with `read:packages` scope — set it as an environment variable locally and in your deployment platform (e.g. a Vercel project environment variable). Then:
 
 ```bash
-npm install @marcfs31/forsight
+npm install @fors-corp/forsight
 ```
 
 ## Usage
 
 ```tsx
-import { Button, Card, CardHeader, CardTitle, CardContent } from "@marcfs31/forsight";
-import "@marcfs31/forsight/styles.css";
-import "@marcfs31/forsight/fonts.css"; // optional — see Fonts below
+import { Button, Card, CardHeader, CardTitle, CardContent } from "@fors-corp/forsight";
+import "@fors-corp/forsight/styles.css";
+import "@fors-corp/forsight/fonts.css"; // optional — see Fonts below
 
 function Example() {
   return (
@@ -58,15 +60,15 @@ function Example() {
 
 Package entries:
 
-| Import                               | What it is                                                                                                                                                                                                                                              |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@marcfs31/forsight`                 | The components. Every one is interactive (hooks / Radix), so the bundle ships a `"use client"` directive — usable directly inside a React Server Component tree with no wrapper.                                                                        |
-| `@marcfs31/forsight/theme`           | Server-safe utilities (`applyForsightTheme`, `forsightAntiFlashScript`, the raw palettes, `cn`). No `"use client"` — call these from a Server Component (e.g. a Next.js root layout).                                                                   |
-| `@marcfs31/forsight/chart`           | The pure chart maths and number formatters that back the chart components (`niceScale`, `linePath`, `arcPath`, `formatCompact`, and friends). No `"use client"` — call these from a Server Component to precompute marks or format a value server-side. |
-| `@marcfs31/forsight/styles.css`      | **Required.** Design tokens + compiled component styles. Tailwind's component/utility layers only (no Preflight reset, no network calls) — safe alongside an app that runs its own Tailwind base and its own CSP.                                       |
-| `@marcfs31/forsight/tailwind.css`    | Optional, Tailwind **v4** apps: `@theme` mapping so your own markup can use the token utilities (`bg-accent`, `text-fg-muted`, `rounded-md`, …). See [Tailwind](#tailwind).                                                                             |
-| `@marcfs31/forsight/tailwind-preset` | Optional, Tailwind **v3** apps: the same mapping as a preset for `tailwind.config`. See [Tailwind](#tailwind).                                                                                                                                          |
-| `@marcfs31/forsight/fonts.css`       | Optional: loads the brand faces from Google Fonts. See [Fonts](#fonts).                                                                                                                                                                                 |
+| Import                                | What it is                                                                                                                                                                                                                                              |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@fors-corp/forsight`                 | The components. Every one is interactive (hooks / Radix), so the bundle ships a `"use client"` directive — usable directly inside a React Server Component tree with no wrapper.                                                                        |
+| `@fors-corp/forsight/theme`           | Server-safe utilities (`applyForsightTheme`, `forsightAntiFlashScript`, the raw palettes, `cn`). No `"use client"` — call these from a Server Component (e.g. a Next.js root layout).                                                                   |
+| `@fors-corp/forsight/chart`           | The pure chart maths and number formatters that back the chart components (`niceScale`, `linePath`, `arcPath`, `formatCompact`, and friends). No `"use client"` — call these from a Server Component to precompute marks or format a value server-side. |
+| `@fors-corp/forsight/styles.css`      | **Required.** Design tokens + compiled component styles. Tailwind's component/utility layers only (no Preflight reset, no network calls) — safe alongside an app that runs its own Tailwind base and its own CSP.                                       |
+| `@fors-corp/forsight/tailwind.css`    | Optional, Tailwind **v4** apps: `@theme` mapping so your own markup can use the token utilities (`bg-accent`, `text-fg-muted`, `rounded-md`, …). See [Tailwind](#tailwind).                                                                             |
+| `@fors-corp/forsight/tailwind-preset` | Optional, Tailwind **v3** apps: the same mapping as a preset for `tailwind.config`. See [Tailwind](#tailwind).                                                                                                                                          |
+| `@fors-corp/forsight/fonts.css`       | Optional: loads the brand faces from Google Fonts. See [Fonts](#fonts).                                                                                                                                                                                 |
 
 Runtime dependencies (Radix primitives, `cmdk`, `react-day-picker`, `class-variance-authority`, `tailwind-merge`) are regular `dependencies` of the package and install with it; only `react` / `react-dom` (18 or 19) are peers you provide. Tailwind is **not** required to use the components — `styles.css` is precompiled.
 
@@ -78,13 +80,13 @@ The components are already styled by `styles.css`; you don't need Tailwind to us
 
 ```css
 @import "tailwindcss";
-@import "@marcfs31/forsight/tailwind.css";
+@import "@fors-corp/forsight/tailwind.css";
 ```
 
 **Tailwind v3** — in `tailwind.config.ts`:
 
 ```ts
-import forsightPreset from "@marcfs31/forsight/tailwind-preset";
+import forsightPreset from "@fors-corp/forsight/tailwind-preset";
 
 export default {
   presets: [forsightPreset],
@@ -98,7 +100,7 @@ Either way you then get `bg-ink-surface`, `text-fg-secondary`, `border-ink-borde
 
 `styles.css` references the brand families (`Inter`, `Space Grotesk`) by name but doesn't load them — nothing in the shipped CSS makes a network call. Provide the faces yourself:
 
-- **Quickest**: `import "@marcfs31/forsight/fonts.css"` — loads both from Google Fonts.
+- **Quickest**: `import "@fors-corp/forsight/fonts.css"` — loads both from Google Fonts.
 - **Next.js / production**: use `next/font` and point the tokens at it (see [Using with Next.js](#using-with-nextjs)).
 - **Self-hosted**: set `--forsight-font-sans` / `--forsight-font-heading` on `:root` to your own stack — every component reads the font through those two CSS variables.
 
@@ -109,7 +111,7 @@ Without any of the above, text falls back to `system-ui` — never invisible, ju
 Dark is the default — nothing to configure. For an app that also needs light mode, import the theme utilities from the **server-safe entry** and own the switcher/persistence yourself:
 
 ```tsx
-import { applyForsightTheme, forsightAntiFlashScript } from "@marcfs31/forsight/theme";
+import { applyForsightTheme, forsightAntiFlashScript } from "@fors-corp/forsight/theme";
 
 // In your root layout's <head>, before hydration:
 <script dangerouslySetInnerHTML={{ __html: forsightAntiFlashScript() }} />;
@@ -124,8 +126,8 @@ App Router, Server Components, `next/font` — all supported.
 
 ```tsx
 // app/layout.tsx (Server Component — no "use client" needed here)
-import "@marcfs31/forsight/styles.css";
-import { forsightAntiFlashScript } from "@marcfs31/forsight/theme";
+import "@fors-corp/forsight/styles.css";
+import { forsightAntiFlashScript } from "@fors-corp/forsight/theme";
 import { Inter, Space_Grotesk } from "next/font/google";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -157,14 +159,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 Then use components anywhere — in a Server Component tree directly, or in your own `"use client"` files:
 
 ```tsx
-import { Button } from "@marcfs31/forsight";
+import { Button } from "@fors-corp/forsight";
 
 export default function Page() {
   return <Button>Deploy</Button>; // no "use client" needed in this file
 }
 ```
 
-Don't add `import "@marcfs31/forsight/fonts.css"` alongside `next/font` — that would load the same families twice, once render-blocking from Google and once self-hosted.
+Don't add `import "@fors-corp/forsight/fonts.css"` alongside `next/font` — that would load the same families twice, once render-blocking from Google and once self-hosted.
 
 ## Agent
 
@@ -213,7 +215,7 @@ git push --follow-tags
 
 ### Base
 
-Typography: `Heading`, `Text`, `Label`. Forms: `Button` (built-in `loading`), `Input`, `Textarea`, `Checkbox`, `RadioGroup`, `Switch`, `Toggle`/`ToggleGroup`, `Select`, `Combobox`, `MultiSelect`, `Slider`, `Calendar`/`DatePicker`. Overlays: `Dialog`, `AlertDialog`, `Drawer`, `DropdownMenu`, `Popover`, `HoverCard`, `Tooltip`, `Toast`/`Toaster`, `Command`/`CommandDialog`. Feedback & data: `Alert`, `Badge`, `Avatar`/`AvatarGroup`, `Spinner`, `Progress`, `Skeleton`, `Stepper`, `Card`, `Table`, `Tabs`, `Accordion`, `Collapsible`, `Separator`, `EmptyState`, `JSONViewer`, `CodeBlock`, `CopyButton`, `Kbd`, `ScrollArea`. Navigation: `Breadcrumb`, `Pagination`, `FilterBar`, `Sidebar`/`AppShell`. Every component supports `dir="rtl"`.
+Typography: `Heading`, `Text`, `Label`. Forms: `Button` (built-in `loading`), `Input`, `Textarea`, `Checkbox`, `RadioGroup`, `Switch`, `Toggle`/`ToggleGroup`, `Select`, `Combobox`, `MultiSelect`, `Slider`, `Calendar`/`DatePicker`. Overlays: `Dialog`, `AlertDialog`, `Drawer`, `DropdownMenu`, `Popover`, `HoverCard`, `Tooltip`, `Toast`/`Toaster`, `Command`/`CommandDialog`. Feedback & data: `Alert`, `Badge`, `Avatar`/`AvatarGroup`, `Spinner`, `Progress`, `Skeleton`, `Stepper`, `Card`, `Table`, `Tabs`, `Accordion`, `Collapsible`, `Separator`, `EmptyState`, `JSONViewer`, `CodeBlock`, `CopyButton`, `Kbd`, `ScrollArea`. Navigation: `Breadcrumb`, `Pagination`, `FilterBar`, `Sidebar`/`AppShell`. Every component supports `dir="rtl"`, with one documented exception: `Toaster`'s swipe-to-dismiss gesture and slide animation are a physical direction, not a text-direction concern, so they stay fixed regardless of `dir` (see the comment atop `Toast.tsx`).
 
 Overlay/select components sit on [Radix UI](https://www.radix-ui.com/) for focus and keyboard behavior, then this repo's token classes. Overlay motion is `tailwindcss-animate` on Radix `data-state`/`data-side`, and collapses under `prefers-reduced-motion`.
 

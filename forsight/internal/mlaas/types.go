@@ -1,5 +1,5 @@
 // Package mlaas connects the agent to a running mlaas — Marc's local
-// ML-as-a-Service (github.com/marcfs31/mlaas): one Go binary that trains,
+// ML-as-a-Service (github.com/Fors-Corp/mlaas): one Go binary that trains,
 // tunes, serves and retrains models behind an HTTP API with an X-API-Key.
 //
 // The division of labour with Forseer is deliberate. Forseer (../../forseer)

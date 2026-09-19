@@ -1,3 +1,3 @@
-module github.com/marcfs31/forsight/forseer
+module github.com/Fors-Corp/forsight/forseer
 
 go 1.27.1

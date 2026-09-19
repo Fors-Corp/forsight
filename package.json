@@ -1,6 +1,6 @@
 {
-  "name": "@marcfs31/forsight",
-  "version": "4.2.0",
+  "name": "@fors-corp/forsight",
+  "version": "5.0.0",
   "private": false,
   "description": "Marc Fors's observability design system — brand tokens, React components, and data-visualization + observability primitives.",
   "author": "Marc Fors <developer@marcfors.com>",
@@ -69,11 +69,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/marcfs31/forsight.git"
+    "url": "git+https://github.com/Fors-Corp/forsight.git"
   },
-  "homepage": "https://marcfs31.github.io/forsight/",
+  "homepage": "https://fors-corp.github.io/forsight/",
   "bugs": {
-    "url": "https://github.com/marcfs31/forsight/issues"
+    "url": "https://github.com/Fors-Corp/forsight/issues"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",
@@ -104,7 +104,7 @@
   },
   "size-limit": [
     {
-      "name": "JS bundle (import * from index.js, incl. Radix + cmdk + react-day-picker deps, brotli). Raised from 100 KB for the second component-library-expansion batch (MultiSelect, Toggle, HoverCard, CopyButton, CodeBlock, Stepper, and more to follow) — two more Radix deps (toggle, hover-card) plus the rest composed from existing primitives.",
+      "name": "JS bundle (import * from index.js, incl. Radix + cmdk + react-day-picker deps, brotli) — a REFERENCE size, not a per-component regression gate: it measures the full barrel import, so it has been raised (70 -> 85 -> 92 -> 100 -> 105 KB) every time the library grew a component, and every real consumer imports individual components (tree-shaken) rather than the barrel, so this number does not bound what ships to them. Watch it for an unexpectedly large jump, not for holding a fixed budget.",
       "path": "dist/index.js",
       "limit": "105 KB"
     },

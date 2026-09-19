@@ -1,8 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "../test-utils/axe";
+import * as chartLib from "../lib/chart";
 import { LineChart, pickLabelIndices } from "./LineChart";
+
+// Wraps (never replaces) niceScale so every existing assertion below still
+// exercises the real geometry — this only adds a call-count probe for the
+// memoization test at the bottom of the file.
+vi.mock("../lib/chart", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/chart")>();
+  return { ...actual, niceScale: vi.fn(actual.niceScale) };
+});
 
 const labels = ["12:00", "13:00", "14:00", "15:00"];
 const series = [
@@ -51,6 +60,25 @@ describe("LineChart", () => {
     renderChart();
     expect(screen.getByRole("rowheader", { name: "eu-west" })).toBeInTheDocument();
     expect(screen.getByRole("cell", { name: "no data" })).toBeInTheDocument();
+  });
+
+  it("lets a consumer translate the no-data label", async () => {
+    const user = userEvent.setup();
+    const { container } = renderChart({ noDataLabel: "sem dados" });
+
+    // Data table: the gap cell reads the override, not the English literal.
+    expect(screen.getByRole("cell", { name: "sem dados" })).toBeInTheDocument();
+    expect(screen.queryByRole("cell", { name: "no data" })).not.toBeInTheDocument();
+
+    // Cursor readout: focusing the gapped point (index 2, "14:00") announces
+    // the override too — three ArrowRights from an unfocused cursor land on
+    // it (index 0, then 1, then 2).
+    const plot = container.querySelector("[tabindex='0']") as HTMLElement;
+    plot.focus();
+    await user.keyboard("{ArrowRight}{ArrowRight}{ArrowRight}");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("14:00");
+    expect(status).toHaveTextContent("eu-west sem dados");
   });
 
   it("moves the cursor with the keyboard and announces the reading", async () => {
@@ -267,6 +295,32 @@ describe("LineChart", () => {
       area: true,
     });
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("does not recompute the scale on a re-render with unchanged series/labels", () => {
+    const niceScale = chartLib.niceScale as unknown as ReturnType<typeof vi.fn>;
+    niceScale.mockClear();
+
+    const { rerender } = renderChart();
+    const callsAfterMount = niceScale.mock.calls.length;
+    expect(callsAfterMount).toBeGreaterThan(0);
+
+    // Same `label`/`labels`/`series` references as the mount above — this is
+    // the shape of a parent re-rendering (a dashboard's 5s poll, a sibling's
+    // state change) without the chart's own data changing. The extent scan
+    // and niceScale it feeds must not run again.
+    rerender(<LineChart label="Requests per second" labels={labels} series={series} />);
+    expect(niceScale.mock.calls.length).toBe(callsAfterMount);
+
+    // A real data change (a new `series` reference/value) must still recompute.
+    rerender(
+      <LineChart
+        label="Requests per second"
+        labels={labels}
+        series={[{ name: "us-east", values: [500, 600, 700, 800] }]}
+      />
+    );
+    expect(niceScale.mock.calls.length).toBeGreaterThan(callsAfterMount);
   });
 });
 
