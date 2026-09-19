@@ -26,25 +26,28 @@ import (
 // somebody can hold an opinion about. "Three sigma" is not, unless they
 // already know the distribution, which is the thing nobody knows.
 //
-// The method is Robbins-Monro stochastic approximation, which is the whole
-// of the update rule:
+// A budget stated as a rate is a quantile: alert on one point in a thousand
+// is "alert above this series' 99.9th percentile of |z|", and page is the
+// 99.99th. So each threshold is one running quantile estimate, and the
+// estimator is the P² algorithm already in this package (p2.go) — five
+// markers, O(1) per point, no stored sample and no assumption about the
+// shape of the distribution.
 //
-//	t ← t · (1 + step · (exceeded ? 1 : 0 − target))
-//
-// A point above the threshold pushes it up by roughly step·t; every point
-// below nudges it down by step·t·target. Those balance exactly when the
-// threshold sits at the target quantile, so that is where it settles, with
-// four floats of state and no assumption about the shape of the
-// distribution.
-//
-// The update is multiplicative rather than additive, and the step does not
-// decay. Both were arrived at by watching it fail. An additive step has to
-// be chosen relative to a scale nobody knows in advance, and a decaying one
-// dies long before a threshold starting at 3 can walk out to the one-in-ten-
-// thousand tail — measured at 2.8% of points still alerting after forty
-// thousand samples, against a 0.1% budget. Moving by a fraction of the
-// current threshold converges at any magnitude, and a constant step means a
-// series that changes shape next month is re-learned rather than frozen.
+// It replaces a Robbins-Monro stochastic approximation,
+// `t ← t · (1 + step · (exceeded − target))`, which is the textbook way to
+// chase a quantile and settles in the right place — eventually. Eventually
+// is the problem, and it is not a detail: with the constant step this model
+// used (0.02), every non-exceeding point pulls a threshold down by only
+// step·target of itself, which is 2e-6 for the page threshold. Starting at
+// criticalSigma, reaching the tail of an ordinary |N(0,1)| series takes on
+// the order of 10^5 points of pure downward drift, and measured on that data
+// the realised page rate was exactly zero at 2 000 points, 0.00003% at
+// 10 000 against a 0.01% budget. seasonalKey gives each hour of the day its
+// own key, so an hourly key collects about 360 points a day: the page
+// threshold would have converged some time in the following year. The P²
+// estimator converges in the number of points the tail itself requires and
+// no more — and that number, not a constant somebody picked, is what
+// readiness is gated on below.
 const (
 	// One alert per thousand points, and one page per ten thousand. At a
 	// ten-second collect interval that is about nine warnings and one
@@ -61,29 +64,76 @@ const (
 	thresholdFloor   = 2.0
 	thresholdCeiling = 12.0
 
-	// Fraction of the current threshold each update moves it by. Small
-	// enough that the settled threshold jitters by a fraction of a sigma,
-	// large enough to walk from 3 to the far tail in a couple of thousand
-	// points.
-	thresholdStep = 0.02
+	// How many points in the tail a threshold needs before it is used
+	// instead of its constant. A quantile at tail probability q is estimated
+	// from the points that land beyond it, and a series has seen about n·q
+	// of those: no method — P², Robbins-Monro or an exact sort — can know
+	// where the one-in-ten-thousand point of a distribution is from a sample
+	// that contains none.
+	//
+	// Two expected exceedances is where the measurement says the estimate
+	// becomes worth more than the constant it replaces. On |N(0,1)|, the P²
+	// estimate at that point is 3.25 against a true 0.999 quantile of 3.29
+	// and 3.86 against a true 0.9999 of 3.89, which realises 1.15x the
+	// budgeted alert rate — and tightens from there: within 3% of budget by
+	// 50 000 points. Anything earlier is measurably worse: at one expected
+	// exceedance the estimate is 3.06/3.68 and realises 2.2x the budget.
+	thresholdReadyExceedances = 2
 
-	// Below this many points a series keeps the fixed sigma thresholds. A
-	// budget of one in a thousand cannot be estimated from a hundred
-	// points, and claiming otherwise would be worse than the constant. It
-	// is also roughly where the update above has settled, so "ready" means
-	// converged rather than merely started.
-	thresholdMinSamples = 2000
+	// Which, per threshold, is the sample count each of them waits for. They
+	// differ by the factor their budgets differ by, and that is the honest
+	// shape of the answer: a warning threshold is ready ten times sooner
+	// than a page threshold because it is asking a question ten times
+	// easier. At a ten-second interval and seasonalKey's per-hour buckets
+	// (about 360 points a day per key) that is roughly six days for the
+	// warning and eight weeks for the page; on a series that is not
+	// hour-split, sixteen hours and a week. Snapshot/Restore carries both
+	// across restarts so the wait is paid once, not once per restart.
+	thresholdWarnMinSamples     = int(thresholdReadyExceedances / targetWarnRate)
+	thresholdCriticalMinSamples = int(thresholdReadyExceedances / targetCriticalRate)
 )
 
-// seriesThreshold is one series' learned pair, plus what it has actually
-// been doing — which is the only honest way to report a calibration that
-// has no labels to be scored against.
+// seriesThreshold is one series' pair of running quantile estimates, plus
+// what its thresholds have actually been doing — which is the only honest
+// way to report a calibration that has no labels to be scored against.
 type seriesThreshold struct {
-	warn     float64
-	critical float64
+	warn     *p2Estimator
+	critical *p2Estimator
 	n        int
 	warnHits int
 	critHits int
+}
+
+func newSeriesThreshold() *seriesThreshold {
+	return &seriesThreshold{
+		warn:     newP2Estimator(1 - targetWarnRate),
+		critical: newP2Estimator(1 - targetCriticalRate),
+	}
+}
+
+// thresholds reports the pair to use for the next point: each estimate once
+// its own estimator has the samples that quantile needs, and the fixed sigma
+// constant until then. ready means both are learned — a caller that only
+// wants to know whether this series still leans on the constants.
+func (s *seriesThreshold) thresholds() (warn, critical float64, ready bool) {
+	warn, critical = float64(warningSigma), float64(criticalSigma)
+	if s.n >= thresholdWarnMinSamples {
+		if v, ok := s.warn.value(); ok {
+			warn = clampThreshold(v)
+		}
+	}
+	if s.n >= thresholdCriticalMinSamples {
+		if v, ok := s.critical.value(); ok {
+			critical = clampThreshold(v)
+		}
+	}
+	// A page that is easier to reach than a warning is nonsense, and a
+	// mid-warm-up series produces one honestly: a wild series' learned
+	// warning can pass the fixed 5σ page it has not yet replaced.
+	if critical < warn {
+		critical = warn
+	}
+	return warn, critical, s.n >= thresholdCriticalMinSamples
 }
 
 type thresholdModel struct {
@@ -95,9 +145,9 @@ func newThresholdModel() *thresholdModel {
 	return &thresholdModel{series: make(map[string]*seriesThreshold)}
 }
 
-// Observe records one z-score for a series and moves its thresholds toward
-// the budget. It returns the pair to use for this point, and false when the
-// series has not been seen enough for them to beat the constants.
+// Observe records one z-score for a series and folds it into that series'
+// quantile estimates. It returns the pair to use for this point, and false
+// while either of them is still the constant.
 // maxThresholdKeys is this map's backstop, in the unit this map is actually
 // keyed by: seasonalKey, so one real series is up to 24 of them. It is
 // maxSeries real series' worth, which is the most the Detector can ever ask
@@ -116,35 +166,24 @@ func (m *thresholdModel) Observe(key string, z float64) (warn, critical float64,
 		if len(m.series) >= maxThresholdKeys {
 			return warningSigma, criticalSigma, false
 		}
-		// Start where the constants are, so the first thousand points
-		// behave exactly as they did before and the model only ever moves
-		// away from that deliberately.
-		s = &seriesThreshold{warn: warningSigma, critical: criticalSigma}
+		s = newSeriesThreshold()
 		m.series[key] = s
 	}
 
-	// Grade before moving, so the counts describe the threshold that was
-	// actually in force when the point arrived.
-	if z >= s.warn {
+	// Grade against the thresholds that were in force when the point
+	// arrived, before it moves them, so the counts describe what the
+	// operator was actually alerted on.
+	warn, critical, ready = s.thresholds()
+	if z >= warn {
 		s.warnHits++
 	}
-	if z >= s.critical {
+	if z >= critical {
 		s.critHits++
 	}
 	s.n++
-
-	s.warn = clampThreshold(s.warn * (1 + thresholdStep*(indicator(z >= s.warn)-targetWarnRate)))
-	s.critical = clampThreshold(s.critical * (1 + thresholdStep*(indicator(z >= s.critical)-targetCriticalRate)))
-	// A critical alert that is easier to reach than a warning is nonsense,
-	// and finite samples can briefly produce one.
-	if s.critical < s.warn {
-		s.critical = s.warn
-	}
-
-	if s.n < thresholdMinSamples {
-		return warningSigma, criticalSigma, false
-	}
-	return s.warn, s.critical, true
+	s.warn.observe(z)
+	s.critical.observe(z)
+	return warn, critical, ready
 }
 
 func indicator(b bool) float64 {
@@ -163,19 +202,27 @@ func (m *thresholdModel) Card() Card {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	ready, points, warnHits := 0, 0, 0
+	warnReady, critReady, points, warnHits, critHits := 0, 0, 0, 0, 0
 	for _, s := range m.series {
 		points += s.n
 		warnHits += s.warnHits
-		if s.n >= thresholdMinSamples {
-			ready++
+		critHits += s.critHits
+		if s.n >= thresholdWarnMinSamples {
+			warnReady++
+		}
+		if s.n >= thresholdCriticalMinSamples {
+			critReady++
 		}
 	}
 
 	detail := "no series has enough history yet"
 	if points > 0 {
-		detail = fmt.Sprintf("warning on %.3f%% of points against a %.3f%% budget, %d of %d series calibrated",
-			100*float64(warnHits)/float64(points), 100*targetWarnRate, ready, len(m.series))
+		detail = fmt.Sprintf(
+			"warning on %.3f%% of points against a %.3f%% budget and paging on %.4f%% against %.4f%%; "+
+				"of %d series, %d have a learned warning threshold and %d a learned page threshold",
+			100*float64(warnHits)/float64(points), 100*targetWarnRate,
+			100*float64(critHits)/float64(points), 100*targetCriticalRate,
+			len(m.series), warnReady, critReady)
 	}
 
 	return Card{
@@ -183,8 +230,12 @@ func (m *thresholdModel) Card() Card {
 		Job:      "Decide how far out of line one series has to go before a human should hear about it.",
 		Reads:    []string{"the z-score of one series"},
 		Fallback: "a fixed 3σ warning and 5σ critical, shared by every series",
-		Ready:    ready > 0,
-		Trained:  points,
+		// A series is doing better than the fallback as soon as its warning
+		// threshold is its own rather than everyone's; the page threshold
+		// takes ten times as long, and the count for it is in Detail rather
+		// than hidden behind one boolean.
+		Ready:   warnReady > 0,
+		Trained: points,
 		// A calibration has no labels to be right or wrong about, so there
 		// is no accuracy to report. What it does have is a budget, and
 		// whether it is hitting it — which is in Detail.
@@ -195,25 +246,27 @@ func (m *thresholdModel) Card() Card {
 }
 
 // thresholdSnapshotVersion is this model's own schema version — see
-// severitySnapshotVersion's comment for what that guards against.
-const thresholdSnapshotVersion = 1
+// severitySnapshotVersion's comment for what that guards against. Version 2
+// carries the P² markers behind each threshold; a version 1 payload held a
+// Robbins-Monro warn/critical pair, which describes no state this model
+// keeps any more, so it is discarded rather than half-read.
+const thresholdSnapshotVersion = 2
 
-// thresholdSnapshot is Snapshot's JSON payload: every series' learned
-// warn/critical pair and the counts behind it.
+// thresholdSnapshot is Snapshot's JSON payload: every series' two quantile
+// estimators and the counts behind them.
 type thresholdSnapshot struct {
 	Version int                                `json:"version"`
 	Series  map[string]seriesThresholdSnapshot `json:"series"`
 }
 
 type seriesThresholdSnapshot struct {
-	Warn     float64 `json:"warn"`
-	Critical float64 `json:"critical"`
-	N        int     `json:"n"`
-	WarnHits int     `json:"warnHits"`
-	CritHits int     `json:"critHits"`
+	Warn     p2EstimatorSnapshot `json:"warn"`
+	Critical p2EstimatorSnapshot `json:"critical"`
+	N        int                 `json:"n"`
+	WarnHits int                 `json:"warnHits"`
+	CritHits int                 `json:"critHits"`
 }
 
-// Snapshot implements Model.
 // Forget drops the learned thresholds for a set of keys. The Detector passes
 // every hour bucket of a series it is evicting, so threshold state cannot
 // outlive the series it describes and slowly fill this map on its own.
@@ -225,12 +278,19 @@ func (m *thresholdModel) Forget(keys ...string) {
 	}
 }
 
+// Snapshot implements Model.
 func (m *thresholdModel) Snapshot() ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	snap := thresholdSnapshot{Version: thresholdSnapshotVersion, Series: make(map[string]seriesThresholdSnapshot, len(m.series))}
 	for key, s := range m.series {
-		snap.Series[key] = seriesThresholdSnapshot{Warn: s.warn, Critical: s.critical, N: s.n, WarnHits: s.warnHits, CritHits: s.critHits}
+		snap.Series[key] = seriesThresholdSnapshot{
+			Warn:     snapshotP2(s.warn),
+			Critical: snapshotP2(s.critical),
+			N:        s.n,
+			WarnHits: s.warnHits,
+			CritHits: s.critHits,
+		}
 	}
 	return json.Marshal(snap)
 }
@@ -238,14 +298,16 @@ func (m *thresholdModel) Snapshot() ([]byte, error) {
 // Restore implements Model. Unlike severity's or paging's, there is no
 // prequential grading window here to reset: a calibration has no labels to
 // grade against (see Card), so every field this model holds is learned
-// state, and every field comes back — n included. That is deliberate, and
-// it is the specific problem this roadmap item names for this model:
-// thresholdMinSamples (2000) gates readiness purely on how many points a
-// series has seen, with nothing to re-earn against, so restoring n lets an
-// already-calibrated series stay calibrated across a restart instead of
-// re-walking the 2000-point Robbins-Monro climb from warningSigma/
-// criticalSigma. Bounded the same way Observe bounds it live: a snapshot
-// with more than maxSeries entries is truncated on the way in.
+// state, and every field comes back — n included. That is deliberate, and it
+// is what makes readiness affordable at all: a page threshold needs
+// thresholdCriticalMinSamples points, which is weeks of a real series, and
+// re-earning them from zero on every restart would mean an agent that is
+// restarted weekly never learns one. Bounded the same way Observe bounds it
+// live: an oversized snapshot is truncated on the way in.
+//
+// A series whose estimators do not come back as something P² could have
+// produced is dropped, not repaired: see restoreP2Checked for why a
+// plausible-looking repair is worse than starting that one series over.
 func (m *thresholdModel) Restore(data []byte) error {
 	var snap thresholdSnapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
@@ -259,7 +321,18 @@ func (m *thresholdModel) Restore(data []byte) error {
 		if len(series) >= maxSeries {
 			break
 		}
-		series[key] = &seriesThreshold{warn: s.Warn, critical: s.Critical, n: s.N, warnHits: s.WarnHits, critHits: s.CritHits}
+		warn, ok := restoreP2Checked(s.Warn, 1-targetWarnRate)
+		if !ok {
+			continue
+		}
+		critical, ok := restoreP2Checked(s.Critical, 1-targetCriticalRate)
+		if !ok {
+			continue
+		}
+		if s.N < 0 || s.WarnHits < 0 || s.CritHits < 0 {
+			continue
+		}
+		series[key] = &seriesThreshold{warn: warn, critical: critical, n: s.N, warnHits: s.WarnHits, critHits: s.CritHits}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
