@@ -67,15 +67,13 @@ const (
 	// describes rejecting.)
 
 	// The projection is reported as a range, widened by the uncertainty in
-	// the trend. A single number would claim a precision that a
-	// two-parameter model fitted online does not have.
+	// the forecast it is derived from. A single number would claim a
+	// precision that a two-parameter model fitted online does not have.
 	//
-	// The width is in standard errors of the trend, which is not the same
-	// as the per-step prediction error and was originally confused with it.
-	// Per-step noise does not shrink however long the model runs; the
-	// estimate of the trend does, because smoothing averages that noise
-	// away. Using the former made the band far too wide and withheld
-	// projections from series with a perfectly clear trend.
+	// The width is in standard deviations of the h-step forecast
+	// distribution, so two of them is the usual ~95% interval for normal
+	// errors. Which h matters: see forecastVarianceRatio, and
+	// exhaustedLocked for the horizon it is evaluated at.
 	forecastBandWidth = 2.0
 
 	// Projections beyond this are reported as "not on course" rather than
@@ -88,14 +86,21 @@ const (
 type burnForecast struct {
 	mu sync.Mutex
 
-	level   float64
-	trend   float64
-	n       int
-	last    float64
-	lastAt  time.Time
-	tick    float64 // mean seconds between observations
-	absErr  float64 // running mean absolute one-step error, Holt
-	naiveAE float64 // ... and for persistence
+	level  float64
+	trend  float64
+	n      int
+	last   float64
+	lastAt time.Time
+	tick   float64 // mean seconds between observations
+
+	// The one-step error terms, as running mean SQUARES rather than mean
+	// absolute values. The interval needs a variance, and a mean absolute
+	// error is not one: for normal errors E|e| = sigma·sqrt(2/pi), about
+	// 0.8·sigma, so reading a MAE as a sigma understates the spread by a
+	// fifth before anything else happens. Persistence's term is kept on
+	// the same scale as Holt's so the two stay comparable.
+	sqErr      float64 // running mean squared one-step error, Holt
+	naiveSqErr float64 // ... and for persistence
 
 	// The one-step-ahead predictions made last time, waiting to be graded.
 	predicted      float64
@@ -126,11 +131,11 @@ func (f *burnForecast) Observe(consumed float64, at time.Time) {
 	// Grade the predictions made last time, before anything learns from
 	// this observation.
 	if f.havePrediction {
-		holtErr := math.Abs(consumed - f.predicted)
-		naiveErr := math.Abs(consumed - f.naivePredicted)
-		f.gradeLocked(holtErr < naiveErr)
-		f.absErr = ewma(f.absErr, holtErr, f.n)
-		f.naiveAE = ewma(f.naiveAE, naiveErr, f.n)
+		holtErr := consumed - f.predicted
+		naiveErr := consumed - f.naivePredicted
+		f.gradeLocked(math.Abs(holtErr) < math.Abs(naiveErr))
+		f.sqErr = ewma(f.sqErr, holtErr*holtErr, f.n)
+		f.naiveSqErr = ewma(f.naiveSqErr, naiveErr*naiveErr, f.n)
 	}
 
 	switch f.n {
@@ -189,13 +194,50 @@ func (f *burnForecast) exhaustedLocked() (soonest, latest time.Duration, ok bool
 		return 0, 0, true
 	}
 
+	// A budget that is not rising has no exhaustion to project, and the
+	// horizon below is remaining/trend, which needs a positive trend to mean
+	// anything. This used to fall out of the significance test further down,
+	// which it no longer can: that test is now evaluated AT the horizon.
+	if f.trend <= 0 {
+		return 0, 0, false
+	}
+
+	// The interval has to be evaluated at some horizon, and the only horizon
+	// this model is asked about is the one the projection is about: h, the
+	// number of observations at which the point forecast level + h·trend
+	// reaches 100%. Evaluating the band anywhere else would answer a
+	// question nobody asked — a band sized for one step ahead says nothing
+	// about a crossing sixty steps away.
+	steps := remaining / f.trend
+	horizonSec := forecastHorizon.Seconds()
+	if math.IsNaN(steps) || math.IsInf(steps, 0) || steps*f.tick > 2*horizonSec {
+		// Nothing this far out can survive to be reported, so there is no
+		// reason to compute a band for it: the gate below requires the band
+		// in trend units to be smaller than the trend itself, which bounds
+		// the fast edge at twice the trend, which bounds the soonest
+		// crossing at half of h. Bailing here also keeps the cubic inside
+		// forecastVarianceRatio away from numbers float64 cannot square.
+		return 0, 0, false
+	}
+
 	// Requiring the slow edge to still be rising is the significance test:
-	// a trend smaller than the uncertainty in its own estimate is
-	// indistinguishable from noise, and projecting from it would put a
-	// number on the dashboard that the next few readings would contradict.
-	band := forecastBandWidth * f.trendStdErrLocked()
-	fast := f.trend + band
-	slow := f.trend - band
+	// a trend smaller than the uncertainty the model's own errors imply over
+	// the distance being projected is indistinguishable from noise, and
+	// projecting from it would put a number on the dashboard that the next
+	// few readings would contradict.
+	//
+	// The band comes out in percentage points at h; dividing by h turns it
+	// into the per-observation trend uncertainty the two edges need, which
+	// is the same as reading the interval off the straight line through
+	// (0, level) and the band's edge at h. That is a chord of a curve that
+	// widens faster than linearly, so the fast edge is the conservative one
+	// of the two available approximations — it crosses 100% later than a
+	// band frozen at its width at h would, and the true crossing is later
+	// still.
+	band := forecastBandWidth * math.Sqrt(f.sqErr*forecastVarianceRatio(steps))
+	trendStdErr := band / steps
+	fast := f.trend + trendStdErr
+	slow := f.trend - trendStdErr
 	if slow <= 0 {
 		return 0, 0, false
 	}
@@ -218,7 +260,6 @@ func (f *burnForecast) exhaustedLocked() (soonest, latest time.Duration, ok bool
 	//
 	// In float seconds there is no representable-range cliff: an overflow is
 	// +Inf, and every comparison below behaves.
-	horizonSec := forecastHorizon.Seconds()
 	soonestSec := remaining / fast * f.tick
 	latestSec := remaining / slow * f.tick
 	if math.IsNaN(soonestSec) || math.IsInf(soonestSec, 0) || soonestSec > horizonSec {
@@ -247,13 +288,49 @@ func (f *burnForecast) readyLocked() bool {
 	return f.n >= forecastMinObservations && f.tick > 0
 }
 
-// trendStdErrLocked estimates how uncertain the trend component is, from
-// the one-step error and the trend smoothing factor. For exponential
-// smoothing the trend's variance settles at beta/(2-beta) of the
-// observation variance, so a slow beta buys a trend that is much steadier
-// than the series it is fitted to — which is the whole reason beta is slow.
-func (f *burnForecast) trendStdErrLocked() float64 {
-	return f.absErr * math.Sqrt(holtBeta/(2-holtBeta))
+// forecastVarianceRatio is the variance of Holt's h-step-ahead forecast
+// error, in units of the one-step error variance:
+//
+//	1 + Σ_{j=1}^{h-1} (α + αβj)²
+//
+// which is the standard ETS(A,A,N) result, and it is worth being explicit
+// about where it comes from, because this function replaces one that used
+// β/(2−β) instead — the steady-state variance of an EWMA of the
+// OBSERVATIONS, applied to a quantity that is not one.
+//
+// Write Holt in error-correction form. With e_t the one-step error,
+//
+//	l_t = l_{t-1} + b_{t-1} + α·e_t
+//	b_t = b_{t-1} + αβ·e_t
+//
+// so the trend is a random walk in the errors: every shock is kept in full,
+// forever, and there is no stationary variance for β/(2−β) to be a fraction
+// of. (The old constant also had no α in it at all, which is the giveaway —
+// the trend cannot move without the level moving first.) Projecting h steps
+// accumulates every shock from here to there: the level carries α of each,
+// the trend αβ of each, and a shock j steps before the target has had j
+// steps for its share of the trend to be applied to the level. Hence the
+// α + αβj inside the sum, and the leading 1 for the observation's own noise
+// at the target.
+//
+// The sum is closed-form — Σj = m(m+1)/2 and Σj² = m(m+1)(2m+1)/6 for
+// m = h−1 — which matters because h here is a projection horizon and can
+// run to hundreds of thousands of observations before the caller's own
+// guard rejects it. Looping would be a stall, not a cost.
+//
+// h is a real number rather than an integer: the horizon it is called with
+// is remaining/trend, which lands between observations. The polynomial is
+// the natural extension, and below one step it is pinned at 1 — a forecast
+// no further out than the next reading is worth exactly one observation's
+// noise, not less.
+func forecastVarianceRatio(h float64) float64 {
+	m := h - 1
+	if m <= 0 {
+		return 1
+	}
+	sumJ := m * (m + 1) / 2
+	sumJSq := m * (m + 1) * (2*m + 1) / 6
+	return 1 + holtAlpha*holtAlpha*(m+2*holtBeta*sumJ+holtBeta*holtBeta*sumJSq)
 }
 
 func (f *burnForecast) gradeLocked(won bool) {
@@ -312,7 +389,17 @@ func (f *burnForecast) Card() Card {
 
 // forecastSnapshotVersion is this model's own schema version — see
 // severitySnapshotVersion's comment for what that guards against.
-const forecastSnapshotVersion = 1
+//
+// Version 2 replaced the two mean-absolute error terms with mean squares.
+// A version 1 payload is discarded rather than read across, and that is the
+// point of the bump: the old field is numerically a different quantity, and
+// restoring it into sqErr would understate the interval by a fifth — worse,
+// a payload written before the rename carries no square at all, so the
+// model would come back with a zero band and publish projections with no
+// uncertainty on them until twenty fresh readings had refilled the term.
+// Coming back cold and saying nothing for a few minutes is the honest
+// failure; coming back warm and overconfident is not.
+const forecastSnapshotVersion = 2
 
 // forecastSnapshot is Snapshot's JSON payload: Holt's level and trend, the
 // observation count and cadence, and the two running error terms — the
@@ -326,8 +413,8 @@ type forecastSnapshot struct {
 	Last           float64   `json:"last"`
 	LastAt         time.Time `json:"lastAt"`
 	Tick           float64   `json:"tick"`
-	AbsErr         float64   `json:"absErr"`
-	NaiveAE        float64   `json:"naiveAE"`
+	SqErr          float64   `json:"sqErr"`
+	NaiveSqErr     float64   `json:"naiveSqErr"`
 	Predicted      float64   `json:"predicted"`
 	NaivePredicted float64   `json:"naivePredicted"`
 	HavePrediction bool      `json:"havePrediction"`
@@ -345,8 +432,8 @@ func (f *burnForecast) Snapshot() ([]byte, error) {
 		Last:           f.last,
 		LastAt:         f.lastAt,
 		Tick:           f.tick,
-		AbsErr:         f.absErr,
-		NaiveAE:        f.naiveAE,
+		SqErr:          f.sqErr,
+		NaiveSqErr:     f.naiveSqErr,
 		Predicted:      f.predicted,
 		NaivePredicted: f.naivePredicted,
 		HavePrediction: f.havePrediction,
@@ -379,7 +466,7 @@ func (f *burnForecast) Restore(data []byte) error {
 	defer f.mu.Unlock()
 	f.level, f.trend, f.n = snap.Level, snap.Trend, snap.N
 	f.last, f.lastAt, f.tick = snap.Last, snap.LastAt, snap.Tick
-	f.absErr, f.naiveAE = snap.AbsErr, snap.NaiveAE
+	f.sqErr, f.naiveSqErr = snap.SqErr, snap.NaiveSqErr
 	f.predicted, f.naivePredicted, f.havePrediction = snap.Predicted, snap.NaivePredicted, snap.HavePrediction
 	return nil
 }
