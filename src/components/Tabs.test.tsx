@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import * as React from "react";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { KeyboardEvent } from "react";
 import { axe } from "../test-utils/axe";
 import { Tabs } from "./Tabs";
 
@@ -71,5 +73,167 @@ describe("Tabs", () => {
   it("has no accessibility violations", async () => {
     const { container } = render(<ExampleTabs />);
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("moves and activates backward with ArrowLeft, wrapping past the first trigger", async () => {
+    render(<ExampleTabs />);
+    const user = userEvent.setup();
+    await user.tab(); // focus the active (Overview) trigger
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveFocus();
+
+    // From the first trigger, ArrowLeft wraps backward to the last
+    // *enabled* one — skipping the disabled "Danger" trigger — and
+    // activates it, the same as ArrowRight does going forward.
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveFocus();
+    expect(screen.getByText("Settings content")).toBeInTheDocument();
+  });
+
+  it("ignores keys outside its navigation set", async () => {
+    render(<ExampleTabs />);
+    const user = userEvent.setup();
+    await user.tab();
+    const overviewTab = screen.getByRole("tab", { name: "Overview" });
+    expect(overviewTab).toHaveFocus();
+
+    await user.keyboard("a");
+    expect(overviewTab).toHaveFocus();
+    expect(screen.getByText("Overview content")).toBeInTheDocument();
+  });
+
+  it("jumps to the first trigger with Home", async () => {
+    render(<ExampleTabs />);
+    const user = userEvent.setup();
+    await user.tab();
+    await user.keyboard("{ArrowRight}"); // move focus off the first trigger
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveFocus();
+
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveFocus();
+    expect(screen.getByText("Overview content")).toBeInTheDocument();
+  });
+
+  it("switches the arrow-key axis to ArrowDown/ArrowUp when orientation is vertical", async () => {
+    render(
+      <Tabs.Root defaultValue="overview" orientation="vertical">
+        <Tabs.List>
+          <Tabs.Trigger value="overview">Overview</Tabs.Trigger>
+          <Tabs.Trigger value="settings">Settings</Tabs.Trigger>
+        </Tabs.List>
+        <Tabs.Panel value="overview">Overview content</Tabs.Panel>
+        <Tabs.Panel value="settings">Settings content</Tabs.Panel>
+      </Tabs.Root>
+    );
+    expect(screen.getByRole("tablist")).toHaveAttribute("aria-orientation", "vertical");
+
+    const user = userEvent.setup();
+    await user.tab();
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveFocus();
+
+    // ArrowRight/Left do nothing on a vertical tablist — only Down/Up do.
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveFocus();
+
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveFocus();
+    expect(screen.getByText("Settings content")).toBeInTheDocument();
+
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveFocus();
+  });
+
+  it("defers to a caller's onKeyDown when it already called preventDefault", async () => {
+    const onKeyDown = vi.fn((event: KeyboardEvent<HTMLDivElement>) => event.preventDefault());
+    render(
+      <Tabs.Root defaultValue="overview">
+        <Tabs.List onKeyDown={onKeyDown}>
+          <Tabs.Trigger value="overview">Overview</Tabs.Trigger>
+          <Tabs.Trigger value="settings">Settings</Tabs.Trigger>
+        </Tabs.List>
+        <Tabs.Panel value="overview">Overview content</Tabs.Panel>
+        <Tabs.Panel value="settings">Settings content</Tabs.Panel>
+      </Tabs.Root>
+    );
+    const user = userEvent.setup();
+    await user.tab();
+    await user.keyboard("{ArrowRight}");
+
+    expect(onKeyDown).toHaveBeenCalled();
+    // Our own navigation bailed out because the caller's handler already
+    // consumed the key — selection never moved off the first trigger.
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveFocus();
+    expect(screen.getByText("Overview content")).toBeInTheDocument();
+  });
+
+  it("does nothing when the tablist has no triggers to navigate between", () => {
+    render(
+      <Tabs.Root defaultValue="overview">
+        <Tabs.List />
+        <Tabs.Panel value="overview">Overview content</Tabs.Panel>
+      </Tabs.Root>
+    );
+    const tablist = screen.getByRole("tablist");
+    expect(() => fireEvent.keyDown(tablist, { key: "ArrowRight" })).not.toThrow();
+  });
+
+  it("throws a clear error when a Tabs part is used outside Tabs.Root", () => {
+    // Swallow the expected React error-boundary console.error noise for this one assertion.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => render(<Tabs.Trigger value="overview">Overview</Tabs.Trigger>)).toThrow(
+      "Tabs.* components must be rendered inside <Tabs.Root>"
+    );
+    spy.mockRestore();
+  });
+
+  describe("ref forwarding", () => {
+    it("forwards a ref to Tabs.Root's DOM node", () => {
+      const ref = React.createRef<HTMLDivElement>();
+      render(
+        <Tabs.Root ref={ref} defaultValue="a">
+          <Tabs.Panel value="a">A</Tabs.Panel>
+        </Tabs.Root>
+      );
+      expect(ref.current).toBeInstanceOf(HTMLDivElement);
+    });
+
+    it("forwards a ref to Tabs.List's DOM node", () => {
+      const ref = React.createRef<HTMLDivElement>();
+      render(
+        <Tabs.Root defaultValue="a">
+          <Tabs.List ref={ref}>
+            <Tabs.Trigger value="a">A</Tabs.Trigger>
+          </Tabs.List>
+          <Tabs.Panel value="a">A</Tabs.Panel>
+        </Tabs.Root>
+      );
+      expect(ref.current).toBe(screen.getByRole("tablist"));
+    });
+
+    it("forwards a ref to Tabs.Trigger's DOM node", () => {
+      const ref = React.createRef<HTMLButtonElement>();
+      render(
+        <Tabs.Root defaultValue="a">
+          <Tabs.List>
+            <Tabs.Trigger ref={ref} value="a">
+              A
+            </Tabs.Trigger>
+          </Tabs.List>
+          <Tabs.Panel value="a">A</Tabs.Panel>
+        </Tabs.Root>
+      );
+      expect(ref.current).toBe(screen.getByRole("tab", { name: "A" }));
+    });
+
+    it("forwards a ref to Tabs.Panel's DOM node", () => {
+      const ref = React.createRef<HTMLDivElement>();
+      render(
+        <Tabs.Root defaultValue="a">
+          <Tabs.Panel ref={ref} value="a">
+            A
+          </Tabs.Panel>
+        </Tabs.Root>
+      );
+      expect(ref.current).toBe(screen.getByRole("tabpanel"));
+    });
   });
 });

@@ -39,4 +39,18 @@ describe("Card", () => {
     render(<CardTitle as="h2">Rapids plan</CardTitle>);
     expect(screen.getByText("Rapids plan").tagName).toBe("H2");
   });
+
+  it("adds hover styling when interactive is set", () => {
+    const { container } = render(<Card interactive>Clickable body</Card>);
+    const card = container.firstChild as HTMLElement;
+    expect(card).toHaveClass("cursor-pointer");
+    expect(card).toHaveClass("hover:border-accent");
+  });
+
+  it("omits hover styling by default", () => {
+    const { container } = render(<Card>Static body</Card>);
+    const card = container.firstChild as HTMLElement;
+    expect(card).not.toHaveClass("cursor-pointer");
+    expect(card).not.toHaveClass("hover:border-accent");
+  });
 });
