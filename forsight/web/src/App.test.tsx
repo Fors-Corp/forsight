@@ -164,8 +164,56 @@ function installFetchMock(handleQuery: (q: string) => QueryResult) {
   return fetchMock;
 }
 
+/**
+ * Same stubs as installFetchMock for every other endpoint App() polls, but
+ * /api/v1/forseer/query itself fails instead of resolving — a non-ok
+ * response (a 500) or the request failing outright (a dropped connection).
+ * Exercises the same submit flow as "Ask Forseer query box" below, for the
+ * failure queryForseer() now propagates instead of folding into
+ * `{ facets: [], matched: false }`.
+ *
+ * A 401 is the third cause queryForseer now rejects for (see api.test.tsx's
+ * own "queryForseer" describe block, which covers it directly), but it
+ * isn't exercised here: fetchWithAuth treats *any* 401, this endpoint
+ * included, as reason to open the shared access-token dialog (see "Auth
+ * token gate" below) — correct behavior, since a 401 on one poller usually
+ * means every poller sharing the same token is about to 401 too — and that
+ * dialog then hides the rest of the page, the query box included, from the
+ * accessibility tree, so there is nothing here for a "connectivity
+ * message" assertion to find.
+ */
+function installFetchMockWithFailingQuery(mode: "500" | "network-error") {
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.startsWith("/api/v1/forseer/query")) {
+      if (mode === "network-error") return Promise.reject(new TypeError("Failed to fetch"));
+      return Promise.resolve(new Response("", { status: 500 }));
+    }
+    if (url.startsWith("/api/v1/forseer/budget")) {
+      return jsonResponse({ label: "Error-log budget", consumed: 0 });
+    }
+    if (url.startsWith("/api/v1/forseer/summary")) {
+      return jsonResponse({ enabled: false, summary: "" });
+    }
+    return jsonResponse([]);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  // The auth-prompt open/rejected state (and the stored token) are
+  // module-level in api.ts, shared by every fetchWithAuth caller — see
+  // "Auth token gate" below, which discovered this first. A query-endpoint
+  // failure test in this describe block can trigger a real 401 same as
+  // any other endpoint, which opens that shared dialog; left open, it
+  // blocks every later test in this file from reaching its own content
+  // (Radix hides the rest of the tree from the accessibility tree behind
+  // an open modal). Reset unconditionally rather than only where a 401 is
+  // expected, since the failure is silent and cascades across unrelated
+  // tests when missed.
+  submitAuthToken("");
 });
 
 async function askForseer(user: ReturnType<typeof userEvent.setup>, phrase: string) {
@@ -261,6 +309,71 @@ describe("Ask Forseer query box", () => {
       "aria-invalid",
       "true"
     );
+  });
+
+  // Finding: queryForseer() used to fold any non-ok response into
+  // `{ facets: [], matched: false }` — the exact same shape a genuinely
+  // parsed-but-unrecognized phrase returns — so a 500 or a dropped
+  // connection showed the same "didn't recognize that phrase" message an
+  // actual typo would. (A 401 rejects the same way — see api.test.tsx's
+  // "queryForseer" describe block — but isn't exercised at this UI level;
+  // see installFetchMockWithFailingQuery's own comment for why.)
+  it.each([
+    ["a 500", "500" as const],
+    ["a dropped connection", "network-error" as const],
+  ])("shows a connectivity message, not the unrecognized-phrase one, for %s", async (_label, mode) => {
+    const fetchMock = installFetchMockWithFailingQuery(mode);
+    const user = userEvent.setup();
+    render(<App />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await askForseer(user, "critical");
+
+    expect(await screen.findByText(/couldn.t reach forsight/i)).toBeInTheDocument();
+    expect(screen.queryByText(/didn.t recognize that phrase/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Ask Forseer" })).toHaveAttribute(
+      "aria-invalid",
+      "true"
+    );
+  });
+
+  it("leaves existing filters untouched when the query endpoint fails outright", async () => {
+    // A successful "logs from checkout-api" first, then the endpoint
+    // starts failing — mirrors a connection dropping mid-session rather
+    // than being down from the start.
+    let failing = false;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/api/v1/forseer/query")) {
+        if (failing) return Promise.reject(new TypeError("Failed to fetch"));
+        return jsonResponse({
+          facets: [{ key: "source", label: "Source", value: "checkout-api" }],
+          matched: true,
+        });
+      }
+      if (url.startsWith("/api/v1/forseer/budget")) {
+        return jsonResponse({ label: "Error-log budget", consumed: 0 });
+      }
+      if (url.startsWith("/api/v1/forseer/summary")) {
+        return jsonResponse({ enabled: false, summary: "" });
+      }
+      return jsonResponse([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await askForseer(user, "logs from checkout-api");
+    await screen.findByRole("button", { name: "Remove Source: checkout-api filter" });
+
+    failing = true;
+    await askForseer(user, "critical");
+
+    expect(await screen.findByText(/couldn.t reach forsight/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove Source: checkout-api filter" })
+    ).toBeInTheDocument();
   });
 
   it("shows the supported-vocabulary hint by default, before any query is submitted", async () => {
@@ -963,5 +1076,163 @@ describe("Theme toggle", () => {
     const toggle = await screen.findByRole("switch", { name: "Light theme" });
     expect(toggle).toBeChecked();
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  });
+});
+
+/**
+ * The dashboard had no skip link anywhere — a keyboard or screen-reader
+ * user landing on the page had to tab through every sidebar nav item
+ * before reaching the page content. `App` now renders one as the very
+ * first thing in the tree, pointing at AppShellMain's own id.
+ */
+describe("Skip link", () => {
+  it("links to the main content landmark, and that landmark exists", async () => {
+    mockFetch(emptyEndpoints);
+    render(<App />);
+    await screen.findByRole("switch", { name: "Light theme" });
+
+    const skipLink = screen.getByRole("link", { name: "Skip to main content" });
+    expect(skipLink).toHaveAttribute("href", "#main-content");
+
+    const target = document.getElementById(skipLink.getAttribute("href")!.slice(1));
+    expect(target?.tagName).toBe("MAIN");
+  });
+});
+
+// A model missing driftThreshold — the live trigger ErrorBoundary exists
+// for. A separately-versioned mlaas can shallow-spread a response onto
+// this shape without every field the frontend's MlaasModel type promises;
+// driftThreshold is deliberately non-optional there (api.ts), unlike the
+// sibling pointer fields (driftMax, driftFeature) that already get an
+// undefined check, so Models.tsx's drift cell calls `.toFixed` on it
+// unconditionally and throws when it's missing (see Models.tsx's
+// MlaasModelsCard, the row's Drift <TableCell>).
+const brokenMlaasStatus = {
+  configured: true,
+  reachable: true,
+  models: [
+    {
+      name: "broken-model",
+      job: "Say where host CPU is heading.",
+      task: "forecast",
+      plugin: "holtwinters",
+      dataset: "forsight-host-cpu",
+      datasetRows: 1200,
+      reads: ["host.cpu.percent"],
+      state: "ready",
+      champion: 1,
+      metric: "rmse",
+      holdout: 1.2,
+      live: 1.3,
+      liveWindow: 40,
+      newLabels: 5,
+      driftMax: 0.1,
+      driftFeature: "host.cpu.percent",
+      // driftThreshold: intentionally absent.
+      activeJob: false,
+      predictionsLogged: 10,
+    },
+  ],
+  forecasts: [],
+  predictions: [],
+  jobs: [],
+};
+
+/**
+ * ErrorBoundary.tsx wraps each page's slot in App.tsx. Before it existed,
+ * main.tsx rendered `StrictMode > App` with nothing implementing
+ * `getDerivedStateFromError`, so an uncaught render error anywhere under a
+ * page unmounted the whole React root and left a blank tab — no heading,
+ * no sidebar, nothing a user could act on.
+ */
+describe("Render error boundary", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.location.hash = "";
+  });
+
+  it("shows a fallback with a reload action, not a blank page, when a page component throws", async () => {
+    window.location.hash = "#/models";
+    // React logs the uncaught render error to the console on its own;
+    // that's expected noise from the crash this test deliberately
+    // triggers, not a sign something else is wrong. Silenced so the test
+    // output stays readable, restored immediately after.
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    mockFetch({
+      ...emptyEndpoints,
+      "/api/v1/forseer/models": [],
+      "/api/v1/mlaas/status": brokenMlaasStatus,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("Something went wrong")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload page" })).toBeInTheDocument();
+    // The shell survives — only the crashed page's slot was replaced, not
+    // the whole React root the pre-fix blank page was.
+    expect(screen.getByRole("link", { name: "Models" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Light theme" })).toBeInTheDocument();
+
+    consoleError.mockRestore();
+  });
+
+  it("reloads the page when the fallback's action is clicked", async () => {
+    window.location.hash = "#/models";
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    mockFetch({
+      ...emptyEndpoints,
+      "/api/v1/forseer/models": [],
+      "/api/v1/mlaas/status": brokenMlaasStatus,
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    const reloadButton = await screen.findByRole("button", { name: "Reload page" });
+
+    // jsdom's location.reload is real but non-configurable and logs "Not
+    // implemented: navigation" instead of doing anything mockable, and
+    // Object.defineProperty on just `reload` throws "Cannot redefine
+    // property" — so the whole (configurable) `window.location` is
+    // swapped for one carrying every other live property/method plus a
+    // mockable `reload`, after App has already read the hash it needs.
+    const originalLocation = window.location;
+    const reload = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, reload },
+    });
+
+    await user.click(reloadButton);
+
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
+    consoleError.mockRestore();
+  });
+
+  it("clears the fallback when navigating to a different route after a crash", async () => {
+    window.location.hash = "#/models";
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    mockFetch({
+      ...emptyEndpoints,
+      "/api/v1/forseer/models": [],
+      "/api/v1/mlaas/status": brokenMlaasStatus,
+    });
+
+    render(<App />);
+    await screen.findByText("Something went wrong");
+
+    window.location.hash = "#/";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+
+    // The boundary is keyed on route, so navigating away starts the new
+    // page's boundary fresh instead of carrying the old error forward.
+    expect(await screen.findByText("Host CPU over time")).toBeInTheDocument();
+    expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
+
+    consoleError.mockRestore();
   });
 });
