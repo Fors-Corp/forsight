@@ -223,7 +223,7 @@ func TestDemoGenerator_DeclaredAndInferredSeverity(t *testing.T) {
 			if l.SeverityInferred {
 				inferred++
 				if l.Severity == "" {
-					t.Errorf("tick %d: inferred log has no severity — filelog.FallbackSeverity must always return one", i)
+					t.Errorf("tick %d: inferred log has no severity — model.FallbackSeverity must always return one", i)
 				}
 			} else {
 				declared++

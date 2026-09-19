@@ -58,6 +58,55 @@ func TestLogMiner_BurstOpensInsight(t *testing.T) {
 	}
 }
 
+// TestLogMiner_OutOfOrderLineDoesNotRewindTheBurstWindow: a cluster that has
+// just earned a 20-line burst must not have that burst window rewound to
+// almost nothing by a single line that arrives late (an older Timestamp than
+// the cluster has already seen) — LastSeen is what both the burst window
+// and the prune cutoff are anchored to, and it is also what evictOldestLocked
+// reads to find the least-recently-active cluster, so rewinding it made a
+// cluster that just fired an insight look like the oldest one in the map.
+func TestLogMiner_OutOfOrderLineDoesNotRewindTheBurstWindow(t *testing.T) {
+	m := newLogMiner()
+	fixed := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return fixed }
+
+	const recentLines = 20
+	lines := make([]LogLine, 0, recentLines)
+	for i := 0; i < recentLines; i++ {
+		lines = append(lines, LogLine{
+			Timestamp: fixed,
+			Source:    "api",
+			Severity:  "error",
+			Message:   "timeout talking to payments",
+		})
+	}
+	m.Observe(lines)
+
+	// One line for the same template and source, but timestamped an hour
+	// before the 20 above — the out-of-order arrival that must not corrupt
+	// anything.
+	m.Observe([]LogLine{{
+		Timestamp: fixed.Add(-time.Hour),
+		Source:    "api",
+		Severity:  "error",
+		Message:   "timeout talking to payments",
+	}})
+
+	var c *liveCluster
+	for _, cl := range m.clusters {
+		c = cl
+	}
+	if c == nil {
+		t.Fatal("no cluster recorded for the template")
+	}
+	if !c.LastSeen.Equal(fixed) {
+		t.Errorf("LastSeen = %v, want it to stay at %v (monotonic, never rewound)", c.LastSeen, fixed)
+	}
+	if recent, _ := c.window(c.LastSeen); recent != recentLines {
+		t.Errorf("burst window recent count = %d, want %d: the out-of-order line rewound it", recent, recentLines)
+	}
+}
+
 // A miner with a ready paging model lets the model decide a burst's
 // severity; before that, and without one, the volume rule decides.
 func TestLogMiner_BurstSeverityFollowsThePagingModelOnceReady(t *testing.T) {
