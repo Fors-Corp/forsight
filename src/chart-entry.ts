@@ -1,8 +1,8 @@
-// Server-safe entry: "@marcfs31/forsight/chart". No "use client" — this is
+// Server-safe entry: "@fors-corp/forsight/chart". No "use client" — this is
 // the pure chart maths and number formatting that backs every chart
 // component (geometry, scales, path builders, `formatCompact` and friends),
 // callable from a React Server Component to precompute marks or format a
-// value server-side. The component bundle ("@marcfs31/forsight") is a
+// value server-side. The component bundle ("@fors-corp/forsight") is a
 // separate client entry.
 
 export {

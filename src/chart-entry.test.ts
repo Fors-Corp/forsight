@@ -4,7 +4,7 @@ import * as ChartEntry from "./chart-entry";
 // Every chart component's own test imports straight from "./lib/chart", so
 // nothing ever exercises this file's own re-export statement — it sat at 0%
 // statement coverage even though the underlying implementations are well
-// tested. This asserts the public "@marcfs31/forsight/chart" surface (the
+// tested. This asserts the public "@fors-corp/forsight/chart" surface (the
 // server-safe entry a consumer actually imports) still carries everything
 // lib/chart.ts documents, so a re-export silently dropped from the list here
 // would fail a test instead of just shrinking the published API.

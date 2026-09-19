@@ -3,7 +3,7 @@
 // Every component in this entry is interactive (hooks / Radix), so the whole
 // bundle is a client module — drop-in usable inside React Server Components
 // without a wrapper. Server-safe theme/token utilities live in the separate
-// "@marcfs31/forsight/theme" entry (see src/theme-entry.ts).
+// "@fors-corp/forsight/theme" entry (see src/theme-entry.ts).
 
 export { Button, type ButtonProps } from "./components/Button";
 export { Badge, type BadgeProps } from "./components/Badge";
