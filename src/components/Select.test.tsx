@@ -38,4 +38,21 @@ describe("Select", () => {
     const { container } = render(<ExampleSelect />);
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it("sizes the panel to the trigger width when using popper positioning", async () => {
+    render(
+      <Select>
+        <SelectTrigger aria-label="Deploy target">
+          <SelectValue placeholder="Choose a target" />
+        </SelectTrigger>
+        <SelectContent position="popper">
+          <SelectItem value="vercel">Vercel</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+    screen.getByRole("combobox", { name: "Deploy target" }).focus();
+    await userEvent.keyboard("{Enter}");
+    const listbox = await screen.findByRole("listbox");
+    expect(listbox).toHaveClass("min-w-[var(--radix-select-trigger-width)]");
+  });
 });

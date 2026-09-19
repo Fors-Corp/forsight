@@ -30,129 +30,141 @@ export interface TabsRootProps extends React.HTMLAttributes<HTMLDivElement> {
   orientation?: Orientation;
 }
 
-function Root({
-  className,
-  defaultValue,
-  value,
-  onValueChange,
-  orientation = "horizontal",
-  ...props
-}: TabsRootProps) {
-  const [internal, setInternal] = React.useState(defaultValue);
-  const baseId = React.useId();
-  const active = value ?? internal;
-  const setValue = React.useCallback(
-    (v: string) => {
-      setInternal(v);
-      onValueChange?.(v);
-    },
-    [onValueChange]
-  );
-  return (
-    <TabsContext.Provider value={{ value: active, setValue, baseId, orientation }}>
+const Root = React.forwardRef<HTMLDivElement, TabsRootProps>(
+  (
+    { className, defaultValue, value, onValueChange, orientation = "horizontal", ...props },
+    ref
+  ) => {
+    const [internal, setInternal] = React.useState(defaultValue);
+    const baseId = React.useId();
+    const active = value ?? internal;
+    const setValue = React.useCallback(
+      (v: string) => {
+        setInternal(v);
+        onValueChange?.(v);
+      },
+      [onValueChange]
+    );
+    return (
+      <TabsContext.Provider value={{ value: active, setValue, baseId, orientation }}>
+        <div
+          ref={ref}
+          className={cn(
+            "flex gap-3",
+            orientation === "vertical" ? "flex-row" : "flex-col",
+            className
+          )}
+          {...props}
+        />
+      </TabsContext.Provider>
+    );
+  }
+);
+Root.displayName = "TabsRoot";
+
+const List = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, onKeyDown, ...props }, ref) => {
+    const { orientation } = useTabsContext();
+
+    const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+      onKeyDown?.(event);
+      if (event.defaultPrevented) return;
+
+      const next = orientation === "vertical" ? "ArrowDown" : "ArrowRight";
+      const prev = orientation === "vertical" ? "ArrowUp" : "ArrowLeft";
+      if (!["Home", "End", next, prev].includes(event.key)) return;
+
+      const list = event.currentTarget;
+      const tabs = Array.from(
+        list.querySelectorAll<HTMLButtonElement>('[role="tab"]:not([disabled])')
+      );
+      if (tabs.length === 0) return;
+      const currentIndex = tabs.indexOf(document.activeElement as HTMLButtonElement);
+
+      let nextIndex: number;
+      if (event.key === "Home") nextIndex = 0;
+      else if (event.key === "End") nextIndex = tabs.length - 1;
+      else if (event.key === next) nextIndex = (currentIndex + 1) % tabs.length;
+      else nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+
+      event.preventDefault();
+      tabs[nextIndex]?.focus();
+      tabs[nextIndex]?.click();
+    };
+
+    return (
       <div
+        ref={ref}
+        role="tablist"
+        aria-orientation={orientation}
+        onKeyDown={handleKeyDown}
         className={cn(
-          "flex gap-3",
-          orientation === "vertical" ? "flex-row" : "flex-col",
+          "flex w-fit max-w-full gap-1 rounded-md border border-ink-border bg-ink-surface p-1",
+          orientation === "vertical" ? "flex-col" : "items-center overflow-x-auto",
           className
         )}
         {...props}
       />
-    </TabsContext.Provider>
-  );
-}
-
-function List({ className, onKeyDown, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  const { orientation } = useTabsContext();
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    onKeyDown?.(event);
-    if (event.defaultPrevented) return;
-
-    const next = orientation === "vertical" ? "ArrowDown" : "ArrowRight";
-    const prev = orientation === "vertical" ? "ArrowUp" : "ArrowLeft";
-    if (!["Home", "End", next, prev].includes(event.key)) return;
-
-    const list = event.currentTarget;
-    const tabs = Array.from(
-      list.querySelectorAll<HTMLButtonElement>('[role="tab"]:not([disabled])')
     );
-    if (tabs.length === 0) return;
-    const currentIndex = tabs.indexOf(document.activeElement as HTMLButtonElement);
-
-    let nextIndex: number;
-    if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = tabs.length - 1;
-    else if (event.key === next) nextIndex = (currentIndex + 1) % tabs.length;
-    else nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
-
-    event.preventDefault();
-    tabs[nextIndex]?.focus();
-    tabs[nextIndex]?.click();
-  };
-
-  return (
-    <div
-      role="tablist"
-      aria-orientation={orientation}
-      onKeyDown={handleKeyDown}
-      className={cn(
-        "flex w-fit max-w-full gap-1 rounded-md border border-ink-border bg-ink-surface p-1",
-        orientation === "vertical" ? "flex-col" : "items-center overflow-x-auto",
-        className
-      )}
-      {...props}
-    />
-  );
-}
+  }
+);
+List.displayName = "TabsList";
 
 export interface TabsTriggerProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   value: string;
 }
 
-function Trigger({ className, value, ...props }: TabsTriggerProps) {
-  const { value: active, setValue, baseId } = useTabsContext();
-  const selected = active === value;
-  return (
-    <button
-      type="button"
-      role="tab"
-      id={triggerId(baseId, value)}
-      aria-selected={selected}
-      aria-controls={panelId(baseId, value)}
-      tabIndex={selected ? 0 : -1}
-      onClick={() => setValue(value)}
-      className={cn(
-        "shrink-0 rounded-sm px-3 py-1.5 font-sans text-sm font-medium transition-colors duration-base focus-visible:outline-none focus-visible:shadow-focus-ring disabled:pointer-events-none disabled:opacity-50",
-        selected ? "bg-accent text-accent-fg" : "text-fg-secondary hover:text-fg",
-        className
-      )}
-      {...props}
-    />
-  );
-}
+const Trigger = React.forwardRef<HTMLButtonElement, TabsTriggerProps>(
+  ({ className, value, ...props }, ref) => {
+    const { value: active, setValue, baseId } = useTabsContext();
+    const selected = active === value;
+    return (
+      <button
+        ref={ref}
+        type="button"
+        role="tab"
+        id={triggerId(baseId, value)}
+        aria-selected={selected}
+        aria-controls={panelId(baseId, value)}
+        tabIndex={selected ? 0 : -1}
+        onClick={() => setValue(value)}
+        className={cn(
+          "shrink-0 rounded-sm px-3 py-1.5 font-sans text-sm font-medium transition-colors duration-base focus-visible:outline-none focus-visible:shadow-focus-ring disabled:pointer-events-none disabled:opacity-50",
+          selected ? "bg-accent text-accent-fg" : "text-fg-secondary hover:text-fg",
+          className
+        )}
+        {...props}
+      />
+    );
+  }
+);
+Trigger.displayName = "TabsTrigger";
 
 export interface TabsPanelProps extends React.HTMLAttributes<HTMLDivElement> {
   value: string;
 }
 
-function Panel({ className, value, ...props }: TabsPanelProps) {
-  const { value: active, baseId } = useTabsContext();
-  if (active !== value) return null;
-  return (
-    <div
-      role="tabpanel"
-      id={panelId(baseId, value)}
-      aria-labelledby={triggerId(baseId, value)}
-      tabIndex={0}
-      className={cn(
-        "font-sans text-sm text-fg focus-visible:outline-none focus-visible:shadow-focus-ring",
-        className
-      )}
-      {...props}
-    />
-  );
-}
+const Panel = React.forwardRef<HTMLDivElement, TabsPanelProps>(
+  ({ className, value, ...props }, ref) => {
+    const { value: active, baseId } = useTabsContext();
+    if (active !== value) return null;
+    return (
+      <div
+        ref={ref}
+        role="tabpanel"
+        id={panelId(baseId, value)}
+        aria-labelledby={triggerId(baseId, value)}
+        tabIndex={0}
+        className={cn(
+          "font-sans text-sm text-fg focus-visible:outline-none focus-visible:shadow-focus-ring",
+          className
+        )}
+        {...props}
+      />
+    );
+  }
+);
+Panel.displayName = "TabsPanel";
 
 /**
  * Compound tabbed navigation implementing the WAI-ARIA Tabs pattern:
