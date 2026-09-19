@@ -26,15 +26,38 @@ const DefaultMaxElements = 2_000_000
 // writes can't starve older-but-still-relevant points within the window, and
 // by element count, so neither a burst nor a hostile timestamp can grow it
 // without limit.
+//
+// Metrics, spans and logs each get their own RWMutex rather than sharing
+// one. No method ever needs more than one collection at a time — a metrics
+// write only ever touches s.metrics, a logs query only ever touches s.logs —
+// so one lock per collection lets a metrics write and a logs query (the
+// dashboard runs several read-heavy pollers against continuous ingest, one
+// per collection) proceed concurrently instead of one exclusive lock
+// serialising work on disjoint data. SetMaxElements is the one exception: it
+// touches all three, and takes all three locks in the fixed order below to
+// do it.
 type MemoryStore struct {
-	retention   time.Duration
-	maxElements int
-	now         func() time.Time
+	retention time.Duration
+	now       func() time.Time
 
-	mu      sync.RWMutex
-	metrics []model.Metric
+	// maxElements is guarded by all three locks below, not one of its own:
+	// SetMaxElements writes it only while holding metricsMu, spansMu and
+	// logsMu all exclusively (see the fixed acquisition order there), and
+	// every reader (each pruneXLocked, called only under its own collection's
+	// lock) already holds at least one of the three. Holding all three to
+	// write is what makes holding just one enough to read: a writer can't be
+	// in the middle of the write while any prune*Locked call — which needs
+	// at least one of the three — is running.
+	maxElements int
+
+	metricsMu sync.RWMutex
+	metrics   []model.Metric
+
+	spansMu sync.RWMutex
 	spans   []model.Span
-	logs    []model.LogEntry
+
+	logsMu sync.RWMutex
+	logs   []model.LogEntry
 }
 
 // NewMemoryStore builds a MemoryStore retaining data for the given window
@@ -46,12 +69,23 @@ func NewMemoryStore(retention time.Duration) *MemoryStore {
 // SetMaxElements overrides the per-collection element cap. A value <= 0
 // restores the default rather than disabling the cap: an unbounded in-memory
 // store is not an option this type offers.
+//
+// Acquires all three collection locks, in a fixed order (metrics, spans,
+// logs — the same order every place in this file that ever needs more than
+// one lock at once must use, to rule out a lock-ordering deadlock), so the
+// write to maxElements and the three prunes it triggers happen atomically
+// with respect to every other method here, each of which touches at most
+// one collection under at most one of these locks.
 func (s *MemoryStore) SetMaxElements(n int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if n <= 0 {
 		n = DefaultMaxElements
 	}
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	s.spansMu.Lock()
+	defer s.spansMu.Unlock()
+	s.logsMu.Lock()
+	defer s.logsMu.Unlock()
 	s.maxElements = n
 	s.pruneMetricsLocked()
 	s.pruneSpansLocked()
@@ -68,16 +102,16 @@ func (s *MemoryStore) Ping(_ context.Context) error {
 }
 
 func (s *MemoryStore) WriteMetrics(_ context.Context, metrics []model.Metric) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
 	s.metrics = append(s.metrics, metrics...)
 	s.pruneMetricsLocked()
 	return nil
 }
 
 func (s *MemoryStore) QueryMetrics(_ context.Context, q MetricQuery) ([]model.Metric, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.metricsMu.RLock()
+	defer s.metricsMu.RUnlock()
 
 	limit, perName := q.Limit, q.PerName
 	if q.Name != "" && perName > 0 && (limit == 0 || perName < limit) {
@@ -97,37 +131,37 @@ func (s *MemoryStore) QueryMetrics(_ context.Context, q MetricQuery) ([]model.Me
 }
 
 func (s *MemoryStore) WriteSpans(_ context.Context, spans []model.Span) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.spansMu.Lock()
+	defer s.spansMu.Unlock()
 	s.spans = append(s.spans, spans...)
 	s.pruneSpansLocked()
 	return nil
 }
 
 func (s *MemoryStore) QuerySpans(_ context.Context, q SpanQuery) ([]model.Span, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.spansMu.RLock()
+	defer s.spansMu.RUnlock()
 
 	return matchNewest(s.spans, q.Limit, func(sp model.Span) bool { return matchesSpan(sp, q) }), nil
 }
 
 func (s *MemoryStore) WriteLogs(_ context.Context, logs []model.LogEntry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.logsMu.Lock()
+	defer s.logsMu.Unlock()
 	s.logs = append(s.logs, logs...)
 	s.pruneLogsLocked()
 	return nil
 }
 
 func (s *MemoryStore) QueryLogs(_ context.Context, q LogQuery) ([]model.LogEntry, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.logsMu.RLock()
+	defer s.logsMu.RUnlock()
 
 	return matchNewest(s.logs, q.Limit, func(entry model.LogEntry) bool { return matchesLog(entry, q) }), nil
 }
 
 // pruneMetricsLocked drops points older than the retention window, then
-// enforces the element cap. Callers must hold s.mu for writing.
+// enforces the element cap. Callers must hold s.metricsMu for writing.
 //
 // The age scan is skipped when the oldest retained element — data arrives
 // in roughly chronological order, the same assumption capOldest's own
@@ -168,7 +202,8 @@ func capOldest[T any](xs []T, max int) []T {
 }
 
 // pruneSpansLocked mirrors pruneMetricsLocked's fast path for the common
-// case where nothing has expired yet — see its comment.
+// case where nothing has expired yet — see its comment. Callers must hold
+// s.spansMu for writing.
 func (s *MemoryStore) pruneSpansLocked() {
 	if len(s.spans) == 0 {
 		return
@@ -188,7 +223,8 @@ func (s *MemoryStore) pruneSpansLocked() {
 }
 
 // pruneLogsLocked mirrors pruneMetricsLocked's fast path for the common
-// case where nothing has expired yet — see its comment.
+// case where nothing has expired yet — see its comment. Callers must hold
+// s.logsMu for writing.
 func (s *MemoryStore) pruneLogsLocked() {
 	if len(s.logs) == 0 {
 		return

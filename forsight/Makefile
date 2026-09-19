@@ -71,9 +71,9 @@ dev:
 demo:
 	go run . demo
 
-## Run the Go test suite.
+## Run the Go test suite with the race detector.
 test:
-	go test ./...
+	go test -race ./...
 
 # install.sh's own tests (checksum verification, the systemd unit and its
 # never-overwritten env file) — bats-core, not go test, since install.sh is
