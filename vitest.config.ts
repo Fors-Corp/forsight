@@ -52,17 +52,91 @@ export default defineConfig({
         "src/components/DropdownMenu.tsx",
         "src/components/Tooltip.tsx",
       ],
-      // Set a bit below the actual measured numbers (~99.5/86.5/89/99.5 as of
-      // the Separator/Label/Collapsible addition) so this is a real
-      // regression gate — catching a wholesale untested addition or a broken
-      // branch — not a wall nobody's verified passes. Ratcheted up from the
-      // v1.0.0 baseline (95/95/85/80) as coverage genuinely improved; bump up
-      // again the same way, never down.
+      // perFile + glob-keyed thresholds, not a single aggregate number: the
+      // old blended 98/98/85/85 passed in total while individual files sat
+      // far under it (Slider.tsx had 40% branch coverage, Card.tsx 50%, with
+      // no test ever pressing an arrow key or an `interactive` prop) — the
+      // aggregate hid exactly the files most likely to have a real, operable
+      // bug. Every file must now clear 98/98/85/85 *on its own*.
+      //
+      // Two buckets, not a plain top-level floor: Vitest's `perFile` also
+      // runs an implicit "global" threshold set against literally every
+      // matched file whenever statements/branches/functions/lines is set at
+      // the top level, and that check cannot be relaxed by a glob elsewhere
+      // — both the top-level and the glob thresholds run, and either one
+      // failing fails the file. So a lone top-level number would either
+      // re-flatten this back into the old aggregate-only gate (if set low
+      // enough for the worst file) or permanently fail every file below the
+      // real target (if set to 98/98/85/85). Omitting the top-level keys
+      // skips that implicit global set entirely; the glob below is then the
+      // *only* check, and it covers every file exactly once.
       thresholds: {
-        statements: 98,
-        lines: 98,
-        branches: 85,
-        functions: 85,
+        perFile: true,
+        // The default: every file except the seven named below. New files
+        // land here automatically and must clear the real bar from day one.
+        "src/**/!(BoxPlot|Calendar|Combobox|Dialog|Drawer|JSONViewer|Sidebar).{ts,tsx}": {
+          statements: 98,
+          lines: 98,
+          branches: 85,
+          functions: 85,
+        },
+        // Pre-existing gaps this PR did not touch (out of scope: this PR's
+        // brief was Slider/Progress/Card/Toast/Select/Tabs/ScrollArea) —
+        // each gated at its own measured baseline as of this change, the
+        // same "a bit below the real number" convention as the default
+        // above, so it's still a real regression gate and not a wall nobody
+        // has verified passes. Raise (or delete, once a file clears the
+        // default) an entry here as its tests improve; never lower one.
+        //   BoxPlot.tsx      97.91 / 90.9  / 100   / 100   — stmts just under 98
+        //   Calendar.tsx     76.19 / 87.17 / 71.42 / 78.94 — well under on 3/4
+        //   Combobox.tsx     100   / 84.61 / 100   / 100   — branches just under 85
+        //   Dialog.tsx       92.85 / 100   / 80    / 92.85 — overlay body, see the
+        //   Drawer.tsx       92.85 / 100   / 80    / 92.85 — HoverCard-style exclude
+        //                    note above; not extended to these without a decision
+        //   JSONViewer.tsx   97.87 / 95.12 / 100   / 100   — stmts just under 98
+        //   Sidebar.tsx      94.11 / 100   / 94.11 / 93.75
+        "src/components/BoxPlot.tsx": {
+          statements: 97,
+          branches: 90,
+          functions: 100,
+          lines: 100,
+        },
+        "src/components/Calendar.tsx": {
+          statements: 76,
+          branches: 87,
+          functions: 71,
+          lines: 78,
+        },
+        "src/components/Combobox.tsx": {
+          statements: 100,
+          branches: 84,
+          functions: 100,
+          lines: 100,
+        },
+        "src/components/Dialog.tsx": {
+          statements: 92,
+          branches: 100,
+          functions: 80,
+          lines: 92,
+        },
+        "src/components/Drawer.tsx": {
+          statements: 92,
+          branches: 100,
+          functions: 80,
+          lines: 92,
+        },
+        "src/components/JSONViewer.tsx": {
+          statements: 97,
+          branches: 95,
+          functions: 100,
+          lines: 100,
+        },
+        "src/components/Sidebar.tsx": {
+          statements: 94,
+          branches: 100,
+          functions: 94,
+          lines: 93,
+        },
       },
     },
   },
