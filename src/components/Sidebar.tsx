@@ -1,6 +1,7 @@
 import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { cn } from "../lib/cn";
+import { isSafeHref } from "../lib/safe-href";
 
 const SIDEBAR_ICON_BUTTON_CLASS = cn(
   "inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-fg-muted transition-colors duration-base",
@@ -193,31 +194,57 @@ export function SidebarTrigger({ className }: { className?: string }) {
   );
 }
 
-export function SidebarHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return (
+export const SidebarHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
     <div
+      ref={ref}
       className={cn(
         "flex h-14 shrink-0 items-center gap-2 border-b border-ink-border px-3",
         className
       )}
       {...props}
     />
-  );
-}
+  )
+);
+SidebarHeader.displayName = "SidebarHeader";
 
-export function SidebarContent({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("flex-1 overflow-y-auto p-2", className)} {...props} />;
-}
+export const SidebarContent = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <div ref={ref} className={cn("flex-1 overflow-y-auto p-2", className)} {...props} />
+));
+SidebarContent.displayName = "SidebarContent";
 
-export function SidebarFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("shrink-0 border-t border-ink-border p-3", className)} {...props} />;
-}
+export const SidebarFooter = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div
+      ref={ref}
+      className={cn("shrink-0 border-t border-ink-border p-3", className)}
+      {...props}
+    />
+  )
+);
+SidebarFooter.displayName = "SidebarFooter";
 
-export function SidebarNav({ className, ...props }: React.HTMLAttributes<HTMLUListElement>) {
-  return <ul className={cn("flex flex-col gap-1", className)} {...props} />;
-}
+export const SidebarNav = React.forwardRef<
+  HTMLUListElement,
+  React.HTMLAttributes<HTMLUListElement>
+>(({ className, ...props }, ref) => (
+  <ul ref={ref} className={cn("flex flex-col gap-1", className)} {...props} />
+));
+SidebarNav.displayName = "SidebarNav";
 
 export interface SidebarNavItemProps extends React.ComponentPropsWithoutRef<"a"> {
+  /**
+   * The page this nav item links to. Since sidebar nav is typically driven
+   * by route data, it is treated as untrusted: an unsafe scheme
+   * (`javascript:`, `data:`, ...) is never set on the rendered element
+   * (`isSafeHref`, `../lib/safe-href`) — an `<a>` without an `href` has no
+   * `link` role and isn't focusable, the same non-link fallback `BarList`
+   * and `BreadcrumbLink` use for the same case.
+   */
+  href?: string;
   /** Marks this as the current page (`aria-current="page"`) and applies the active look. */
   active?: boolean;
   /** Decorative leading icon — `aria-hidden` is applied automatically. */
@@ -234,7 +261,7 @@ export interface SidebarNavItemProps extends React.ComponentPropsWithoutRef<"a">
  * its icon (correctly `aria-hidden`) is the only visible content.
  */
 export const SidebarNavItem = React.forwardRef<HTMLAnchorElement, SidebarNavItemProps>(
-  ({ className, active, icon, children, ...props }, ref) => {
+  ({ className, active, icon, children, href, ...props }, ref) => {
     const { collapsed } = useSidebar();
     return (
       <li>
@@ -249,6 +276,7 @@ export const SidebarNavItem = React.forwardRef<HTMLAnchorElement, SidebarNavItem
             "focus-visible:outline-none focus-visible:shadow-focus-ring",
             className
           )}
+          href={href !== undefined && isSafeHref(href) ? href : undefined}
           {...props}
         >
           {icon && (
@@ -264,11 +292,21 @@ export const SidebarNavItem = React.forwardRef<HTMLAnchorElement, SidebarNavItem
 );
 SidebarNavItem.displayName = "SidebarNavItem";
 
-export function AppShell({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("flex h-screen overflow-hidden bg-ink-bg", className)} {...props} />;
-}
+export const AppShell = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div
+      ref={ref}
+      className={cn("flex h-screen overflow-hidden bg-ink-bg", className)}
+      {...props}
+    />
+  )
+);
+AppShell.displayName = "AppShell";
 
 /** The page's single `<main>` landmark — `min-w-0` so it can actually shrink in the flex row instead of pushing `Sidebar` off-screen. */
-export function AppShellMain({ className, ...props }: React.HTMLAttributes<HTMLElement>) {
-  return <main className={cn("min-w-0 flex-1 overflow-y-auto", className)} {...props} />;
-}
+export const AppShellMain = React.forwardRef<HTMLElement, React.HTMLAttributes<HTMLElement>>(
+  ({ className, ...props }, ref) => (
+    <main ref={ref} className={cn("min-w-0 flex-1 overflow-y-auto", className)} {...props} />
+  )
+);
+AppShellMain.displayName = "AppShellMain";

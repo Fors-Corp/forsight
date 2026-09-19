@@ -44,6 +44,12 @@ describe("BarList", () => {
     );
   });
 
+  it("renders the non-link branch for a row whose href is an unsafe scheme", () => {
+    render(<BarList items={[{ ...items[0], href: "javascript:alert(document.cookie)" }]} />);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("/api/checkout")).toBeInTheDocument();
+  });
+
   it("has no accessibility violations", async () => {
     const { container } = render(<BarList items={[{ ...items[0], href: "#x" }, items[1]]} />);
     expect(await axe(container)).toHaveNoViolations();

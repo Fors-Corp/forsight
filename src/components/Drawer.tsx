@@ -19,13 +19,17 @@ export const DrawerClose = DialogPrimitive.Close;
  * `Sidebar.tsx`'s mobile drawer for the same technique. Use `Dialog` instead
  * for a centered, viewport-anchored modal.
  */
+export interface DrawerContentProps extends React.ComponentPropsWithoutRef<
+  typeof DialogPrimitive.Content
+> {
+  /** Logical edge to anchor to and slide from. Defaults to `"end"` (right in LTR, left in RTL). */
+  side?: "start" | "end";
+  hideClose?: boolean;
+}
+
 export const DrawerContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
-    /** Logical edge to anchor to and slide from. Defaults to `"end"` (right in LTR, left in RTL). */
-    side?: "start" | "end";
-    hideClose?: boolean;
-  }
+  DrawerContentProps
 >(({ className, children, side = "end", hideClose, ...props }, ref) => (
   <DialogPrimitive.Portal>
     <DialogPrimitive.Overlay

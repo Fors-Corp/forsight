@@ -1,3 +1,4 @@
+import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -102,6 +103,29 @@ describe("Sidebar", () => {
   });
 });
 
+describe("SidebarNavItem", () => {
+  function renderItem(href: string) {
+    return render(
+      <SidebarProvider>
+        <SidebarNav>
+          <SidebarNavItem href={href}>Overview</SidebarNavItem>
+        </SidebarNav>
+      </SidebarProvider>
+    );
+  }
+
+  it("renders a real link for a safe href", () => {
+    renderItem("/overview");
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("href", "/overview");
+  });
+
+  it("renders its non-link branch for a javascript: href", () => {
+    renderItem("javascript:alert(document.cookie)");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("Overview")).toBeInTheDocument();
+  });
+});
+
 describe("SidebarTrigger", () => {
   it("exposes exactly one accessible control per breakpoint, both operable", async () => {
     const onToggle = vi.fn();
@@ -127,5 +151,50 @@ describe("SidebarTrigger", () => {
     expect(screen.getByTestId("mobile-open")).toHaveTextContent("true");
     await userEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
     expect(screen.getByTestId("collapsed")).toHaveTextContent("true");
+  });
+});
+
+describe("ref forwarding", () => {
+  it("forwards a ref to SidebarHeader's DOM node", () => {
+    const ref = React.createRef<HTMLDivElement>();
+    render(<SidebarHeader ref={ref}>Forsight</SidebarHeader>);
+    expect(ref.current).toBe(screen.getByText("Forsight"));
+  });
+
+  it("forwards a ref to SidebarContent's DOM node", () => {
+    const ref = React.createRef<HTMLDivElement>();
+    render(<SidebarContent ref={ref}>content</SidebarContent>);
+    expect(ref.current).toBe(screen.getByText("content"));
+  });
+
+  it("forwards a ref to SidebarFooter's DOM node", () => {
+    const ref = React.createRef<HTMLDivElement>();
+    render(<SidebarFooter ref={ref}>v1.0</SidebarFooter>);
+    expect(ref.current).toBe(screen.getByText("v1.0"));
+  });
+
+  it("forwards a ref to SidebarNav's DOM node", () => {
+    const ref = React.createRef<HTMLUListElement>();
+    render(
+      <SidebarProvider>
+        <SidebarNav ref={ref}>
+          <SidebarNavItem href="#overview">Overview</SidebarNavItem>
+        </SidebarNav>
+      </SidebarProvider>
+    );
+    expect(ref.current?.tagName).toBe("UL");
+    expect(ref.current).toContainElement(screen.getByRole("link", { name: "Overview" }));
+  });
+
+  it("forwards a ref to AppShell's DOM node", () => {
+    const ref = React.createRef<HTMLDivElement>();
+    render(<AppShell ref={ref}>shell</AppShell>);
+    expect(ref.current).toBe(screen.getByText("shell"));
+  });
+
+  it("forwards a ref to AppShellMain's DOM node", () => {
+    const ref = React.createRef<HTMLElement>();
+    render(<AppShellMain ref={ref}>main content</AppShellMain>);
+    expect(ref.current).toBe(screen.getByRole("main"));
   });
 });
