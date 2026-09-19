@@ -213,9 +213,11 @@ twenty minutes.
 
 **Method.** Holt's linear method — a level and a trend, each exponentially
 smoothed — projected forward to 100%. The projection is a range, not a line,
-widened by the uncertainty in the trend.
+widened by the standard ETS(A,A,N) interval for the horizon being projected
+to: sigma_h^2 = sigma_e^2 * (1 + sum_{j=1}^{h-1} (alpha + alpha*beta*j)^2),
+evaluated at the h where the point forecast reaches 100%.
 
-**Two things this got wrong first, both caught by running it rather than by
+**Three things this got wrong first, all caught by running it rather than by
 reading it.**
 
 The gate was originally the head-to-head win rate against naive persistence,
@@ -235,20 +237,64 @@ shrink however long the model runs; the trend estimate does, because smoothing
 averages it away. Confusing the two made the band far too wide and withheld
 projections from series with a perfectly clear trend.
 
-**Measured** against a quiet period followed by a rising burn, read once per
-second:
+The replacement was wrong in the other direction, and for a longer time. It
+took the trend's uncertainty to be `beta/(2-beta)` of the observation
+variance — the steady-state variance of an EWMA of the observations — and
+multiplied it by a running mean ABSOLUTE error. Three things wrong at once.
+A mean absolute error is not a standard deviation: for normal errors it is
+about `0.8*sigma`, so the spread was understated by a fifth before anything
+else. `beta/(2-beta)` describes a stationary quantity, and Holt's trend is
+not one: in error-correction form `b_t = b_{t-1} + alpha*beta*e_t`, a random
+walk in the errors, which keeps every shock forever and has no steady-state
+variance to be a fraction of. And the constant contained no `alpha` at all,
+which is the giveaway — the trend cannot move unless the level moves first.
 
-| Consumed | Projection |
-| --- | --- |
-| 2.2% (quiet) | none — no trend that stands out from the noise |
-| 5.0% | exhausted in 5m to 2h |
-| 6.5% | exhausted in 5m to 40m |
-| 9.9% | exhausted in 5m to 15m |
-| 13.7% | exhausted in 1m to 10m |
+The practical consequence was a band with **no horizon in it**: the same
+absolute uncertainty on the trend whether the budget ran out in ten minutes
+or in three hours, when the whole point of projecting a random-walk trend is
+that the further out you look, the less you know. Simulated against the
+process Holt is a model of — a local linear trend where one shock moves both
+level and trend — the advertised 95% interval actually contained the real
+exhaustion:
 
-The range narrowing as evidence accumulates is the behaviour being aimed at.
-The win rate against persistence stays on the card as an honest measure of
-one-step skill — information, not a gate.
+| Distance projected | Old band | ETS(A,A,N) band |
+| --- | --- | --- |
+| a few dozen observations | 97.4% | 97.4% |
+| about 150 | 88.6% | 93.9% |
+| a couple of hundred | 71.8% | 95.2% |
+| most of a thousand | 52.2% | 94.2% |
+
+Two thousand draws per row, `forseer/forecast_interval_test.go`. The old band
+happened to be about right at one distance and got steadily worse either side
+of it; at the far end the range printed on the dashboard was a coin flip. It
+is also why the gate closed on clean short-horizon series: too wide near, too
+narrow far, because a constant cannot be both.
+
+**Measured** against a quiet period — 300 readings of 2.0% with N(0, 0.1)
+noise, read once per second — followed by a burn rising at 0.15%/s:
+
+| Consumed | Old band | ETS(A,A,N) band |
+| --- | --- | --- |
+| 2.0% (quiet) | none — no trend that stands out from the noise | none |
+| 5.0% | in 10m to 30m | none |
+| 6.5% | in 5m to 20m | none |
+| 10.0% | in 10m to 15m | in 5m to 35m |
+| 13.7% | in about 10m | in 5m to 20m |
+
+The budget genuinely runs out 9m36s after the 13.7% reading. Both columns
+contain it, but read what the old one does on the way: it commits to a range
+twenty readings after the turn, when the trend estimate has not caught up
+yet, and then narrows to a single number — "in about 10m", no range at all —
+precisely where a two-parameter model fitted online has the least business
+claiming a point. The new column says nothing until the evidence is there and
+then says it with a band on it. Withholding for another minute is the cheaper
+error: an on-call who is told "about 10 minutes" and finds out at minute 25
+stops reading the field.
+
+The range narrowing as evidence accumulates is still the behaviour being
+aimed at, and it still narrows — 5m-35m to 5m-20m above. The win rate against
+persistence stays on the card as an honest measure of one-step skill —
+information, not a gate.
 
 **Component.** **ErrorBudget**, whose caption now carries the projection, so a
 dashboard that knows nothing about the new field still shows it.
@@ -502,7 +548,8 @@ state is exactly what a restart used to throw away, since a calibration has
 no comparison window to re-earn, and the model for which this matters most:
 a page threshold needs 20 000 points, which is weeks of a real series, so an
 agent restarted weekly would otherwise never learn one), Holt's level and
-trend (`error-budget
+trend together with the running mean squared error the interval is sized
+from (`error-budget
 forecast`), the logistic weights (`log burst paging`), each series' P²
 markers (`per-endpoint latency shape`), the mean vector and covariance
 (`host outlier`), and the two reporting counters (`culprit ranking`).

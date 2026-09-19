@@ -10,11 +10,11 @@ One repo, two independently versioned artifacts:
 | [`@marcfs31/forsight`](#install)  | Observability design system (npm, GitHub Packages)                       | `npm run build` | Changesets → `vX.Y.Z` |
 | [`forsight/`](forsight/README.md) | One Go binary: collectors, in-memory store, HTTP API, embedded dashboard | `make build`    | `forsight-vX.Y.Z`     |
 
-**Forseer** (`forseer/`) is the AI/ML module compiled into the agent. It scores the stream; the dashboard renders those scores with the design-system components in [Storybook → Forseer](https://marcfs31.github.io/forsight/?path=/docs/forsight-forseer--docs).
+**Forseer** (`forseer/`) is the AI/ML module compiled into the agent. It scores the stream; the dashboard renders those scores with the design-system components in [Storybook → Forseer](https://marcfs31.github.io/forsight/?path=/docs/forsight-forseer--docs). See [`forseer/MODELS.md`](forseer/MODELS.md) for what a model is and how each one is scored.
 
 **[Browse the component library →](https://marcfs31.github.io/forsight/)** (Storybook, deployed from `main`)
 
-Published **v3.0.0**. The package build is Tailwind **v4**; a Tailwind v3 `tailwind-preset` is still exported for older consumers. React 18 and 19 · Next.js App Router, [RSC-ready](#using-with-nextjs) · ESM + CJS.
+The published version tracks [`CHANGELOG.md`](CHANGELOG.md) and the [npm package page](https://github.com/marcfs31/forsight/pkgs/npm/forsight) on GitHub Packages rather than a number pinned in this file — nothing stamps a version into the README at release time, so a hardcoded number here goes stale the moment a Changesets release runs. The package build is Tailwind **v4**; a Tailwind v3 `tailwind-preset` is still exported for older consumers. React 18 and 19 · Next.js App Router, [RSC-ready](#using-with-nextjs) · ESM + CJS.
 
 This package is the observability continuation of [`@marcfs31/fors-design-system`](https://github.com/marcfs31/fors-design-system): same tokens and base components, plus [data visualization](#data-visualization) (plain SVG, no charting library) and [observability](#observability) primitives. Import paths are `@marcfs31/forsight`.
 
@@ -213,7 +213,7 @@ git push --follow-tags
 
 ### Base
 
-Typography: `Heading`, `Text`, `Label`. Forms: `Button` (built-in `loading`), `Input`, `Textarea`, `Checkbox`, `RadioGroup`, `Switch`, `Toggle`/`ToggleGroup`, `Select`, `Combobox`, `MultiSelect`, `Slider`, `Calendar`/`DatePicker`. Overlays: `Dialog`, `AlertDialog`, `Drawer`, `DropdownMenu`, `Popover`, `HoverCard`, `Tooltip`, `Toast`/`Toaster`, `Command`/`CommandDialog`. Feedback & data: `Alert`, `Badge`, `Avatar`/`AvatarGroup`, `Spinner`, `Progress`, `Skeleton`, `Stepper`, `Card`, `Table`, `Tabs`, `Accordion`, `Collapsible`, `Separator`, `EmptyState`, `JSONViewer`, `CodeBlock`, `CopyButton`, `Kbd`, `ScrollArea`. Navigation: `Breadcrumb`, `Pagination`, `FilterBar`, `Sidebar`/`AppShell`. Every component supports `dir="rtl"`.
+Typography: `Heading`, `Text`, `Label`. Forms: `Button` (built-in `loading`), `Input`, `Textarea`, `Checkbox`, `RadioGroup`, `Switch`, `Toggle`/`ToggleGroup`, `Select`, `Combobox`, `MultiSelect`, `Slider`, `Calendar`/`DatePicker`. Overlays: `Dialog`, `AlertDialog`, `Drawer`, `DropdownMenu`, `Popover`, `HoverCard`, `Tooltip`, `Toast`/`Toaster`, `Command`/`CommandDialog`. Feedback & data: `Alert`, `Badge`, `Avatar`/`AvatarGroup`, `Spinner`, `Progress`, `Skeleton`, `Stepper`, `Card`, `Table`, `Tabs`, `Accordion`, `Collapsible`, `Separator`, `EmptyState`, `JSONViewer`, `CodeBlock`, `CopyButton`, `Kbd`, `ScrollArea`. Navigation: `Breadcrumb`, `Pagination`, `FilterBar`, `Sidebar`/`AppShell`. Every component supports `dir="rtl"`, with one documented exception: `Toaster`'s swipe-to-dismiss gesture and slide animation are a physical direction, not a text-direction concern, so they stay fixed regardless of `dir` (see the comment atop `Toast.tsx`).
 
 Overlay/select components sit on [Radix UI](https://www.radix-ui.com/) for focus and keyboard behavior, then this repo's token classes. Overlay motion is `tailwindcss-animate` on Radix `data-state`/`data-side`, and collapses under `prefers-reduced-motion`.
 
