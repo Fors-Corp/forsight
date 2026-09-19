@@ -153,7 +153,7 @@ later, separate change.
 carry it. Root `package.json:3` is `4.0.1` and tags run to `v4.0.1`, but
 `forsight/web/package.json:13` pins `^3.0.0` and `package-lock.json:1101`
 resolves `3.0.0` — a caret never crosses a major, so nothing moves it.
-`gh api repos/marcfs31/forsight/dependabot/secrets` returns `total_count: 0`,
+`gh api repos/Fors-Corp/forsight/dependabot/secrets` returns `total_count: 0`,
 so the `registries:` block merged in #77 is inert and Dependabot cannot see
 the package at all (the memory note of 2026-09-13: still blocking, needs
 Marc). What that costs: the PURE-annotation tree-shaking landed in 4.0.0

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 func metricsByName(metrics []model.Metric) map[string]model.Metric {

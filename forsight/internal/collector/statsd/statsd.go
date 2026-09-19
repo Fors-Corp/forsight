@@ -34,7 +34,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 var errNotBound = errors.New("statsd: Serve called before a successful Bind")

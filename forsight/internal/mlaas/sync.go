@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/logsafe"
-	"github.com/marcfs31/forsight/forsight/internal/model"
-	"github.com/marcfs31/forsight/forsight/internal/store"
+	"github.com/Fors-Corp/forsight/forsight/internal/logsafe"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/store"
 )
 
 const (
