@@ -4,11 +4,11 @@ This repo ships **two independently versioned artifacts** from one tree:
 
 | Artifact                                                                         | Where           | Built by        | Versioned as               |
 | -------------------------------------------------------------------------------- | --------------- | --------------- | -------------------------- |
-| `@marcfs31/forsight` — the design system (npm, GitHub Packages)                  | `src/`, `dist/` | `npm run build` | Changesets → `vX.Y.Z` tags |
+| `@fors-corp/forsight` — the design system (npm, GitHub Packages)                 | `src/`, `dist/` | `npm run build` | Changesets → `vX.Y.Z` tags |
 | `forsight` — the observability agent (one Go binary with the dashboard embedded) | `forsight/`     | `make build`    | `forsight-vX.Y.Z` tags     |
 
 The dashboard under `forsight/web/` depends on the _published_
-`@marcfs31/forsight` (a caret pin in `forsight/web/package.json`, resolved
+design-system package (a caret pin in `forsight/web/package.json`, resolved
 from GitHub Packages — no `file:` link), and its build output is checked in
 at `forsight/internal/api/webdist/` so a bare `go build` never needs Node.
 The `web` CI job rebuilds and diffs against that embed.
@@ -29,6 +29,19 @@ not "fix" a stale embed by widening that trigger.
 release arrives as an ordinary Dependabot PR on `forsight/web/package.json` —
 the same shape as every other dependency. Refreshing the embed on that PR is
 the triage routine's job (pre-approved below).
+
+**The repository was transferred to the Fors-Corp organisation.** It is now
+`Fors-Corp/forsight`; the git remote still says `marcfs31` and redirects, so
+every `gh` call needs `-R Fors-Corp/forsight`. The npm package is
+`@fors-corp/forsight` starting from `5.0.0`, with `@marcfs31/forsight` frozen
+at its last published version, `4.2.0` — do not expect a new version to land
+under the old scope. The Go module is `github.com/Fors-Corp/forsight/forsight`
+and `github.com/Fors-Corp/forsight/forseer`. The container image is
+`ghcr.io/fors-corp/forsight` (lowercase — Docker rejects an uppercase
+repository name). Storybook is published at `https://fors-corp.github.io/forsight/`.
+`forsight/web` keeps pinning the OLD `@marcfs31/forsight` name until the
+first version publishes under `@fors-corp/forsight`; switching that pin is a
+follow-up, not part of this rename.
 
 # Standing rule: Graft and CodeGraph, both — each for the job it wins
 
@@ -134,7 +147,7 @@ explicitly says to stop.
   `Analyze (actions)`, `Analyze (javascript-typescript)`, `go (vet, lint,
 test, build)`, `web (dashboard build, and it matches what's embedded)` and
   `CodeQL` (the code-scanning results check). Read the live list with `gh api
-repos/marcfs31/forsight/branches/main/protection/required_status_checks`
+repos/Fors-Corp/forsight/branches/main/protection/required_status_checks`
   rather than trusting this paragraph.
 - **CodeQL findings block merge.** The two "Analyze (…)" checks only prove
   the scan ran — `github/codeql-action/analyze` does not fail on a finding —
@@ -240,7 +253,7 @@ followed by a clean `git status` under `forsight/internal/api/webdist/`.
 Marc's rule (2026-09-11, said directly in a live session — "auto fix all
 PRs, make it a rule"): the section above's mandate is scoped to Dependabot/
 security/CodeQL PRs; this one is broader and covers **every open PR in
-marcfs31/forsight**, regardless of author — a hand-authored feature/fix PR
+Fors-Corp/forsight**, regardless of author — a hand-authored feature/fix PR
 from a Claude session included. A merge conflict with `main`, a red required
 check, or feedback left in a review comment on any open PR is fixed and
 pushed without asking first, the same way. Durable, same as the section

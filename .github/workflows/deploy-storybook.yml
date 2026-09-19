@@ -1,7 +1,7 @@
 name: Deploy Storybook
 
-# Publishes the design system's Storybook to https://marcfs31.github.io/forsight/
-# — the docs for `@marcfs31/forsight` (src/, the vX.Y.Z train). It does NOT
+# Publishes the design system's Storybook to https://fors-corp.github.io/forsight/
+# — the docs for `@fors-corp/forsight` (src/, the vX.Y.Z train). It does NOT
 # document the agent in forsight/: .storybook/main.ts globs
 # ../src/**/*.stories.@(ts|tsx) only, and the agent is a separate artifact on
 # the forsight-vX.Y.Z tags. See CLAUDE.md, "two independently versioned
@@ -61,7 +61,7 @@ jobs:
           FORCED: ${{ github.event.inputs.force }}
         run: |
           set -uo pipefail
-          live=$(curl -fsS --max-time 20 "https://marcfs31.github.io/forsight/build-info.json" 2>/dev/null \
+          live=$(curl -fsS --max-time 20 "https://fors-corp.github.io/forsight/build-info.json" 2>/dev/null \
                  | jq -r '.sha // empty' 2>/dev/null || true)
           echo "published from: ${live:-<unknown>}"
           echo "main is at:     ${GITHUB_SHA}"
