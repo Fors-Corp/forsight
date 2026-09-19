@@ -1,6 +1,6 @@
 {
   "name": "@fors-corp/forsight",
-  "version": "4.3.0",
+  "version": "5.0.0",
   "private": false,
   "description": "Marc Fors's observability design system — brand tokens, React components, and data-visualization + observability primitives.",
   "author": "Marc Fors <developer@marcfors.com>",
