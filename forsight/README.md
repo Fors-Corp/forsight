@@ -203,7 +203,7 @@ learned: `<data-dir>/forseer.json`, one JSON document written on shutdown and
 read back at startup, before the severity model's fallback wires up. It
 carries each model's own trained state (naive-Bayes counts, per-series
 thresholds, Holt's forecast, and so on) so a restart doesn't re-earn
-`severityMinTrained`/`thresholdMinSamples`/every other model's own warm-up
+`severityMinTrained`/`thresholdCriticalMinSamples`/every other model's own warm-up
 from zero; each model's prequential grading window still resets, so
 readiness against a fallback is always re-earned on live data. `--store
 memory` has no data dir, so Forseer stays cold on every restart, the same as
