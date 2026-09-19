@@ -309,9 +309,7 @@ describe("LineChart", () => {
     // the shape of a parent re-rendering (a dashboard's 5s poll, a sibling's
     // state change) without the chart's own data changing. The extent scan
     // and niceScale it feeds must not run again.
-    rerender(
-      <LineChart label="Requests per second" labels={labels} series={series} />
-    );
+    rerender(<LineChart label="Requests per second" labels={labels} series={series} />);
     expect(niceScale.mock.calls.length).toBe(callsAfterMount);
 
     // A real data change (a new `series` reference/value) must still recompute.
