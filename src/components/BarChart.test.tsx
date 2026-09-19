@@ -1,8 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "../test-utils/axe";
+import * as chartLib from "../lib/chart";
 import { BarChart } from "./BarChart";
+
+// Wraps (never replaces) niceScale so every existing assertion below still
+// exercises the real geometry — this only adds a call-count probe for the
+// memoization test at the bottom of the file.
+vi.mock("../lib/chart", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/chart")>();
+  return { ...actual, niceScale: vi.fn(actual.niceScale) };
+});
 
 const labels = ["2xx", "3xx", "4xx", "5xx"];
 const series = [
@@ -166,5 +175,26 @@ describe("BarChart", () => {
       />
     );
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("does not recompute the scale on a re-render with unchanged series/labels", () => {
+    const niceScale = chartLib.niceScale as unknown as ReturnType<typeof vi.fn>;
+    niceScale.mockClear();
+
+    const { rerender } = render(<BarChart label="Responses" labels={labels} series={series} />);
+    const callsAfterMount = niceScale.mock.calls.length;
+    expect(callsAfterMount).toBeGreaterThan(0);
+
+    rerender(<BarChart label="Responses" labels={labels} series={series} />);
+    expect(niceScale.mock.calls.length).toBe(callsAfterMount);
+
+    rerender(
+      <BarChart
+        label="Responses"
+        labels={labels}
+        series={[{ name: "checkout", values: [5000, 40, 90, 12] }]}
+      />
+    );
+    expect(niceScale.mock.calls.length).toBeGreaterThan(callsAfterMount);
   });
 });
