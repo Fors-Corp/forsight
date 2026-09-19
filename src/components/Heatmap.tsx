@@ -19,6 +19,8 @@ export interface HeatmapProps extends Omit<React.HTMLAttributes<HTMLTableElement
   valueFormat?: (value: number) => string;
   /** Scale ceiling. Defaults to the largest value in the data. */
   max?: number;
+  /** Read for a `null`/missing cell's title and accessible name. Defaults to `"no data"` — override to localize it. */
+  noDataLabel?: string;
 }
 
 /**
@@ -32,7 +34,19 @@ export interface HeatmapProps extends Omit<React.HTMLAttributes<HTMLTableElement
  * the data table.
  */
 export const Heatmap = React.forwardRef<HTMLTableElement, HeatmapProps>(
-  ({ className, label, columns, rows, valueFormat = formatCompact, max, ...props }, ref) => {
+  (
+    {
+      className,
+      label,
+      columns,
+      rows,
+      valueFormat = formatCompact,
+      max,
+      noDataLabel = "no data",
+      ...props
+    },
+    ref
+  ) => {
     const ceiling =
       max ??
       Math.max(
@@ -81,7 +95,7 @@ export const Heatmap = React.forwardRef<HTMLTableElement, HeatmapProps>(
                     <div
                       title={
                         value === null
-                          ? "no data"
+                          ? noDataLabel
                           : `${row.label}, ${columns[index] ?? index}: ${valueFormat(value)}`
                       }
                       className="relative h-6 w-6 overflow-hidden rounded-sm bg-ink-surface-2"
@@ -96,7 +110,7 @@ export const Heatmap = React.forwardRef<HTMLTableElement, HeatmapProps>(
                         />
                       )}
                       <span className="sr-only">
-                        {value === null ? "no data" : valueFormat(value)}
+                        {value === null ? noDataLabel : valueFormat(value)}
                       </span>
                     </div>
                   </td>

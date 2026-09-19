@@ -53,6 +53,25 @@ describe("LineChart", () => {
     expect(screen.getByRole("cell", { name: "no data" })).toBeInTheDocument();
   });
 
+  it("lets a consumer translate the no-data label", async () => {
+    const user = userEvent.setup();
+    const { container } = renderChart({ noDataLabel: "sem dados" });
+
+    // Data table: the gap cell reads the override, not the English literal.
+    expect(screen.getByRole("cell", { name: "sem dados" })).toBeInTheDocument();
+    expect(screen.queryByRole("cell", { name: "no data" })).not.toBeInTheDocument();
+
+    // Cursor readout: focusing the gapped point (index 2, "14:00") announces
+    // the override too — three ArrowRights from an unfocused cursor land on
+    // it (index 0, then 1, then 2).
+    const plot = container.querySelector("[tabindex='0']") as HTMLElement;
+    plot.focus();
+    await user.keyboard("{ArrowRight}{ArrowRight}{ArrowRight}");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("14:00");
+    expect(status).toHaveTextContent("eu-west sem dados");
+  });
+
   it("moves the cursor with the keyboard and announces the reading", async () => {
     const user = userEvent.setup();
     const { container } = renderChart();
