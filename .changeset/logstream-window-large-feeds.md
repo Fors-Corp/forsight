@@ -1,5 +1,5 @@
 ---
-"@marcfs31/forsight": patch
+"@fors-corp/forsight": patch
 ---
 
 Window `LogStream` past 200 entries so a large feed doesn't mount thousands of DOM rows.
