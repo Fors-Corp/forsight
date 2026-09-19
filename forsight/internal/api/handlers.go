@@ -40,11 +40,22 @@ type readyzResponse struct {
 // healthy pod out of service (see ROADMAP.md item 24's Why).
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	resp := readyzResponse{Status: "ready"}
+	// The status and the status code are public: that is what the exemption
+	// in isPublicPath exists to preserve, and a kubelet sends no headers.
+	// The rest is not. StoreError carries wrapped upstream text — Badger's
+	// ping embeds the on-disk path — and CollectorStatus.LastError likewise
+	// (docker.go's embeds the Docker endpoint), while the inventory itself
+	// says which collectors run. On the hardened configuration an
+	// unauthenticated client was reading local socket paths, data
+	// directories and reachable hostnames off the readiness probe.
+	anonymous := isAnonymous(r.Context())
 	if err := s.store.Ping(r.Context()); err != nil {
 		resp.Status = "unavailable"
-		resp.StoreError = err.Error()
+		if !anonymous {
+			resp.StoreError = err.Error()
+		}
 	}
-	if s.registry != nil {
+	if s.registry != nil && !anonymous {
 		resp.Collectors = s.registry.Statuses()
 	}
 
