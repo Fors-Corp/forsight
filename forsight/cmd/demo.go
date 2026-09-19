@@ -15,10 +15,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/marcfs31/forsight/forseer"
-	"github.com/marcfs31/forsight/forsight/internal/api"
-	"github.com/marcfs31/forsight/forsight/internal/model"
-	"github.com/marcfs31/forsight/forsight/internal/store"
+	"github.com/Fors-Corp/forsight/forseer"
+	"github.com/Fors-Corp/forsight/forsight/internal/api"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/store"
 )
 
 // demoHost is the label every synthetic point carries, so nothing this

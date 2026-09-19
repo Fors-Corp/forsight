@@ -2,7 +2,7 @@
 # Installs the forsight binary for this machine's OS/arch and (on Linux, when
 # run as root) sets it up as a systemd service. Usage:
 #
-#   curl -fsSL https://raw.githubusercontent.com/marcfs31/forsight/main/forsight/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Fors-Corp/forsight/main/forsight/install.sh | sh
 #
 # Honors:
 #   FORSIGHT_VERSION      release tag to install, e.g. "forsight-v1.0.0" (default: latest)
@@ -13,7 +13,7 @@
 # layouts; nobody running a normal install needs to set them.
 set -eu
 
-REPO="marcfs31/forsight"
+REPO="Fors-Corp/forsight"
 INSTALL_DIR="${FORSIGHT_INSTALL_DIR:-/usr/local/bin}"
 SERVICE_FILE="${FORSIGHT_SERVICE_FILE:-/etc/systemd/system/forsight.service}"
 ENV_FILE="${FORSIGHT_ENV_FILE:-/etc/default/forsight}"

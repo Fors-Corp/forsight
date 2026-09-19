@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/marcfs31/forsight/forsight/internal/mlaas"
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/mlaas"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // mlaasMaxBodyBytes caps a predict request body the same way the OTLP

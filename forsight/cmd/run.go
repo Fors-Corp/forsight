@@ -20,20 +20,20 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/marcfs31/forsight/forseer"
-	"github.com/marcfs31/forsight/forsight/internal/api"
-	"github.com/marcfs31/forsight/forsight/internal/collector"
-	dockercollector "github.com/marcfs31/forsight/forsight/internal/collector/docker"
-	"github.com/marcfs31/forsight/forsight/internal/collector/filelog"
-	hostcollector "github.com/marcfs31/forsight/forsight/internal/collector/host"
-	"github.com/marcfs31/forsight/forsight/internal/collector/otlp"
-	"github.com/marcfs31/forsight/forsight/internal/collector/probe"
-	proccollector "github.com/marcfs31/forsight/forsight/internal/collector/proc"
-	"github.com/marcfs31/forsight/forsight/internal/collector/promscrape"
-	"github.com/marcfs31/forsight/forsight/internal/collector/statsd"
-	"github.com/marcfs31/forsight/forsight/internal/mlaas"
-	"github.com/marcfs31/forsight/forsight/internal/model"
-	"github.com/marcfs31/forsight/forsight/internal/store"
+	"github.com/Fors-Corp/forsight/forseer"
+	"github.com/Fors-Corp/forsight/forsight/internal/api"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector"
+	dockercollector "github.com/Fors-Corp/forsight/forsight/internal/collector/docker"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector/filelog"
+	hostcollector "github.com/Fors-Corp/forsight/forsight/internal/collector/host"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector/otlp"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector/probe"
+	proccollector "github.com/Fors-Corp/forsight/forsight/internal/collector/proc"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector/promscrape"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector/statsd"
+	"github.com/Fors-Corp/forsight/forsight/internal/mlaas"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/store"
 )
 
 type runOptions struct {
@@ -115,7 +115,7 @@ func newRunCmd() *cobra.Command {
 		`directory for the Badger database when --store=badger (ignored otherwise); `+
 			"created if it doesn't exist")
 	cmd.Flags().StringVar(&opts.mlaasURL, "mlaas-url", "",
-		"base URL of an mlaas server (github.com/marcfs31/mlaas) that trains and serves models from this agent's own stream, "+
+		"base URL of an mlaas server (github.com/Fors-Corp/mlaas) that trains and serves models from this agent's own stream, "+
 			"e.g. http://127.0.0.1:8090; also read from MLAAS_URL when the flag is empty (off by default)")
 	cmd.Flags().StringVar(&opts.mlaasAPIKeyFile, "mlaas-api-key-file", "",
 		"file holding the mlaas API key (mlaas writes it to <data>/api_key); also read from MLAAS_API_KEY_FILE, "+
