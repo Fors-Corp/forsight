@@ -25,8 +25,14 @@ import {
 import { ROUTE_LABELS, useHashRoute, type Route } from "./route";
 import { submitAuthToken, useAuthPrompt } from "./api";
 import { useTheme } from "./theme";
+import { ErrorBoundary } from "./ErrorBoundary";
 import Overview from "./pages/Overview";
 import Models from "./pages/Models";
+
+// Target of the skip link below, and of nothing else — a plain id, not a
+// design-system export, since AppShellMain forwards arbitrary props (see
+// src/components/Sidebar.tsx) and this is the only caller that needs one.
+const MAIN_CONTENT_ID = "main-content";
 
 // Decorative nav icons, same shape as the design system's Sidebar story.
 // SidebarNavItem applies aria-hidden to `icon` itself, so these carry no
@@ -222,6 +228,20 @@ export default function App() {
 
   return (
     <SidebarProvider>
+      {/* First focusable element in the document: lets a keyboard user
+          jump straight past the sidebar's nav links (Sidebar renders a
+          second, mobile-drawer copy of them too — see SidebarNavLinks
+          above) to the page itself, the standard skip-link pattern. Hidden
+          until it has focus (`sr-only`/`focus:not-sr-only`, both Tailwind
+          core utilities — no config needed), same as every other
+          visually-hidden-until-relevant label already in the design
+          system (grep sr-only under src/components). */}
+      <a
+        href={`#${MAIN_CONTENT_ID}`}
+        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-accent focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-accent-fg focus:outline-none focus-visible:shadow-focus-ring"
+      >
+        Skip to main content
+      </a>
       <AuthTokenDialog />
       <AppShell>
         <Sidebar label="Main navigation">
@@ -235,18 +255,24 @@ export default function App() {
             <ThemeToggle />
           </SidebarFooter>
         </Sidebar>
-        <AppShellMain>
+        <AppShellMain id={MAIN_CONTENT_ID}>
           <div className="flex h-14 items-center gap-2 border-b border-ink-border px-3">
             <SidebarTrigger />
             <Text as="span" size="sm" tone="secondary">
               {ROUTE_LABELS[route]}
             </Text>
           </div>
-          {route === "models" ? (
-            <Models headingRef={headingRef} />
-          ) : (
-            <Overview headingRef={headingRef} />
-          )}
+          {/* Keyed on `route`: a page that crashed and fell back must not
+              keep showing that fallback after the user navigates to the
+              *other* page — a fresh key remounts the boundary (and the
+              page) with a clean `error: null` state. See ErrorBoundary.tsx. */}
+          <ErrorBoundary key={route}>
+            {route === "models" ? (
+              <Models headingRef={headingRef} />
+            ) : (
+              <Overview headingRef={headingRef} />
+            )}
+          </ErrorBoundary>
         </AppShellMain>
       </AppShell>
     </SidebarProvider>

@@ -101,6 +101,12 @@ const QUERY_HINT =
   'Understands error/fail/fatal/critical/severe, warn/warning, debug, and "from <source>" — e.g. "critical from checkout-api"';
 const QUERY_NOT_UNDERSTOOD =
   'Didn\'t recognize that phrase — try error/warn/debug/critical, optionally "from <source>"';
+// queryForseer() rejects (rather than resolving with matched: false) for
+// anything that isn't the server parsing the phrase and not recognizing
+// it — a 401 before a token is entered, a 500, a dropped connection. Shown
+// instead of QUERY_NOT_UNDERSTOOD so an outage doesn't read as a typo.
+const QUERY_CONNECTION_ERROR =
+  "Couldn't reach forsight to check that phrase — check your connection (or access token) and try again";
 
 const percentFormat = (value: number) => `${Math.round(value * 100)}%`;
 
@@ -589,14 +595,21 @@ function AlertsPanel({
             event.preventDefault();
             const phrase = query.trim();
             if (!phrase) return;
-            void queryForseer(phrase).then(({ facets, matched }) => {
-              if (!matched) {
-                setQueryError(QUERY_NOT_UNDERSTOOD);
-                return;
-              }
-              setQueryError(null);
-              onFiltersChange((prev) => mergeQueryFacets(prev, facets));
-            });
+            void queryForseer(phrase)
+              .then(({ facets, matched }) => {
+                if (!matched) {
+                  setQueryError(QUERY_NOT_UNDERSTOOD);
+                  return;
+                }
+                setQueryError(null);
+                onFiltersChange((prev) => mergeQueryFacets(prev, facets));
+              })
+              .catch(() => {
+                // A non-ok response, an unparseable body, or the request
+                // failing outright — never a recognized-grammar verdict,
+                // so it gets its own message rather than reading as a typo.
+                setQueryError(QUERY_CONNECTION_ERROR);
+              });
           }}
         >
           <Input

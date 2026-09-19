@@ -5,6 +5,7 @@ import {
   TRACE_READ_LIMIT,
   connectionState,
   fetchWithAuth,
+  queryForseer,
   submitAuthToken,
   useAuthPrompt,
   useLogs,
@@ -345,6 +346,71 @@ describe("fetchWithAuth / auth prompt", () => {
     await fetchWithAuth("/api/v1/metrics");
     const [, init] = fetchMock.mock.calls[0] as [unknown, RequestInit];
     expect(new Headers(init.headers).get("Authorization")).toBe("Bearer s3cret");
+  });
+});
+
+// Regression coverage for queryForseer's own failure handling — separate
+// from the "Ask Forseer query box" tests in App.test.tsx, which cover how
+// Overview reacts to these outcomes. queryForseer used to fold a non-ok
+// response into `{ facets: [], matched: false }`, exactly what a genuinely
+// parsed-but-unrecognized phrase returns — so a 401 before a token is
+// entered, a 500, or a dropped connection all looked like a bad query.
+describe("queryForseer", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("resolves with the parsed facets and matched:true on a recognized phrase", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ok({ facets: [{ key: "status", label: "Status", value: "error" }], matched: true }))
+    );
+
+    await expect(queryForseer("critical")).resolves.toEqual({
+      facets: [{ key: "status", label: "Status", value: "error" }],
+      matched: true,
+    });
+  });
+
+  it("resolves with matched:false on a 2xx response the server parsed but didn't recognize", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ok({ facets: [], matched: false }))
+    );
+
+    await expect(queryForseer("banana banana banana")).resolves.toEqual({
+      facets: [],
+      matched: false,
+    });
+  });
+
+  it("rejects, rather than resolving matched:false, on a non-ok response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 500 }))
+    );
+
+    await expect(queryForseer("critical")).rejects.toThrow();
+  });
+
+  it("rejects, rather than resolving matched:false, on a 401 (no token entered yet)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 401 }))
+    );
+
+    await expect(queryForseer("critical")).rejects.toThrow();
+  });
+
+  it("rejects, rather than resolving matched:false, when the request fails outright (dropped connection)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      })
+    );
+
+    await expect(queryForseer("critical")).rejects.toThrow("Failed to fetch");
   });
 });
 

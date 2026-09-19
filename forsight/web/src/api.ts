@@ -505,16 +505,29 @@ export interface ForseerQueryFacet {
 
 export interface ForseerQueryResult {
   facets: ForseerQueryFacet[];
-  /** Whether the phrase was recognized at all. False for both "nothing
-   * typed" and "typed something this grammar doesn't understand" — callers
-   * that need to tell those apart should check the query text themselves
-   * before calling this. */
+  /** Whether the phrase was recognized at all. False only for "the server
+   * parsed this and didn't understand it" — a query that never reached or
+   * completed parsing (a non-2xx response, a body that doesn't parse as
+   * JSON, or the request failing outright) is not represented here at all;
+   * `queryForseer` rejects instead. Callers that need "nothing typed" apart
+   * from "typed something this grammar doesn't understand" should check the
+   * query text themselves before calling this. */
   matched: boolean;
 }
 
+/**
+ * Used to fold a non-ok response into `{ facets: [], matched: false }` —
+ * indistinguishable from "the server understood the grammar and this
+ * phrase just isn't in it". That made a 401 (before a token is entered), a
+ * 500, or a dropped connection look exactly like a bad query: Overview's
+ * caller (see its submit handler) would show "didn't recognize that
+ * phrase" for an outage. A non-ok response, and a response whose body
+ * isn't the JSON this expects, now reject instead, so a caller that wants
+ * to tell "not recognized" apart from "couldn't ask" can just catch.
+ */
 export async function queryForseer(q: string): Promise<ForseerQueryResult> {
   const res = await fetchWithAuth("/api/v1/forseer/query?q=" + encodeURIComponent(q));
-  if (!res.ok) return { facets: [], matched: false };
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = (await res.json()) as Partial<ForseerQueryResult>;
   return {
     facets: Array.isArray(data.facets) ? data.facets : [],
