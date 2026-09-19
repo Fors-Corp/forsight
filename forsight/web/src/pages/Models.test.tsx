@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "../test-utils/axe";
 import Models, { forecastChart } from "./Models";
 import type { ForseerCard, Metric, MlaasForecast, MlaasStatus } from "../api";
 
@@ -193,6 +194,36 @@ describe("Models page", () => {
     expect(screen.getByText("82% vs rule 60% on 500 graded")).toBeInTheDocument();
     // "Ready" is also the column header; the badge is the span.
     expect(screen.getByText("Ready", { selector: "span" })).toBeInTheDocument();
+  });
+
+  // The "Served by mlaas" StatusDot's label flips between "Checking
+  // mlaas…", "Connected to …" and "Unreachable: …" on its own 10s poll
+  // (useMlaasStatus), with nothing else on the page announcing the change —
+  // same problem Overview.tsx's "Agent connection" region already solved
+  // for its own StatusDot. Without a named live region around it, a screen
+  // reader user has no way to learn the connection came up or went down
+  // short of re-reading the card.
+  it("announces the mlaas connection status from its own named live region", async () => {
+    mockFetch(baseEndpoints);
+    render(<Models />);
+
+    const region = await screen.findByRole("status", { name: "mlaas connection" });
+    await within(region).findByText("Connected to http://127.0.0.1:8090");
+  });
+
+  it("announces mlaas unreachable from the same live region, not just in the table", async () => {
+    mockFetch({
+      ...baseEndpoints,
+      "/api/v1/mlaas/status": {
+        ...connected,
+        reachable: false,
+        lastError: "connection refused",
+      },
+    });
+    render(<Models />);
+
+    const region = await screen.findByRole("status", { name: "mlaas connection" });
+    await within(region).findByText("Unreachable: connection refused");
   });
 
   it("shows drift as not-yet-measured rather than a flattering zero, and flags a model at its retrain threshold", async () => {
@@ -679,6 +710,35 @@ describe("Models page", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("Models accessibility", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Regression coverage for the section-heading outline and the mlaas
+  // connection announcement: every Card on this page sits as a direct child
+  // of the page, right under its own <h1> ("Models"), so each
+  // CardSectionHeading must render as an <h2> (CardTitle's own default,
+  // <h3>, would jump a level) and MlaasModelsCard's StatusDot must sit in a
+  // named live region, not bare in the header — axe's heading-order and
+  // aria-required-children/name rules catch exactly those.
+  it("has no axe violations once connected, with models, forecasts and a Forseer card all rendered", async () => {
+    mockFetch(baseEndpoints);
+    const { container } = render(<Models />);
+    await screen.findByText("Connected to http://127.0.0.1:8090");
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations in the not-configured empty state", async () => {
+    mockFetch({ ...baseEndpoints, "/api/v1/mlaas/status": notConfigured });
+    const { container } = render(<Models />);
+    await screen.findByText("mlaas is not configured");
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 });
 

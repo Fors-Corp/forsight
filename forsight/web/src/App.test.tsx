@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "./test-utils/axe";
 import App from "./App";
 import { submitAuthToken, type ForseerQueryFacet } from "./api";
 import { THEME_STORAGE_KEY } from "./theme";
@@ -963,5 +964,46 @@ describe("Theme toggle", () => {
     const toggle = await screen.findByRole("switch", { name: "Light theme" });
     expect(toggle).toBeChecked();
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  });
+});
+
+/**
+ * Regression coverage for the whole shell: sidebar, nav, and whichever page
+ * is routed in, all together — the level a single page's own render tree
+ * (see Overview.test.tsx and Models.test.tsx) can't catch, like the app
+ * chrome's own landmark/heading structure around a routed page's <h1>.
+ */
+describe("App accessibility", () => {
+  afterEach(() => {
+    window.location.hash = "";
+    vi.unstubAllGlobals();
+  });
+
+  it("has no axe violations on the overview route", async () => {
+    mockFetch(emptyEndpoints);
+    const { container } = render(<App />);
+    await screen.findByText("Host CPU over time");
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations on the models route", async () => {
+    window.location.hash = "#/models";
+    mockFetch({
+      ...emptyEndpoints,
+      "/api/v1/forseer/models": [],
+      "/api/v1/mlaas/status": {
+        configured: false,
+        reachable: false,
+        models: [],
+        forecasts: [],
+        predictions: [],
+        jobs: [],
+      },
+    });
+    const { container } = render(<App />);
+    await screen.findByText("mlaas is not configured");
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 });
