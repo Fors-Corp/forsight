@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -37,17 +39,45 @@ func TestThresholds_ColdSeriesKeepsTheFixedSigmas(t *testing.T) {
 	}
 }
 
-func TestThresholds_BecomeReadyOnlyWithEnoughHistory(t *testing.T) {
+// TestThresholds_EachThresholdWaitsForItsOwnTail: readiness is per
+// threshold, because the two thresholds are asking questions that differ in
+// difficulty by the factor their budgets differ by. A one-in-a-thousand
+// quantile is estimable from a sample that contains a few points beyond it;
+// a one-in-ten-thousand quantile of the same series is not, and a model that
+// declared both ready at the same count would be reporting a number it could
+// not have learned.
+func TestThresholds_EachThresholdWaitsForItsOwnTail(t *testing.T) {
 	m := newThresholdModel()
 	rng := rand.New(rand.NewSource(1))
+	draw := func() float64 { return math.Abs(rng.NormFloat64()) }
 
-	for i := 0; i < thresholdMinSamples-1; i++ {
-		if _, _, ready := m.Observe("host.cpu", math.Abs(rng.NormFloat64())); ready {
-			t.Fatalf("reported calibrated after %d points, minimum is %d", i+1, thresholdMinSamples)
+	var warn, critical float64
+	var ready bool
+	for i := 0; i < thresholdWarnMinSamples; i++ {
+		warn, critical, ready = m.Observe("host.cpu", draw())
+		if warn != warningSigma || critical != criticalSigma || ready {
+			t.Fatalf("point %d: got %.2f/%.2f ready=%v, want the constants and not ready", i+1, warn, critical, ready)
 		}
 	}
-	if _, _, ready := m.Observe("host.cpu", math.Abs(rng.NormFloat64())); !ready {
-		t.Fatal("still not calibrated at the minimum sample count")
+	for i := thresholdWarnMinSamples; i < thresholdCriticalMinSamples; i++ {
+		warn, critical, ready = m.Observe("host.cpu", draw())
+		if warn == warningSigma {
+			t.Fatalf("point %d: the warning threshold is still the shared constant", i+1)
+		}
+		if critical != criticalSigma {
+			t.Fatalf("point %d: the page threshold is %.2f, but it cannot have been learned yet", i+1, critical)
+		}
+		if ready {
+			t.Fatalf("point %d: reported fully calibrated while the page threshold is still the constant", i+1)
+		}
+	}
+	warn, critical, ready = m.Observe("host.cpu", draw())
+	if !ready || critical == criticalSigma {
+		t.Fatalf("at %d points the page threshold is %.2f ready=%v, want a learned one",
+			thresholdCriticalMinSamples, critical, ready)
+	}
+	if critical < warn {
+		t.Fatalf("page threshold %.2f is easier to reach than the warning %.2f", critical, warn)
 	}
 }
 
@@ -179,7 +209,7 @@ func TestThresholds_CardReportsTheBudgetItIsHitting(t *testing.T) {
 	}
 
 	rng := rand.New(rand.NewSource(5))
-	feed(m, "host.cpu", thresholdMinSamples*3, func() float64 { return rng.NormFloat64() })
+	feed(m, "host.cpu", thresholdWarnMinSamples*3, func() float64 { return rng.NormFloat64() })
 
 	warm := m.Card()
 	if !warm.Ready {
@@ -187,6 +217,13 @@ func TestThresholds_CardReportsTheBudgetItIsHitting(t *testing.T) {
 	}
 	if warm.Detail == cold.Detail {
 		t.Error("detail did not change once the model had something to say")
+	}
+	// The two thresholds are ready at different times, so one boolean cannot
+	// describe the model: the card has to say how many series have learned
+	// each of them, or an operator reading "ready" would believe a page
+	// threshold had been calibrated weeks before it can be.
+	if !strings.Contains(warm.Detail, "warning threshold") || !strings.Contains(warm.Detail, "page threshold") {
+		t.Errorf("detail %q does not report both thresholds' readiness separately", warm.Detail)
 	}
 }
 
@@ -212,11 +249,12 @@ func TestDetector_UsesLearnedThresholdsOnceCalibrated(t *testing.T) {
 	if s == nil {
 		t.Fatal("the detector never fed this series to the threshold model")
 	}
-	if s.n < thresholdMinSamples {
+	if s.n < thresholdWarnMinSamples {
 		t.Fatalf("only %d points reached the model", s.n)
 	}
-	if s.warn <= warningSigma {
-		t.Errorf("warning threshold settled at %.2f, no higher than the fixed %d it replaced", s.warn, warningSigma)
+	warn, _, _ := s.thresholds()
+	if warn <= warningSigma {
+		t.Errorf("warning threshold settled at %.2f, no higher than the fixed %d it replaced", warn, warningSigma)
 	}
 }
 
@@ -224,14 +262,16 @@ func TestDetector_UsesLearnedThresholdsOnceCalibrated(t *testing.T) {
 // this model. Unlike severity's, there is no grading window to reset here:
 // a calibration is restored whole, n included, so a series that was already
 // calibrated stays calibrated across a restart.
+//
+// What "whole" means is now the two quantile estimators' markers, not a pair
+// of scalars, and the assertion is the one that matters to an operator: the
+// restored model answers the next point with exactly the thresholds the
+// original would have, and keeps moving from there rather than from a
+// frozen number.
 func TestThresholds_SnapshotRestoreRoundTrip(t *testing.T) {
 	m := newThresholdModel()
 	rng := rand.New(rand.NewSource(21))
-	feed(m, "host.cpu", thresholdMinSamples*2, func() float64 { return rng.NormFloat64() })
-
-	m.mu.Lock()
-	want := *m.series["host.cpu"]
-	m.mu.Unlock()
+	feed(m, "host.cpu", thresholdCriticalMinSamples+500, func() float64 { return rng.NormFloat64() })
 
 	data, err := m.Snapshot()
 	if err != nil {
@@ -242,28 +282,85 @@ func TestThresholds_SnapshotRestoreRoundTrip(t *testing.T) {
 	if err := restored.Restore(data); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	restored.mu.Lock()
-	got, ok := restored.series["host.cpu"]
-	restored.mu.Unlock()
-	if !ok {
-		t.Fatal("restored model has no host.cpu series")
-	}
-	if *got != want {
-		t.Fatalf("restored series = %+v, want %+v", *got, want)
+
+	// Feed both the same continuation: a restored calibration that had lost
+	// any part of its state would diverge on the very next point.
+	next := rand.New(rand.NewSource(99))
+	for i := 0; i < 500; i++ {
+		z := math.Abs(next.NormFloat64())
+		wantWarn, wantCrit, wantReady := m.Observe("host.cpu", z)
+		gotWarn, gotCrit, gotReady := restored.Observe("host.cpu", z)
+		if gotWarn != wantWarn || gotCrit != wantCrit || gotReady != wantReady {
+			t.Fatalf("point %d after restore: got %.6f/%.6f ready=%v, want %.6f/%.6f ready=%v",
+				i+1, gotWarn, gotCrit, gotReady, wantWarn, wantCrit, wantReady)
+		}
 	}
 	if !restored.Card().Ready {
-		t.Fatal("restored model is not ready even though its series already had thresholdMinSamples")
+		t.Fatal("restored model is not ready even though its series was already calibrated")
+	}
+}
+
+// TestThresholds_RestoreRejectsAnImpossibleEstimator: the markers are not
+// free-form numbers, they are a state machine's state. Marker positions that
+// are equal or out of order make the P² update divide by zero, and the NaN
+// that follows compares false against every z forever — a series that
+// silently never alerts again. A snapshot that says so is refused, and the
+// series re-earns its calibration instead.
+func TestThresholds_RestoreRejectsAnImpossibleEstimator(t *testing.T) {
+	m := newThresholdModel()
+	rng := rand.New(rand.NewSource(23))
+	feed(m, "good", thresholdWarnMinSamples, func() float64 { return rng.NormFloat64() })
+	feed(m, "corrupt", thresholdWarnMinSamples, func() float64 { return rng.NormFloat64() })
+
+	data, err := m.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	var snap thresholdSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	broken := snap.Series["corrupt"]
+	broken.Warn.Pos = [5]int{1, 2, 2, 4, broken.Warn.N}
+	snap.Series["corrupt"] = broken
+	data, err = json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal edited snapshot: %v", err)
+	}
+
+	restored := newThresholdModel()
+	if err := restored.Restore(data); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	restored.mu.Lock()
+	_, keptCorrupt := restored.series["corrupt"]
+	_, keptGood := restored.series["good"]
+	restored.mu.Unlock()
+	if keptCorrupt {
+		t.Error("restored a series whose markers P² could not have produced")
+	}
+	if !keptGood {
+		t.Error("one corrupt series cost an intact one its calibration")
+	}
+
+	// And the dropped series still works: it starts over on the constants
+	// rather than answering NaN.
+	warn, critical, ready := restored.Observe("corrupt", 4)
+	if warn != warningSigma || critical != criticalSigma || ready {
+		t.Errorf("a dropped series answered %.2f/%.2f ready=%v, want the constants", warn, critical, ready)
 	}
 }
 
 func TestThresholds_RestoreDiscardsAVersionMismatch(t *testing.T) {
 	m := newThresholdModel()
-	feed(m, "host.cpu", thresholdMinSamples, func() float64 { return 1 })
+	feed(m, "host.cpu", thresholdWarnMinSamples, func() float64 { return 1 })
 	data, err := m.Snapshot()
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	data = bytes.Replace(data, []byte(`"version":1`), []byte(`"version":2`), 1)
+	data = bytes.Replace(data,
+		[]byte(fmt.Sprintf(`"version":%d`, thresholdSnapshotVersion)),
+		[]byte(fmt.Sprintf(`"version":%d`, thresholdSnapshotVersion+1)), 1)
 
 	fresh := newThresholdModel()
 	if err := fresh.Restore(data); err == nil {
@@ -298,23 +395,30 @@ func TestThresholds_RestoreDiscardsCorruptJSON(t *testing.T) {
 func TestThresholds_RestoreBoundsAnOversizedSnapshot(t *testing.T) {
 	const extra = 50
 	const total = maxSeries + extra
-	snap := thresholdSnapshot{
-		Version: thresholdSnapshotVersion,
-		Series:  make(map[string]seriesThresholdSnapshot, total),
-	}
+
+	// Built by feeding real points, because the markers are a state machine's
+	// state: a hand-written pair of numbers is not a state P² could have
+	// produced, and Restore refuses those on purpose (see
+	// TestThresholds_RestoreRejectsAnImpossibleEstimator). Only the map is
+	// oversized, which is what this test is about.
+	source := newThresholdModel()
+	rng := rand.New(rand.NewSource(31))
 	for i := 0; i < total; i++ {
 		key := fmt.Sprintf("series-%04d", i)
-		snap.Series[key] = seriesThresholdSnapshot{
-			Warn:     3 + float64(i)*0.001,
-			Critical: 5 + float64(i)*0.001,
-			N:        thresholdMinSamples + i,
-			WarnHits: i,
-			CritHits: i / 2,
+		for j := 0; j < 10; j++ {
+			source.Observe(key, math.Abs(rng.NormFloat64()))
 		}
 	}
-	data, err := json.Marshal(snap)
+	data, err := source.Snapshot()
 	if err != nil {
-		t.Fatalf("marshal test snapshot: %v", err)
+		t.Fatalf("Snapshot: %v", err)
+	}
+	var snap thresholdSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	if len(snap.Series) != total {
+		t.Fatalf("test setup: snapshot holds %d series, want %d", len(snap.Series), total)
 	}
 
 	m := newThresholdModel()
@@ -330,9 +434,97 @@ func TestThresholds_RestoreBoundsAnOversizedSnapshot(t *testing.T) {
 		if !ok {
 			t.Fatalf("restored series %q was never in the snapshot", key)
 		}
-		if got.warn != want.Warn || got.critical != want.Critical || got.n != want.N ||
-			got.warnHits != want.WarnHits || got.critHits != want.CritHits {
-			t.Errorf("series %q = %+v, want %+v", key, *got, want)
+		if got.n != want.N || got.warnHits != want.WarnHits || got.critHits != want.CritHits {
+			t.Errorf("series %q counts = n:%d warn:%d crit:%d, want n:%d warn:%d crit:%d",
+				key, got.n, got.warnHits, got.critHits, want.N, want.WarnHits, want.CritHits)
+		}
+		if !reflect.DeepEqual(snapshotP2(got.warn), want.Warn) || !reflect.DeepEqual(snapshotP2(got.critical), want.Critical) {
+			t.Errorf("series %q came back with different markers than the snapshot held", key)
 		}
 	}
+}
+
+// budgetRates is the measurement the whole model exists to pass: feed one
+// series `warm` points of |N(0,1)|, then over the next `window` points count
+// how often the thresholds actually in force were crossed. That fraction is
+// what an operator experiences as "how often this pages me", and the budget
+// is what they were promised.
+//
+// Independent series, averaged, because a one-in-ten-thousand rate cannot be
+// measured on one short stream: 2 000 points of a correctly calibrated
+// series contain 0.2 expected pages, so a single series reports either 0% or
+// 0.05% and neither number means anything.
+func budgetRates(seed int64, series, warm, window int) (warnRate, critRate float64) {
+	m := newThresholdModel()
+	warnHits, critHits := 0, 0
+	for s := 0; s < series; s++ {
+		key := fmt.Sprintf("series-%d", s)
+		rng := rand.New(rand.NewSource(seed + int64(s)))
+		for i := 0; i < warm; i++ {
+			m.Observe(key, math.Abs(rng.NormFloat64()))
+		}
+		for i := 0; i < window; i++ {
+			z := math.Abs(rng.NormFloat64())
+			warn, critical, _ := m.Observe(key, z)
+			if z >= warn {
+				warnHits++
+			}
+			if z >= critical {
+				critHits++
+			}
+		}
+	}
+	total := float64(series * window)
+	return float64(warnHits) / total, float64(critHits) / total
+}
+
+func assertWithinBudget(t *testing.T, label string, got, budget, tolerance float64) {
+	t.Helper()
+	if got < budget*(1-tolerance) || got > budget*(1+tolerance) {
+		t.Errorf("%s: alerting on %.5f%% of points against a %.5f%% budget — outside the stated ±%.0f%%",
+			label, 100*got, 100*budget, 100*tolerance)
+	}
+}
+
+// exceedancesNeeded is how many points beyond a threshold a series has to
+// have seen before that threshold can be called learned rather than guessed.
+// It is stated here in the tests' own terms — a budget and a count of
+// exceedances — rather than borrowed from the model, so that the two tests
+// below measure the promise and not the implementation of it.
+const exceedancesNeeded = 2
+
+// TestThresholds_MeetTheWarningBudgetOnceItsTailIsEstimable and its paging
+// sibling below are the readiness regression.
+//
+// "Ready" used to mean 2 000 points for both thresholds, a constant with no
+// relation to either budget. For the warning threshold that is about right
+// by accident. For the page threshold it was not: with a multiplicative
+// Robbins-Monro step of 0.02, every non-exceeding point moved a threshold by
+// step x target = 2e-6 of itself, so from criticalSigma it needed of the
+// order of 10^5 points of uninterrupted downward drift to reach the tail of
+// an ordinary series. Measured on |N(0,1)|: a realised page rate of exactly
+// zero at 2 000 points and 0.00003% at 10 000 against a 0.01% budget, with
+// the model reporting itself calibrated for all of it. seasonalKey gives
+// each hour of the day its own key at about 360 points a day, so a promise
+// of one page per ten thousand points was being kept as no pages at all for
+// the best part of a year — and critical is the label pagingModel learns
+// from.
+//
+// Both tests measure the same way: warm a series up to where its tail holds
+// the couple of exceedances any estimator needs, then measure what the
+// thresholds in force actually do over a window long enough for the rate to
+// mean something.
+func TestThresholds_MeetTheWarningBudgetOnceItsTailIsEstimable(t *testing.T) {
+	warm := int(exceedancesNeeded / targetWarnRate)
+	warnRate, _ := budgetRates(2026, 40, warm, 10000)
+	assertWithinBudget(t, "warning", warnRate, targetWarnRate, 0.25)
+}
+
+func TestThresholds_MeetThePagingBudgetOnceItsTailIsEstimable(t *testing.T) {
+	warm := int(exceedancesNeeded / targetCriticalRate)
+	warnRate, critRate := budgetRates(4051, 20, warm, 100000)
+	assertWithinBudget(t, "paging", critRate, targetCriticalRate, 0.40)
+	// By here the warning threshold has ten times the history it needs, so
+	// it should be tighter than the test above requires.
+	assertWithinBudget(t, "warning", warnRate, targetWarnRate, 0.15)
 }
