@@ -1,5 +1,5 @@
 ---
-"@marcfs31/forsight": patch
+"@fors-corp/forsight": patch
 ---
 
 Memoize the plotted charts' geometry so the cursor doesn't recompute it on every move.
