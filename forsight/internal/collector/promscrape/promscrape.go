@@ -21,7 +21,7 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
 
-	fsmodel "github.com/marcfs31/forsight/forsight/internal/model"
+	fsmodel "github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 const (

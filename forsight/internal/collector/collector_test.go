@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // countingCollector reports how many times it was called, and can be made to

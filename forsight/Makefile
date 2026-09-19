@@ -7,7 +7,7 @@
 # internal/api/dashboard.go's doc comment on why webdist/ is checked in).
 
 VERSION ?= dev
-LDFLAGS := -X github.com/marcfs31/forsight/forsight/internal/version.Version=$(VERSION)
+LDFLAGS := -X github.com/Fors-Corp/forsight/forsight/internal/version.Version=$(VERSION)
 
 .PHONY: help build build-web build-go release dev demo test test-install lint vet clean
 

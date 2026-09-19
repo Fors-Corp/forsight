@@ -1,9 +1,9 @@
-module github.com/marcfs31/forsight/forsight
+module github.com/Fors-Corp/forsight/forsight
 
 go 1.27.1
 
 require (
-	github.com/marcfs31/forsight/forseer v0.0.0
+	github.com/Fors-Corp/forsight/forseer v0.0.0
 	github.com/moby/moby/api v1.56.0
 	github.com/moby/moby/client v0.6.0
 	github.com/prometheus/client_model v0.6.3
@@ -57,4 +57,4 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 )
 
-replace github.com/marcfs31/forsight/forseer => ../forseer
+replace github.com/Fors-Corp/forsight/forseer => ../forseer
