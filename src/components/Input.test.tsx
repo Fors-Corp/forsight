@@ -32,6 +32,16 @@ describe("Input", () => {
     expect(screen.getByPlaceholderText("Email")).not.toHaveAttribute("aria-describedby");
   });
 
+  it("announces the hint via aria-live once it is an error", () => {
+    render(<Input placeholder="Email" invalid hint="Enter a valid email." readOnly />);
+    expect(screen.getByText("Enter a valid email.")).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("does not make a non-invalid hint live, so it doesn't announce every keystroke", () => {
+    render(<Input placeholder="Workspace name" hint="Visible to your organization." />);
+    expect(screen.getByText("Visible to your organization.")).not.toHaveAttribute("aria-live");
+  });
+
   it("has no accessibility violations", async () => {
     const { container } = render(<Input placeholder="Email" aria-label="Email" />);
     expect(await axe(container)).toHaveNoViolations();
