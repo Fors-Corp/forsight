@@ -235,7 +235,7 @@ func TestSeverityTokens_IsCaseInsensitive(t *testing.T) {
 
 // substringRule is the tailer's fallback, duplicated here so this module
 // stays dependency-free. It must stay in step with
-// filelog.FallbackSeverity — TestSeverityModel_FallbackRuleMatchesTheAgents
+// model.FallbackSeverity — TestSeverityModel_FallbackRuleMatchesTheAgents
 // in the agent module is what catches it drifting.
 func substringRule(line string) string {
 	lower := strings.ToLower(line)
