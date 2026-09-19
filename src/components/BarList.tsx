@@ -1,12 +1,20 @@
 import * as React from "react";
 import { cn } from "../lib/cn";
 import { formatCompact, seriesBg } from "../lib/chart";
+import { isSafeHref } from "../lib/safe-href";
 
 export interface BarListItem {
   /** Row name — an endpoint, service, region, error code. */
   label: string;
   value: number;
-  /** Makes the row a link to the drill-down for that dimension. */
+  /**
+   * Makes the row a link to the drill-down for that dimension. Since this is
+   * typically built from route/service/tag/error-code data that traces back
+   * to request input, it is treated as untrusted: only relative URLs and
+   * absolute `http:`/`https:` URLs are linked (`isSafeHref`, `../lib/safe-href`)
+   * — anything else (a `javascript:` or `data:` URI, say) falls back to the
+   * same non-link row rendered when `href` is omitted.
+   */
   href?: string;
   /** Categorical slot for the bar. Omit to draw every row in the accent color. */
   seriesIndex?: number;
@@ -56,7 +64,7 @@ export const BarList = React.forwardRef<HTMLOListElement, BarListProps>(
 
           return (
             <li key={item.label} className="min-w-0">
-              {item.href ? (
+              {item.href && isSafeHref(item.href) ? (
                 <a
                   href={item.href}
                   className="relative flex min-h-9 w-full items-center gap-3 overflow-hidden rounded-sm px-2 text-sm font-sans transition-colors duration-fast hover:bg-ink-surface-2 focus-visible:outline-none focus-visible:shadow-focus-ring"

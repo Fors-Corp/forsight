@@ -38,3 +38,11 @@ describe("Breadcrumb", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 });
+
+describe("BreadcrumbLink", () => {
+  it("renders its non-link branch for a javascript: href", () => {
+    render(<BreadcrumbLink href="javascript:alert(document.cookie)">Projects</BreadcrumbLink>);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("Projects")).toBeInTheDocument();
+  });
+});
