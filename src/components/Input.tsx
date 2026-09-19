@@ -11,7 +11,9 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
 /**
  * Single-line text field. Set `invalid` and pass an error message via
  * `hint` for validation states; `hint` alone (no `invalid`) renders as
- * neutral helper text.
+ * neutral helper text. When `hint` becomes an error message after `invalid`
+ * turns on (e.g. after a failed submit), the hint is announced to screen
+ * readers via `aria-live="polite"` — it stays silent the rest of the time.
  */
 export const Input = React.forwardRef<HTMLInputElement, InputProps>(
   ({ className, invalid, hint, id, ...props }, ref) => {
@@ -39,6 +41,13 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         {hint && (
           <span
             id={hintId}
+            // Live only while invalid: a hint that turns into an error after
+            // submit (the common validation pattern) needs to be announced —
+            // WCAG 4.1.3 — but an always-live hint would announce every
+            // keystroke-driven hint change too (e.g. a character counter),
+            // which is noise rather than a status change worth interrupting
+            // for.
+            aria-live={invalid ? "polite" : undefined}
             className={cn("text-xs font-sans", invalid ? "text-danger" : "text-fg-muted")}
           >
             {hint}
