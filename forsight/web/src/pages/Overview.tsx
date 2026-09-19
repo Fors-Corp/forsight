@@ -820,21 +820,30 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
   // production the server already scoped the response to this one name, so
   // the filter is a no-op there, but it keeps this correct against a test
   // double (or a future store) that doesn't, and the sort is load-bearing
-  // either way since LineChart needs oldest-first.
-  const metricHistories: Record<ChartMetric, Metric[]> = {
-    cpu: historyFor(
-      useMetrics(5000, { name: "host.cpu.percent", sinceMs: requestedRangeMs }).data,
-      "host.cpu.percent"
-    ),
-    memory: historyFor(
-      useMetrics(5000, { name: "host.memory.percent", sinceMs: requestedRangeMs }).data,
-      "host.memory.percent"
-    ),
-    disk: historyFor(
-      useMetrics(5000, { name: "host.disk.percent", sinceMs: requestedRangeMs }).data,
-      "host.disk.percent"
-    ),
-  };
+  // either way since LineChart needs oldest-first. Memoized on the three
+  // poll payloads, because historyFor returns a fresh array on every call
+  // and that array travels straight down into chartSeries below — an
+  // unmemoized one here would reopen the exact identity gap chartSeries
+  // exists to close. usePoll only swaps `data` on a successful tick, so
+  // between ticks these arrays now keep their identity across a re-render
+  // caused by any other state change.
+  const cpuMetrics = useMetrics(5000, { name: "host.cpu.percent", sinceMs: requestedRangeMs }).data;
+  const memoryMetrics = useMetrics(5000, {
+    name: "host.memory.percent",
+    sinceMs: requestedRangeMs,
+  }).data;
+  const diskMetrics = useMetrics(5000, {
+    name: "host.disk.percent",
+    sinceMs: requestedRangeMs,
+  }).data;
+  const metricHistories: Record<ChartMetric, Metric[]> = useMemo(
+    () => ({
+      cpu: historyFor(cpuMetrics, "host.cpu.percent"),
+      memory: historyFor(memoryMetrics, "host.memory.percent"),
+      disk: historyFor(diskMetrics, "host.disk.percent"),
+    }),
+    [cpuMetrics, memoryMetrics, diskMetrics]
+  );
 
   // What the reads above actually cover (plus logs, read newest-first
   // rather than time-bounded, so they can reach further back) decides what
