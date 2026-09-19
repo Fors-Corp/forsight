@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/mlaas"
-	"github.com/marcfs31/forsight/forsight/internal/store"
+	"github.com/Fors-Corp/forsight/forsight/internal/mlaas"
+	"github.com/Fors-Corp/forsight/forsight/internal/store"
 )
 
 // fakeMlaasService is a hand-rolled MlaasService: each field is nil unless

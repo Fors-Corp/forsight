@@ -1,7 +1,7 @@
 {
   "name": "forsight-next-consumer",
   "private": true,
-  "description": "Integration fixture: installs the packed @marcfs31/forsight tarball into a real Next.js App Router + Tailwind v4 + React 19 app and builds it. Driven by scripts/consumer-test.mjs.",
+  "description": "Integration fixture: installs the packed @fors-corp/forsight tarball into a real Next.js App Router + Tailwind v4 + React 19 app and builds it. Driven by scripts/consumer-test.mjs.",
   "type": "module",
   "scripts": {
     "build": "next build"

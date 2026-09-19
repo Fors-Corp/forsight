@@ -9,7 +9,7 @@ import { create, type ThemeVars } from "storybook/theming";
  */
 const shared = {
   brandTitle: "Forsight",
-  brandUrl: "https://marcfs31.github.io/forsight/",
+  brandUrl: "https://fors-corp.github.io/forsight/",
   fontBase: '"Inter", system-ui, -apple-system, sans-serif',
   fontCode: '"JetBrains Mono", ui-monospace, "SFMono-Regular", monospace',
   appBorderRadius: 8,

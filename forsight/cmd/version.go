@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/marcfs31/forsight/forsight/internal/version"
+	"github.com/Fors-Corp/forsight/forsight/internal/version"
 )
 
 func newVersionCmd() *cobra.Command {

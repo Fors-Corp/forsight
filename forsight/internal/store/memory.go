@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // DefaultMaxElements bounds how many metrics (and, separately, spans and
