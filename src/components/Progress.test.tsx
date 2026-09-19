@@ -14,4 +14,14 @@ describe("Progress", () => {
     const { container } = render(<Progress value={42} aria-label="Upload progress" />);
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it("collapses the indicator and drops aria-valuenow when value is omitted", () => {
+    const { container } = render(<Progress aria-label="Loading" />);
+    const bar = screen.getByRole("progressbar", { name: "Loading" });
+    expect(bar).not.toHaveAttribute("aria-valuenow");
+    const indicator = container.querySelector("[style]") as HTMLElement;
+    // value ?? 0 -> 100 - 0 = 100% translated out of view, same resting
+    // position as an explicit value={0}.
+    expect(indicator.style.transform).toBe("translateX(-100%)");
+  });
 });

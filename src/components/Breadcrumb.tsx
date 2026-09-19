@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cn } from "../lib/cn";
+import { isSafeHref } from "../lib/safe-href";
 
 export function Breadcrumb({ className, ...props }: React.ComponentPropsWithoutRef<"nav">) {
   return <nav aria-label="Breadcrumb" className={cn(className)} {...props} />;
@@ -28,13 +29,22 @@ export const BreadcrumbItem = React.forwardRef<
 ));
 BreadcrumbItem.displayName = "BreadcrumbItem";
 
+/**
+ * A crumb that links back up the hierarchy. `href` is typically built from
+ * route/dimension data that traces back to request input, so it is treated
+ * as untrusted: an unsafe scheme (`javascript:`, `data:`, ...) is never set
+ * on the rendered element (`isSafeHref`, `../lib/safe-href`) — an `<a>`
+ * without an `href` has no `link` role and isn't focusable, the same
+ * non-link fallback `BarList` and `SidebarNavItem` use for the same case.
+ */
 export const BreadcrumbLink = React.forwardRef<
   HTMLAnchorElement,
   React.AnchorHTMLAttributes<HTMLAnchorElement>
->(({ className, ...props }, ref) => (
+>(({ className, href, ...props }, ref) => (
   <a
     ref={ref}
     className={cn("transition-colors duration-base hover:text-accent", className)}
+    href={href !== undefined && isSafeHref(href) ? href : undefined}
     {...props}
   />
 ));
