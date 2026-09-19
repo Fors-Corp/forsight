@@ -2,6 +2,7 @@ package forseer
 
 import (
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -266,4 +267,80 @@ func TestEngine_ModelsDescribeThemselves(t *testing.T) {
 			t.Errorf("model %q does not fully describe itself: %+v", card.Name, card)
 		}
 	}
+}
+
+// TestEngine_ConcurrentObserveAndRead: production feeds an Engine from the
+// ingest path (ObserveMetrics/ObserveLogs/ObserveSpans, one call per
+// collector tick or OTLP batch) while the API reads Insights/Budget/Models/
+// Story on the same Engine from handler goroutines, and no test drove one
+// from more than one goroutine at once. Engine composes several
+// independently-locked sub-models (det, logs, spans, severity, forecast,
+// paging, culprit) plus its own e.mu for processes/culprits; this is a
+// check that the composition is race-free as a whole, not just each piece
+// in isolation. Run with -race.
+func TestEngine_ConcurrentObserveAndRead(t *testing.T) {
+	e := NewEngine()
+	const iterations = 150
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			e.ObserveMetrics([]Point{
+				{Name: "host.cpu.percent", Value: float64(i % 100)},
+				{Name: "process.cpu.percent", Value: float64(i % 100), Labels: map[string]string{"pid": strconv.Itoa(i % 5), "name": "worker"}},
+			})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			sev := "info"
+			if i%4 == 0 {
+				sev = "error"
+			}
+			e.ObserveLogs([]LogLine{{Timestamp: time.Now(), Source: "api", Severity: sev, Message: "line " + strconv.Itoa(i)}})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			e.ObserveSpans([]SpanSample{{Name: "op", Service: "svc", DurationMs: float64(i), Status: "ok", TraceID: "t", SpanID: strconv.Itoa(i)}})
+		}
+	}()
+
+	wg.Add(5)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = e.Insights()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = e.Budget()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = e.Models()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = e.Story()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_, _ = e.ClassifySeverity("panic nil map write in handler")
+		}
+	}()
+
+	wg.Wait()
 }
