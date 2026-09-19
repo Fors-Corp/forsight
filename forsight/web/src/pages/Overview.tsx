@@ -16,7 +16,6 @@ import {
   LineChart,
   Card,
   CardHeader,
-  CardTitle,
   CardContent,
   StatusDot,
   Table,
@@ -50,6 +49,7 @@ import {
   type UptimeSegment,
   type BadgeProps,
 } from "@marcfs31/forsight";
+import { CardSectionHeading } from "./CardSectionHeading";
 import {
   connectionState,
   type ConnectionState,
@@ -564,7 +564,7 @@ function AlertsPanel({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Forseer</CardTitle>
+        <CardSectionHeading>Forseer</CardSectionHeading>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {summary.enabled ? (
@@ -677,9 +677,9 @@ function LogsPanel({
     <>
       <Card>
         <CardHeader>
-          <CardTitle>
+          <CardSectionHeading>
             Log templates{clustersScored ? " · worth paging" : " · by volume"}
-          </CardTitle>
+          </CardSectionHeading>
         </CardHeader>
         <CardContent>
           {clusterBars.length === 0 ? (
@@ -699,7 +699,7 @@ function LogsPanel({
 
       <Card>
         <CardHeader>
-          <CardTitle>Logs</CardTitle>
+          <CardSectionHeading>Logs</CardSectionHeading>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <p className="sr-only" aria-live="polite" aria-atomic="true">
@@ -720,7 +720,7 @@ function LogsPanel({
 
       <Card>
         <CardHeader>
-          <CardTitle>Error logs by hour</CardTitle>
+          <CardSectionHeading>Error logs by hour</CardSectionHeading>
         </CardHeader>
         <CardContent>
           {heatmap.rows.length === 0 ? (
@@ -750,7 +750,7 @@ function TracesPanel({ traces, insights }: { traces: Span[]; insights: ForseerIn
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Slowest trace</CardTitle>
+        <CardSectionHeading>Slowest trace</CardSectionHeading>
       </CardHeader>
       <CardContent>
         {waterfall.length === 0 ? (
@@ -1005,7 +1005,7 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
 
       <Card>
         <CardHeader>
-          <CardTitle>{chartMetricLabel} over time</CardTitle>
+          <CardSectionHeading>{chartMetricLabel} over time</CardSectionHeading>
         </CardHeader>
         <CardContent>
           {chartHistory.length > 1 ? (
@@ -1035,7 +1035,7 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
       {hasProbeMetrics ? (
         <Card>
           <CardHeader>
-            <CardTitle>Probes</CardTitle>
+            <CardSectionHeading>Probes</CardSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-6">
             <ProbesSection
@@ -1061,7 +1061,7 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Processes</CardTitle>
+          <CardSectionHeading>Processes</CardSectionHeading>
         </CardHeader>
         <CardContent>
           {processes.length === 0 ? (
@@ -1099,7 +1099,7 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Containers</CardTitle>
+          <CardSectionHeading>Containers</CardSectionHeading>
         </CardHeader>
         <CardContent>
           {containers.length === 0 ? (

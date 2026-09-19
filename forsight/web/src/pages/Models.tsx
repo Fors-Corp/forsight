@@ -6,7 +6,6 @@ import {
   Card,
   CardContent,
   CardHeader,
-  CardTitle,
   EmptyState,
   Heading,
   Input,
@@ -24,6 +23,7 @@ import {
   type ChartAnnotation,
   type ServiceStatus,
 } from "@marcfs31/forsight";
+import { CardSectionHeading } from "./CardSectionHeading";
 import {
   classifyForseer,
   historyFor,
@@ -230,7 +230,7 @@ function ForseerModelsCard({ cards }: { cards: ForseerCard[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Trained inside the agent (Forseer)</CardTitle>
+        <CardSectionHeading>Trained inside the agent (Forseer)</CardSectionHeading>
       </CardHeader>
       <CardContent>
         {cards.length === 0 ? (
@@ -347,8 +347,15 @@ function MlaasModelsCard({ status }: { status: MlaasStatus | null }) {
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-        <CardTitle>Served by mlaas</CardTitle>
-        <StatusDot status={connection.status} label={connection.label} />
+        <CardSectionHeading>Served by mlaas</CardSectionHeading>
+        {/* Its own live region, so a flip between checking/connected/unreachable
+            is read out — same pattern as Overview's "Agent connection" region
+            (Overview.tsx), since this label changes on its own timer
+            (useMlaasStatus polls every 10s) with nothing else on the page
+            announcing it. */}
+        <div role="status" aria-live="polite" aria-label="mlaas connection" className="shrink-0">
+          <StatusDot status={connection.status} label={connection.label} />
+        </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {status === null ? (
@@ -516,7 +523,7 @@ function ForecastsCard({ forecasts, metrics }: { forecasts: MlaasForecast[]; met
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Forecasts</CardTitle>
+        <CardSectionHeading>Forecasts</CardSectionHeading>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
         {charts.length === 0 ? (
@@ -582,7 +589,7 @@ function PredictionsCard({ predictions }: { predictions: MlaasPrediction[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Recent predictions</CardTitle>
+        <CardSectionHeading>Recent predictions</CardSectionHeading>
       </CardHeader>
       <CardContent>
         {predictions.length === 0 ? (
@@ -683,7 +690,7 @@ function TryModelsCard({ status }: { status: MlaasStatus | null }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Try the severity models</CardTitle>
+        <CardSectionHeading>Try the severity models</CardSectionHeading>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <Text size="sm" tone="secondary">
@@ -772,7 +779,7 @@ function JobsCard({ jobs }: { jobs: MlaasJob[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Recent jobs</CardTitle>
+        <CardSectionHeading>Recent jobs</CardSectionHeading>
       </CardHeader>
       <CardContent>
         {jobs.length === 0 ? (
