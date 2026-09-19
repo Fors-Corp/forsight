@@ -1,4 +1,12 @@
-import { useMemo, useRef, useState, type KeyboardEvent, type Ref } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type KeyboardEvent,
+  type Ref,
+  type SetStateAction,
+} from "react";
 import {
   Heading,
   Text,
@@ -62,6 +70,7 @@ import {
   type LogEntry,
   type ForseerInsight,
   type ForseerEvent,
+  type ForseerBudget,
   type Span,
 } from "../api";
 
@@ -465,6 +474,298 @@ function statusFromInsights(
   return "operational";
 }
 
+/**
+ * The count/score bars behind the "Log templates" card, plus whether every
+ * cluster currently carries a paging score. Wraps useClusters so Overview
+ * has one poll to wire into connectionState (via the returned `poll`) and
+ * LogsPanel has ready-to-render bars — the same shape as every other
+ * data-fetching hook in api.ts, just page-specific rather than generic.
+ */
+function useLogClusters(intervalMs: number) {
+  const poll = useClusters(intervalMs);
+  const clusters = poll.data;
+  // Once Forseer's paging model is ready every cluster carries a score, and
+  // the bar becomes that score: what a burst of this template is worth,
+  // rather than how loud it is. Until then, the count.
+  const clustersScored = useMemo(
+    () => clusters.length > 0 && clusters.every((c) => c.pagingScore !== undefined),
+    [clusters]
+  );
+  const clusterBars = useMemo(
+    () =>
+      (clustersScored
+        ? [...clusters].sort((a, b) => (b.pagingScore ?? 0) - (a.pagingScore ?? 0))
+        : clusters
+      )
+        .slice(0, 8)
+        .map((c) => ({
+          label: c.template || c.id,
+          value: clustersScored ? (c.pagingScore ?? 0) : c.count,
+        })),
+    [clusters, clustersScored]
+  );
+  return { poll, clustersScored, clusterBars };
+}
+
+/**
+ * The "Forseer" card: the AI narrative, the error-log budget, the "Ask
+ * Forseer" natural-language query box that turns a phrase into filter chips
+ * (queryForseer, mergeQueryFacets), and the resulting AlertList/Timeline
+ * feed. `filters` is owned by Overview and shared with LogsPanel — this
+ * panel both edits it (the query form and FilterBar) and reads it back to
+ * render the current chips, so `onFiltersChange` is the raw state setter
+ * (not a plain callback) and the query form updates it functionally
+ * (`onFiltersChange((prev) => ...)`), same as the pre-split code, so a
+ * filter change elsewhere can never be clobbered by a query response that
+ * resolves against a stale snapshot.
+ */
+function AlertsPanel({
+  summary,
+  budget,
+  insights,
+  story,
+  logs,
+  filters,
+  onFiltersChange,
+}: {
+  summary: { enabled: boolean; summary: string };
+  budget: ForseerBudget;
+  insights: ForseerInsight[];
+  story: ForseerEvent[];
+  logs: LogEntry[];
+  filters: FilterBarFacet[];
+  onFiltersChange: Dispatch<SetStateAction<FilterBarFacet[]>>;
+}) {
+  // null = neutral (show QUERY_HINT); a string = the last submitted phrase
+  // wasn't understood (show it as an inline error instead).
+  const [query, setQuery] = useState("");
+  const [queryError, setQueryError] = useState<string | null>(null);
+
+  const alertItems = useMemo(() => toAlertItems(insights), [insights]);
+  const timelineItems = useMemo(() => toTimelineItems(story), [story]);
+  const filterOptions: FilterBarOption[] = useMemo(() => {
+    const sources = [...new Set(logs.map((l) => l.source).filter(Boolean))];
+    const opts: FilterBarOption[] = [
+      { facetKey: "status", facetLabel: "Status", value: "error", label: "error" },
+      { facetKey: "status", facetLabel: "Status", value: "warn", label: "warn" },
+      { facetKey: "status", facetLabel: "Status", value: "info", label: "info" },
+    ];
+    for (const src of sources) {
+      opts.push({ facetKey: "source", facetLabel: "Source", value: src, label: src });
+    }
+    return opts;
+  }, [logs]);
+
+  const sloLabel = formatSLO(budget.slo);
+  const budgetLabel = sloLabel
+    ? `${budget.label || "Error-log budget"} · ${sloLabel}`
+    : budget.label || "Error-log budget";
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Forseer</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {summary.enabled ? (
+          summary.summary ? (
+            <Text>{summary.summary}</Text>
+          ) : null
+        ) : (
+          <Text tone="muted" size="sm">
+            AI narrative disabled — set XAI_API_KEY to enable
+          </Text>
+        )}
+        <ErrorBudget
+          label={budgetLabel}
+          consumed={budget.consumed}
+          caption={budget.caption}
+          warningAt={budget.warningAt}
+          dangerAt={budget.dangerAt}
+        />
+        <form
+          className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const phrase = query.trim();
+            if (!phrase) return;
+            void queryForseer(phrase).then(({ facets, matched }) => {
+              if (!matched) {
+                setQueryError(QUERY_NOT_UNDERSTOOD);
+                return;
+              }
+              setQueryError(null);
+              onFiltersChange((prev) => mergeQueryFacets(prev, facets));
+            });
+          }}
+        >
+          <Input
+            className="min-w-0 flex-1"
+            aria-label="Ask Forseer"
+            invalid={queryError != null}
+            hint={queryError ?? QUERY_HINT}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              if (queryError) setQueryError(null);
+            }}
+          />
+          <Button type="submit">Apply</Button>
+        </form>
+        <FilterBar
+          label="Log filters"
+          filters={filters}
+          onFiltersChange={onFiltersChange}
+          options={filterOptions}
+        />
+        <AlertList
+          label="Forseer insights"
+          items={alertItems}
+          emptyMessage="Forseer watches every metric, log template, and span against its own baseline. Spikes, regime shifts, log bursts, and slow traces show up here."
+        />
+        {timelineItems.length > 0 ? (
+          <Timeline items={timelineItems} />
+        ) : (
+          <EmptyState
+            title="No timeline events yet"
+            description="Forseer insights are stitched into a timeline here as they occur."
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The log-centric cards: "Log templates" (via useLogClusters' bars), "Logs"
+ * (the filtered stream), and "Error logs by hour" (the heatmap). `filters`
+ * comes from Overview (shared with AlertsPanel, which is where the query box
+ * and FilterBar chips actually render); the heatmap deliberately reads
+ * `logs`/`since` rather than the filtered set — unchanged from the
+ * pre-split page, where errorHeatmap always ran over rangedLogs, not
+ * filteredLogs.
+ */
+function LogsPanel({
+  logs,
+  since,
+  filters,
+  clustersScored,
+  clusterBars,
+}: {
+  logs: LogEntry[];
+  since: number;
+  filters: FilterBarFacet[];
+  clustersScored: boolean;
+  clusterBars: Array<{ label: string; value: number }>;
+}) {
+  const rangedLogs = useMemo(
+    () => logs.filter((l) => sinceOrUndated(l.timestamp, since)),
+    [logs, since]
+  );
+  const filteredLogs = useMemo(
+    () => rangedLogs.filter((l) => matchesFilters(l, filters)),
+    [rangedLogs, filters]
+  );
+  const streamEntries = useMemo(() => toStreamEntries(filteredLogs), [filteredLogs]);
+  const errorCount = useMemo(
+    () => filteredLogs.filter((entry) => entry.severity === "error").length,
+    [filteredLogs]
+  );
+  const heatmap = useMemo(() => errorHeatmap(rangedLogs), [rangedLogs]);
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            Log templates{clustersScored ? " · worth paging" : " · by volume"}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {clusterBars.length === 0 ? (
+            <EmptyState
+              title="No log templates yet"
+              description="OTLP logs are clustered into Drain-style templates. Bursts become Forseer insights."
+            />
+          ) : (
+            <BarList
+              items={clusterBars}
+              max={clustersScored ? 1 : undefined}
+              valueFormat={clustersScored ? percentFormat : undefined}
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Logs</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <p className="sr-only" aria-live="polite" aria-atomic="true">
+            {errorCount === 0
+              ? "No error logs in the current window."
+              : `${errorCount} error log${errorCount === 1 ? "" : "s"} in the current window.`}
+          </p>
+          {streamEntries.length === 0 ? (
+            <EmptyState
+              title="No logs yet"
+              description="POST OTLP logs to /v1/logs and they will appear here."
+            />
+          ) : (
+            <LogStream label="Ingested logs" entries={streamEntries} maxHeight={360} />
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Error logs by hour</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {heatmap.rows.length === 0 ? (
+            <EmptyState
+              title="No error logs"
+              description="Sources show up here once error lines land."
+            />
+          ) : (
+            <Heatmap
+              label="Error logs by source and hour"
+              columns={heatmap.columns}
+              rows={heatmap.rows}
+            />
+          )}
+        </CardContent>
+      </Card>
+    </>
+  );
+}
+
+/** The "Slowest trace" card: picks the trace worth showing (an insight's
+ *  related slow span, or else the longest/most-erroring one) and renders it
+ *  as a waterfall. */
+function TracesPanel({ traces, insights }: { traces: Span[]; insights: ForseerInsight[] }) {
+  const waterfall = useMemo(() => toWaterfall(pickTrace(traces, insights)), [traces, insights]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Slowest trace</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {waterfall.length === 0 ? (
+          <EmptyState
+            title="No traces yet"
+            description="POST OTLP traces to /v1/traces. Forseer marks the critical path on slow or error spans."
+          />
+        ) : (
+          <TraceWaterfall label="Related trace" spans={waterfall} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 interface OverviewProps {
   /** Forwarded to the page's <h1> so App can move focus onto it after a
    * route change (skipping the very first mount) per the ARIA APG
@@ -486,7 +787,7 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
   const logsPoll = useLogs(5000);
   const tracesPoll = useTraces(5000);
   const insightsPoll = useInsights(5000);
-  const clustersPoll = useClusters(5000);
+  const logClusters = useLogClusters(5000);
   const summaryPoll = useSummary(30000);
   const budgetPoll = useBudget(5000);
   const storyPoll = useTimeline(5000);
@@ -494,15 +795,10 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
   const logs = logsPoll.data;
   const traces = tracesPoll.data;
   const insights = insightsPoll.data;
-  const clusters = clustersPoll.data;
   const summary = summaryPoll.data;
   const budget = budgetPoll.data;
   const story = storyPoll.data;
-  const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<FilterBarFacet[]>([]);
-  // null = neutral (show QUERY_HINT); a string = the last submitted phrase
-  // wasn't understood (show it as an inline error instead).
-  const [queryError, setQueryError] = useState<string | null>(null);
 
   const [rangeValue, setRangeValue] = useState(DEFAULT_TIME_RANGE);
   // `now` is read once per render, and every poll re-renders, so every
@@ -589,9 +885,12 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
   const chartHistory = metricHistories[chartMetric];
   const chartLabels = chartHistory.map((m) => timeLabelFormat.format(new Date(m.timestamp)));
   const chartMetricLabel = CHART_METRICS.find((m) => m.key === chartMetric)?.label ?? "Host CPU";
-  const rangedLogs = useMemo(
-    () => logs.filter((l) => sinceOrUndated(l.timestamp, since)),
-    [logs, since]
+  // Memoized so LineChart's own internal memoization isn't defeated by a
+  // fresh array-of-objects literal on every render (chartHistory/chartMetric
+  // only actually change on a poll tick or a metric switch).
+  const chartSeries = useMemo(
+    () => [{ name: `${chartMetricLabel} %`, values: chartHistory.map((m) => m.value) }],
+    [chartMetricLabel, chartHistory]
   );
 
   const cpu = latestValue(latest, "host.cpu.percent");
@@ -607,56 +906,11 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
   const rangeStartLabel = (range.ms > ONE_DAY_MS ? dayTimeLabelFormat : timeLabelFormat).format(
     new Date(since)
   );
-  const filteredLogs = useMemo(
-    () => rangedLogs.filter((l) => matchesFilters(l, filters)),
-    [rangedLogs, filters]
-  );
-  const streamEntries = useMemo(() => toStreamEntries(filteredLogs), [filteredLogs]);
-  const errorCount = useMemo(
-    () => filteredLogs.filter((entry) => entry.severity === "error").length,
-    [filteredLogs]
-  );
-  const alertItems = useMemo(() => toAlertItems(insights), [insights]);
-  const timelineItems = useMemo(() => toTimelineItems(story), [story]);
-  const heatmap = useMemo(() => errorHeatmap(rangedLogs), [rangedLogs]);
-  const waterfall = useMemo(() => toWaterfall(pickTrace(traces, insights)), [traces, insights]);
-  const filterOptions: FilterBarOption[] = useMemo(() => {
-    const sources = [...new Set(logs.map((l) => l.source).filter(Boolean))];
-    const opts: FilterBarOption[] = [
-      { facetKey: "status", facetLabel: "Status", value: "error", label: "error" },
-      { facetKey: "status", facetLabel: "Status", value: "warn", label: "warn" },
-      { facetKey: "status", facetLabel: "Status", value: "info", label: "info" },
-    ];
-    for (const src of sources) {
-      opts.push({ facetKey: "source", facetLabel: "Source", value: src, label: src });
-    }
-    return opts;
-  }, [logs]);
-  // Once Forseer's paging model is ready every cluster carries a score, and
-  // the bar becomes that score: what a burst of this template is worth,
-  // rather than how loud it is. Until then, the count.
-  const clustersScored = useMemo(
-    () => clusters.length > 0 && clusters.every((c) => c.pagingScore !== undefined),
-    [clusters]
-  );
-  const clusterBars = useMemo(
-    () =>
-      (clustersScored
-        ? [...clusters].sort((a, b) => (b.pagingScore ?? 0) - (a.pagingScore ?? 0))
-        : clusters
-      )
-        .slice(0, 8)
-        .map((c) => ({
-          label: c.template || c.id,
-          value: clustersScored ? (c.pagingScore ?? 0) : c.count,
-        })),
-    [clusters, clustersScored]
-  );
 
   // The summary poller runs six times slower and is left out on purpose: a
   // success from it could only make a dead agent look alive for longer.
   const connection = connectionState(
-    [latestPoll, logsPoll, tracesPoll, insightsPoll, clustersPoll, budgetPoll, storyPoll],
+    [latestPoll, logsPoll, tracesPoll, insightsPoll, logClusters.poll, budgetPoll, storyPoll],
     5000
   );
   const status = statusFromInsights(connection.state, insights);
@@ -670,10 +924,6 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
           : status === "degraded"
             ? "Forseer: warning"
             : "Receiving data";
-  const sloLabel = formatSLO(budget.slo);
-  const budgetLabel = sloLabel
-    ? `${budget.label || "Error-log budget"} · ${sloLabel}`
-    : budget.label || "Error-log budget";
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
@@ -753,7 +1003,7 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
             <LineChart
               label={`${chartMetricLabel} percent over time`}
               labels={chartLabels}
-              series={[{ name: `${chartMetricLabel} %`, values: chartHistory.map((m) => m.value) }]}
+              series={chartSeries}
               area
             />
           ) : (
@@ -790,77 +1040,15 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
         </Card>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Forseer</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {summary.enabled ? (
-            summary.summary ? (
-              <Text>{summary.summary}</Text>
-            ) : null
-          ) : (
-            <Text tone="muted" size="sm">
-              AI narrative disabled — set XAI_API_KEY to enable
-            </Text>
-          )}
-          <ErrorBudget
-            label={budgetLabel}
-            consumed={budget.consumed}
-            caption={budget.caption}
-            warningAt={budget.warningAt}
-            dangerAt={budget.dangerAt}
-          />
-          <form
-            className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const phrase = query.trim();
-              if (!phrase) return;
-              void queryForseer(phrase).then(({ facets, matched }) => {
-                if (!matched) {
-                  setQueryError(QUERY_NOT_UNDERSTOOD);
-                  return;
-                }
-                setQueryError(null);
-                setFilters((prev) => mergeQueryFacets(prev, facets));
-              });
-            }}
-          >
-            <Input
-              className="min-w-0 flex-1"
-              aria-label="Ask Forseer"
-              invalid={queryError != null}
-              hint={queryError ?? QUERY_HINT}
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                if (queryError) setQueryError(null);
-              }}
-            />
-            <Button type="submit">Apply</Button>
-          </form>
-          <FilterBar
-            label="Log filters"
-            filters={filters}
-            onFiltersChange={setFilters}
-            options={filterOptions}
-          />
-          <AlertList
-            label="Forseer insights"
-            items={alertItems}
-            emptyMessage="Forseer watches every metric, log template, and span against its own baseline. Spikes, regime shifts, log bursts, and slow traces show up here."
-          />
-          {timelineItems.length > 0 ? (
-            <Timeline items={timelineItems} />
-          ) : (
-            <EmptyState
-              title="No timeline events yet"
-              description="Forseer insights are stitched into a timeline here as they occur."
-            />
-          )}
-        </CardContent>
-      </Card>
+      <AlertsPanel
+        summary={summary}
+        budget={budget}
+        insights={insights}
+        story={story}
+        logs={logs}
+        filters={filters}
+        onFiltersChange={setFilters}
+      />
 
       <Card>
         <CardHeader>
@@ -938,82 +1126,15 @@ export default function Overview({ headingRef }: OverviewProps = {}) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Log templates{clustersScored ? " · worth paging" : " · by volume"}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {clusterBars.length === 0 ? (
-            <EmptyState
-              title="No log templates yet"
-              description="OTLP logs are clustered into Drain-style templates. Bursts become Forseer insights."
-            />
-          ) : (
-            <BarList
-              items={clusterBars}
-              max={clustersScored ? 1 : undefined}
-              valueFormat={clustersScored ? percentFormat : undefined}
-            />
-          )}
-        </CardContent>
-      </Card>
+      <LogsPanel
+        logs={logs}
+        since={since}
+        filters={filters}
+        clustersScored={logClusters.clustersScored}
+        clusterBars={logClusters.clusterBars}
+      />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Logs</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <p className="sr-only" aria-live="polite" aria-atomic="true">
-            {errorCount === 0
-              ? "No error logs in the current window."
-              : `${errorCount} error log${errorCount === 1 ? "" : "s"} in the current window.`}
-          </p>
-          {streamEntries.length === 0 ? (
-            <EmptyState
-              title="No logs yet"
-              description="POST OTLP logs to /v1/logs and they will appear here."
-            />
-          ) : (
-            <LogStream label="Ingested logs" entries={streamEntries} maxHeight={360} />
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Error logs by hour</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {heatmap.rows.length === 0 ? (
-            <EmptyState
-              title="No error logs"
-              description="Sources show up here once error lines land."
-            />
-          ) : (
-            <Heatmap
-              label="Error logs by source and hour"
-              columns={heatmap.columns}
-              rows={heatmap.rows}
-            />
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Slowest trace</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {waterfall.length === 0 ? (
-            <EmptyState
-              title="No traces yet"
-              description="POST OTLP traces to /v1/traces. Forseer marks the critical path on slow or error spans."
-            />
-          ) : (
-            <TraceWaterfall label="Related trace" spans={waterfall} />
-          )}
-        </CardContent>
-      </Card>
+      <TracesPanel traces={traces} insights={insights} />
     </div>
   );
 }
