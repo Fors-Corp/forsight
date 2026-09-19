@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react";
+import { expect, within } from "storybook/test";
 import {
   ToastProvider,
   ToastViewport,
@@ -58,4 +59,27 @@ export const Success: Story = {
       <ToastViewport className="static w-96 p-0" />
     </ToastProvider>
   ),
+};
+
+export const MinimumTouchTarget: Story = {
+  render: () => (
+    <ToastProvider>
+      <ToastRoot open>
+        <div className="flex-1">
+          <ToastTitle>Deployed</ToastTitle>
+          <ToastDescription>forsight-client-portal is live at v14.</ToastDescription>
+        </div>
+        <ToastClose />
+      </ToastRoot>
+      <ToastViewport className="static w-96 p-0" />
+    </ToastProvider>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const closeButton = canvas.getByRole("button", { name: "Dismiss" });
+    const rect = closeButton.getBoundingClientRect();
+    // WCAG 2.5.8: minimum 24x24 CSS px touch target.
+    await expect(rect.width).toBeGreaterThanOrEqual(24);
+    await expect(rect.height).toBeGreaterThanOrEqual(24);
+  },
 };

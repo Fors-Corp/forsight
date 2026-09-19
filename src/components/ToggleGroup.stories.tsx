@@ -81,3 +81,19 @@ export const KeyboardNavigation: Story = {
     expect(table).toHaveAttribute("aria-checked", "false");
   },
 };
+
+export const MinimumTouchTarget: Story = {
+  render: () => (
+    <ToggleGroup type="single" defaultValue="table" aria-label="View mode">
+      <ToggleGroupItem value="table">Table</ToggleGroupItem>
+    </ToggleGroup>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const item = canvas.getByRole("radio", { name: "Table" });
+    const rect = item.getBoundingClientRect();
+    // WCAG 2.5.8: minimum 24x24 CSS px touch target at the default (sm) size.
+    await expect(rect.width).toBeGreaterThanOrEqual(24);
+    await expect(rect.height).toBeGreaterThanOrEqual(24);
+  },
+};

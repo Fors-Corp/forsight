@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 func TestCollect_EmitsRSSAlwaysAndCPUOnSecondSighting(t *testing.T) {

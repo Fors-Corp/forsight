@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react";
+import { expect, within } from "storybook/test";
 import { Toggle } from "./Toggle";
 
 const PinIcon = (
@@ -50,4 +51,16 @@ export const Disabled: Story = {
       Grid
     </Toggle>
   ),
+};
+
+export const MinimumTouchTarget: Story = {
+  render: () => <Toggle aria-label="Show grid lines">Grid</Toggle>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const toggle = canvas.getByRole("button", { name: "Show grid lines" });
+    const rect = toggle.getBoundingClientRect();
+    // WCAG 2.5.8: minimum 24x24 CSS px touch target at the default (sm) size.
+    await expect(rect.width).toBeGreaterThanOrEqual(24);
+    await expect(rect.height).toBeGreaterThanOrEqual(24);
+  },
 };

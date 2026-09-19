@@ -8,8 +8,8 @@ import (
 
 	"encoding/json"
 	"errors"
-	"github.com/marcfs31/forsight/forsight/internal/collector"
-	"github.com/marcfs31/forsight/forsight/internal/store"
+	"github.com/Fors-Corp/forsight/forsight/internal/collector"
+	"github.com/Fors-Corp/forsight/forsight/internal/store"
 	"strings"
 )
 

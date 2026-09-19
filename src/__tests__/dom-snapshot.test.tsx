@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import * as React from "react";
 import {
   Accordion,
@@ -550,4 +550,30 @@ describe("DOM structure snapshots", () => {
       expect(container.innerHTML).toMatchSnapshot();
     });
   }
+});
+
+describe("LineChart/projection cases render the projected series' data", () => {
+  // The two DOM snapshots above ("LineChart/projection" and
+  // "LineChart/projection-area") assert the exact markup byte-for-byte —
+  // useful for catching an unintended structural change, but a snapshot
+  // that never fails on a meaningful behavioral regression (a value dropped
+  // from the row, or the series name missing) just gets re-approved without
+  // being read. These pair each snapshot case with a targeted assertion
+  // against ChartFrame's visually hidden `<table>` (see ChartFrame.tsx),
+  // which is what a screen-reader user, and Testing Library, actually see.
+  it("LineChart/projection: renders the series name and each value in the hidden table", () => {
+    render(cases["LineChart/projection"]);
+    expect(screen.getByText("checkout-api")).toBeInTheDocument();
+    for (const value of ["180", "210", "195", "172"]) {
+      expect(screen.getAllByText(value).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("LineChart/projection-area: renders the series name and each value in the hidden table", () => {
+    render(cases["LineChart/projection-area"]);
+    expect(screen.getByText("checkout-api")).toBeInTheDocument();
+    for (const value of ["180", "210", "195", "172"]) {
+      expect(screen.getAllByText(value).length).toBeGreaterThan(0);
+    }
+  });
 });

@@ -709,7 +709,7 @@ describe("Overview probe strips", () => {
     expect(await screen.findByRole("heading", { name: "Probes" })).toBeInTheDocument();
     // A single, almost-current sample holds the smallest range on offer
     // (15m — see "Overview time range" above), not the 1h default.
-    expect(screen.getByText("checkout, last 15m")).toBeInTheDocument();
+    expect(await screen.findByText("checkout, last 15m")).toBeInTheDocument();
   });
 
   it("shows a warning-toned TLS expiry badge when the certificate is valid but expiring soon", async () => {
@@ -788,7 +788,7 @@ describe("Overview bounded metrics reads", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Probes" })).toBeInTheDocument();
-    expect(screen.getByText("checkout, last 15m")).toBeInTheDocument();
+    expect(await screen.findByText("checkout, last 15m")).toBeInTheDocument();
 
     const urls = fetchedUrls(fetchMock);
     for (const name of ["probe.http.up", "probe.tls.days_remaining", "probe.tls.valid"]) {

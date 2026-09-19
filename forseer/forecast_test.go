@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"math/rand"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -294,7 +295,14 @@ func TestForecast_RestoreDiscardsAVersionMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	data = bytes.Replace(data, []byte(`"version":1`), []byte(`"version":2`), 1)
+	// Written from the constant rather than a literal, so bumping the schema
+	// version cannot quietly turn this test into one that feeds Restore a
+	// payload it is supposed to accept.
+	current := []byte(`"version":` + strconv.Itoa(forecastSnapshotVersion))
+	if !bytes.Contains(data, current) {
+		t.Fatalf("snapshot %s does not carry %s", data, current)
+	}
+	data = bytes.Replace(data, current, []byte(`"version":`+strconv.Itoa(forecastSnapshotVersion+1)), 1)
 
 	fresh := newBurnForecast()
 	if err := fresh.Restore(data); err == nil {
