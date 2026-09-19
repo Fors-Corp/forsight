@@ -45,7 +45,7 @@ jobs:
     # the pinned, published @marcfs31/forsight from GitHub Packages
     # (forsight/web/.npmrc); npm ci against that registry 401s without it,
     # same reason as forsight-ci.yml's "web" job. Writing: the image step
-    # below pushes ghcr.io/marcfs31/forsight, which is the same GitHub
+    # below pushes ghcr.io/fors-corp/forsight, which is the same GitHub
     # Packages scope. write implies read.
     permissions:
       contents: write
@@ -143,7 +143,7 @@ jobs:
           fi
 
       # The image the DaemonSet runs (forsight/deploy/k8s/daemonset.yaml
-      # pulls ghcr.io/marcfs31/forsight:latest). Built from the REPO ROOT
+      # pulls ghcr.io/fors-corp/forsight:latest). Built from the REPO ROOT
       # with -f forsight/Dockerfile, because forsight/go.mod replaces the
       # forseer module with the sibling ../forseer directory, so the build
       # context has to hold both. Plain `docker login` with GITHUB_TOKEN,
@@ -154,10 +154,15 @@ jobs:
       - name: Build and push the container image
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMAGE: ghcr.io/${{ github.repository }}
+          GITHUB_REPOSITORY_RAW: ${{ github.repository }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          # Docker rejects an uppercase repository name ("invalid reference
+          # format: repository name must be lowercase"). github.repository
+          # is Fors-Corp/forsight (canonical owner casing), so the image ref
+          # has to be lowercased explicitly rather than interpolated as-is.
+          IMAGE="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_RAW" | tr '[:upper:]' '[:lower:]')"
           echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker build -f forsight/Dockerfile \
             -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .

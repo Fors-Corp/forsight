@@ -52,7 +52,7 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://npm.pkg.github.com
-          scope: "@marcfs31"
+          scope: "@fors-corp"
 
       - run: npm ci
 
