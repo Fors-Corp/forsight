@@ -1,5 +1,5 @@
 /**
- * Tailwind v4 integration, exported as "@marcfs31/forsight/tailwind.css".
+ * Tailwind v4 integration, exported as "@fors-corp/forsight/tailwind.css".
  *
  * Maps the Forsight tokens into Tailwind's theme namespaces so a consumer app on
  * Tailwind v4 can use the same utility vocabulary the components are built
@@ -10,11 +10,11 @@
  *
  * Usage (consumer's global stylesheet):
  *   @import "tailwindcss";
- *   @import "@marcfs31/forsight/tailwind.css";
+ *   @import "@fors-corp/forsight/tailwind.css";
  *
  * The component styles themselves still come from "styles.css" — this file
  * only teaches the consumer's Tailwind the token names. Tailwind v3 consumers
- * use the "@marcfs31/forsight/tailwind-preset" export instead. Keep the
+ * use the "@fors-corp/forsight/tailwind-preset" export instead. Keep the
  * mapping in sync with src/tailwind-preset.ts.
  */
 @theme inline {

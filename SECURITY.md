@@ -1,6 +1,6 @@
 # Security Policy
 
-The **source** of this project is public. The **package** (`@marcfs31/forsight`) is not — it's published to GitHub Packages with `restricted` access and installed only by Marc Fors's own repos, so there is no broad public consumer base.
+The **source** of this project is public. The **package** (`@fors-corp/forsight`) is not — it's published to GitHub Packages with `restricted` access and installed only by Marc Fors's own repos, so there is no broad public consumer base.
 
 ## Reporting a vulnerability
 

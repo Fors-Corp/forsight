@@ -1,12 +1,12 @@
 /**
  * Shipped stylesheet entry (compiled to dist/styles.css, exported as
- * "@marcfs31/forsight/styles.css"). Deliberately omits Preflight — consumers
+ * "@fors-corp/forsight/styles.css"). Deliberately omits Preflight — consumers
  * run their own Tailwind base reset; a library shouldn't inject a second
  * global reset. Also omits any webfont import — no network calls from the
  * shipped CSS (CSP-safe, framework-neutral). The type tokens fall back to
  * system fonts until the consumer provides the "Inter" / "Space Grotesk"
  * families (next/font, self-hosted, or the optional
- * "@marcfs31/forsight/fonts.css").
+ * "@fors-corp/forsight/fonts.css").
  * Includes the reduced-motion override so it still applies for consumers who
  * don't define their own.
  *

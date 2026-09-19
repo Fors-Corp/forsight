@@ -1,5 +1,5 @@
 ---
-"@marcfs31/forsight": minor
+"@fors-corp/forsight": minor
 ---
 
 Share the chart cursor's screen-reader summary and legend guard, cover
