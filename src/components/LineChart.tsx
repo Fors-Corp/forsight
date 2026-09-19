@@ -14,6 +14,7 @@ import {
   seriesStroke,
   splitAtProjection,
   type ChartAnnotation,
+  type Point,
 } from "../lib/chart";
 import { useChartCursor } from "../lib/chart-hooks";
 import { ChartFrame } from "./ChartFrame";
@@ -88,362 +89,392 @@ const PAD_BOTTOM = 22;
  * to half opacity and is overlaid with a diagonal hatch, so a projected area
  * never reads as a second solid measurement.
  */
-export const LineChart = React.forwardRef<HTMLDivElement, LineChartProps>(
-  (
-    {
-      className,
-      label,
-      description,
-      labels,
-      series,
-      area = false,
-      height = 220,
-      valueFormat = formatCompact,
-      annotations = [],
-      noDataLabel = "no data",
-      ...props
-    },
-    ref
-  ) => {
-    const cursor = useChartCursor(labels.length);
-    const plotRef = React.useRef<HTMLDivElement>(null);
-    // One hatch pattern per chart, shared by every series' projected area —
-    // the shape is the signal, not the color, so it need not be re-declared
-    // per series. Only rendered when something will actually reference it.
-    const projectionHatchId = React.useId();
-    const hasProjectedArea = area && series.some((s) => s.dashedFrom !== undefined);
+export const LineChart = React.memo(
+  React.forwardRef<HTMLDivElement, LineChartProps>(
+    (
+      {
+        className,
+        label,
+        description,
+        labels,
+        series,
+        area = false,
+        height = 220,
+        valueFormat = formatCompact,
+        annotations = [],
+        noDataLabel = "no data",
+        ...props
+      },
+      ref
+    ) => {
+      const cursor = useChartCursor(labels.length);
+      const plotRef = React.useRef<HTMLDivElement>(null);
+      // One hatch pattern per chart, shared by every series' projected area —
+      // the shape is the signal, not the color, so it need not be re-declared
+      // per series. Only rendered when something will actually reference it.
+      const projectionHatchId = React.useId();
+      const hasProjectedArea = area && series.some((s) => s.dashedFrom !== undefined);
 
-    // Extent of the actual data — a line chart reads change, so it is not
-    // pinned to a zero baseline the way a bar chart must be.
-    let dataMin = Infinity;
-    let dataMax = -Infinity;
-    for (const s of series) {
-      for (const value of s.values) {
-        if (value === null) continue;
-        if (value < dataMin) dataMin = value;
-        if (value > dataMax) dataMax = value;
-      }
-    }
-    const scale = niceScale(dataMin, dataMax);
+      // Extent of the actual data — a line chart reads change, so it is not
+      // pinned to a zero baseline the way a bar chart must be. Keyed only on
+      // `series`: the cursor (hover/keyboard) re-renders this component many
+      // times a second without the data itself changing, and this scan (and
+      // the niceScale call after it) must not repeat on every one of those.
+      const scale = React.useMemo(() => {
+        let dataMin = Infinity;
+        let dataMax = -Infinity;
+        for (const s of series) {
+          for (const value of s.values) {
+            if (value === null) continue;
+            if (value < dataMin) dataMin = value;
+            if (value > dataMax) dataMax = value;
+          }
+        }
+        return niceScale(dataMin, dataMax);
+      }, [series]);
 
-    // Text equivalent of the dashed-stroke projection, folded into the
-    // hidden description so the distinction is never sighted-only.
-    const projectionNotes = series
-      .filter((s) => s.dashedFrom !== undefined && labels[s.dashedFrom] !== undefined)
-      .map((s) => `${s.name} is projected from ${labels[s.dashedFrom as number]}.`);
+      // Text equivalent of the dashed-stroke projection, folded into the
+      // hidden description so the distinction is never sighted-only.
+      const projectionNotes = React.useMemo(
+        () =>
+          series
+            .filter((s) => s.dashedFrom !== undefined && labels[s.dashedFrom] !== undefined)
+            .map((s) => `${s.name} is projected from ${labels[s.dashedFrom as number]}.`),
+        [series, labels]
+      );
 
-    const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-      const box = plotRef.current?.getBoundingClientRect();
-      if (!box || labels.length === 0) return;
-      const plotWidth = Math.max(1, box.width - PAD_LEFT - PAD_RIGHT);
-      const ratio = (event.clientX - box.left - PAD_LEFT) / plotWidth;
-      const index = Math.round(ratio * (labels.length - 1));
-      // A pointer event without coordinates (synthetic, or a device that
-      // reports none) must not push a NaN index into the geometry.
-      if (!Number.isFinite(index)) return;
-      cursor.setActive(clamp(index, 0, labels.length - 1));
-    };
+      // Which points are solid vs. dashed, split into runs — decided purely
+      // from `values`/`dashedFrom`/`index`, so it is computed once in
+      // value-space (x = index, y = value) here rather than on every render
+      // inside the plot-width-dependent draw below. Only the cheap projection
+      // to pixel space (`toPixel`, near the render prop) has to run there.
+      const projectedSeries = React.useMemo(
+        () =>
+          series.map((s) =>
+            splitAtProjection(s.values, s.dashedFrom, (index, value): Point => [index, value])
+          ),
+        [series]
+      );
 
-    const active = cursor.active;
-    const activeReading = formatActiveReading(
-      labels,
-      series,
-      active,
-      () => valueFormat,
-      noDataLabel
-    );
-    const legendItems = seriesLegendItems(series);
+      const legendItems = React.useMemo(() => seriesLegendItems(series), [series]);
 
-    return (
-      <div ref={ref} className={cn("flex w-full min-w-0 flex-col gap-3", className)} {...props}>
-        <div
-          ref={plotRef}
-          tabIndex={0}
-          onKeyDown={cursor.onKeyDown}
-          onBlur={cursor.onBlur}
-          onPointerMove={handlePointerMove}
-          onPointerLeave={() => cursor.setActive(null)}
-          className="relative rounded-md focus-visible:outline-none focus-visible:shadow-focus-ring"
-        >
-          <ChartFrame
-            label={label}
-            description={[
-              description,
-              annotations.length > 0
-                ? `Reference lines: ${annotations.map((a) => a.text).join(", ")}.`
-                : null,
-              projectionNotes.length > 0 ? projectionNotes.join(" ") : null,
-              "Use arrow keys to read individual points.",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            height={height}
-            columns={labels}
-            rows={series.map((s) => ({
-              header: s.name,
-              cells: s.values.map((v) => (v === null ? noDataLabel : valueFormat(v))),
-            }))}
+      const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+        const box = plotRef.current?.getBoundingClientRect();
+        if (!box || labels.length === 0) return;
+        const plotWidth = Math.max(1, box.width - PAD_LEFT - PAD_RIGHT);
+        const ratio = (event.clientX - box.left - PAD_LEFT) / plotWidth;
+        const index = Math.round(ratio * (labels.length - 1));
+        // A pointer event without coordinates (synthetic, or a device that
+        // reports none) must not push a NaN index into the geometry.
+        if (!Number.isFinite(index)) return;
+        cursor.setActive(clamp(index, 0, labels.length - 1));
+      };
+
+      const active = cursor.active;
+      const activeReading = formatActiveReading(
+        labels,
+        series,
+        active,
+        () => valueFormat,
+        noDataLabel
+      );
+
+      return (
+        <div ref={ref} className={cn("flex w-full min-w-0 flex-col gap-3", className)} {...props}>
+          <div
+            ref={plotRef}
+            tabIndex={0}
+            onKeyDown={cursor.onKeyDown}
+            onBlur={cursor.onBlur}
+            onPointerMove={handlePointerMove}
+            onPointerLeave={() => cursor.setActive(null)}
+            className="relative rounded-md focus-visible:outline-none focus-visible:shadow-focus-ring"
           >
-            {({ width }) => {
-              const plotWidth = Math.max(1, width - PAD_LEFT - PAD_RIGHT);
-              const plotHeight = Math.max(1, height - PAD_TOP - PAD_BOTTOM);
-              const baselineY = PAD_TOP + plotHeight;
-              const xAt = (index: number) =>
-                PAD_LEFT +
-                (labels.length < 2 ? plotWidth / 2 : (index / (labels.length - 1)) * plotWidth);
-              const yAt = (value: number) =>
-                baselineY - project(value, scale.min, scale.max, plotHeight);
+            <ChartFrame
+              label={label}
+              description={[
+                description,
+                annotations.length > 0
+                  ? `Reference lines: ${annotations.map((a) => a.text).join(", ")}.`
+                  : null,
+                projectionNotes.length > 0 ? projectionNotes.join(" ") : null,
+                "Use arrow keys to read individual points.",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              height={height}
+              columns={labels}
+              rows={series.map((s) => ({
+                header: s.name,
+                cells: s.values.map((v) => (v === null ? noDataLabel : valueFormat(v))),
+              }))}
+            >
+              {({ width }) => {
+                const plotWidth = Math.max(1, width - PAD_LEFT - PAD_RIGHT);
+                const plotHeight = Math.max(1, height - PAD_TOP - PAD_BOTTOM);
+                const baselineY = PAD_TOP + plotHeight;
+                const xAt = (index: number) =>
+                  PAD_LEFT +
+                  (labels.length < 2 ? plotWidth / 2 : (index / (labels.length - 1)) * plotWidth);
+                const yAt = (value: number) =>
+                  baselineY - project(value, scale.min, scale.max, plotHeight);
 
-              return (
-                <>
-                  {hasProjectedArea ? (
-                    <defs>
-                      {/*
+                return (
+                  <>
+                    {hasProjectedArea ? (
+                      <defs>
+                        {/*
                         Diagonal hatch, not a second color: a projected area
                         fill under a dashedFrom point must stay
                         distinguishable in grayscale and to colorblind
                         viewers (CONTRIBUTING.md's data-viz rule), same as
                         the dashed stroke it sits under.
                       */}
-                      <pattern
-                        id={projectionHatchId}
-                        width={6}
-                        height={6}
-                        patternUnits="userSpaceOnUse"
-                        patternTransform="rotate(45)"
-                      >
-                        <line
-                          x1={0}
-                          y1={0}
-                          x2={0}
-                          y2={6}
-                          className="stroke-fg-muted"
-                          strokeWidth={1.5}
-                        />
-                      </pattern>
-                    </defs>
-                  ) : null}
+                        <pattern
+                          id={projectionHatchId}
+                          width={6}
+                          height={6}
+                          patternUnits="userSpaceOnUse"
+                          patternTransform="rotate(45)"
+                        >
+                          <line
+                            x1={0}
+                            y1={0}
+                            x2={0}
+                            y2={6}
+                            className="stroke-fg-muted"
+                            strokeWidth={1.5}
+                          />
+                        </pattern>
+                      </defs>
+                    ) : null}
 
-                  {scale.ticks.map((tick) => (
-                    <g key={tick}>
-                      <line
-                        x1={PAD_LEFT}
-                        x2={PAD_LEFT + plotWidth}
-                        y1={yAt(tick)}
-                        y2={yAt(tick)}
-                        className="stroke-ink-border-subtle"
-                        strokeWidth={1}
-                      />
+                    {scale.ticks.map((tick) => (
+                      <g key={tick}>
+                        <line
+                          x1={PAD_LEFT}
+                          x2={PAD_LEFT + plotWidth}
+                          y1={yAt(tick)}
+                          y2={yAt(tick)}
+                          className="stroke-ink-border-subtle"
+                          strokeWidth={1}
+                        />
+                        <text
+                          x={PAD_LEFT - 8}
+                          y={yAt(tick)}
+                          textAnchor="end"
+                          dominantBaseline="middle"
+                          className="fill-fg-muted text-xs font-sans"
+                        >
+                          {valueFormat(tick)}
+                        </text>
+                      </g>
+                    ))}
+
+                    {pickLabelIndices(labels.length, plotWidth).map((index) => (
                       <text
-                        x={PAD_LEFT - 8}
-                        y={yAt(tick)}
-                        textAnchor="end"
-                        dominantBaseline="middle"
+                        key={labels[index]}
+                        x={xAt(index)}
+                        y={height - 6}
+                        textAnchor={
+                          index === 0 ? "start" : index === labels.length - 1 ? "end" : "middle"
+                        }
                         className="fill-fg-muted text-xs font-sans"
                       >
-                        {valueFormat(tick)}
+                        {labels[index]}
                       </text>
-                    </g>
-                  ))}
+                    ))}
 
-                  {pickLabelIndices(labels.length, plotWidth).map((index) => (
-                    <text
-                      key={labels[index]}
-                      x={xAt(index)}
-                      y={height - 6}
-                      textAnchor={
-                        index === 0 ? "start" : index === labels.length - 1 ? "end" : "middle"
-                      }
-                      className="fill-fg-muted text-xs font-sans"
-                    >
-                      {labels[index]}
-                    </text>
-                  ))}
-
-                  {series.map((s, seriesIndex) => {
-                    const toPoint = (index: number, value: number): [number, number] => [
-                      xAt(index),
-                      yAt(value),
-                    ];
-                    const { solid, dashed } = splitAtProjection(s.values, s.dashedFrom, toPoint);
-                    return (
-                      <g key={s.name}>
-                        {area ? (
-                          <>
-                            {solid.map((segment, i) => (
-                              <path
-                                key={`area-solid-${i}`}
-                                d={areaPath(segment, baselineY)}
-                                className={cn(seriesFill(seriesIndex), "opacity-20")}
-                              />
-                            ))}
-                            {dashed.map((segment, i) => (
-                              <React.Fragment key={`area-projected-${i}`}>
-                                {/*
+                    {series.map((s, seriesIndex) => {
+                      // The run-splitting itself already happened, keyed on
+                      // `series` alone, in `projectedSeries` above — this is
+                      // just the cheap value-space-to-pixel-space projection.
+                      const toPixel = ([index, value]: Point): Point => [xAt(index), yAt(value)];
+                      const solid = projectedSeries[seriesIndex].solid.map((segment) =>
+                        segment.map(toPixel)
+                      );
+                      const dashed = projectedSeries[seriesIndex].dashed.map((segment) =>
+                        segment.map(toPixel)
+                      );
+                      return (
+                        <g key={s.name}>
+                          {area ? (
+                            <>
+                              {solid.map((segment, i) => (
+                                <path
+                                  key={`area-solid-${i}`}
+                                  d={areaPath(segment, baselineY)}
+                                  className={cn(seriesFill(seriesIndex), "opacity-20")}
+                                />
+                              ))}
+                              {dashed.map((segment, i) => (
+                                <React.Fragment key={`area-projected-${i}`}>
+                                  {/*
                                   Lighter fill (half the observed run's
                                   opacity) plus the shared hatch pattern on
                                   top — a run past dashedFrom must read as
                                   projected, not as more of the same
                                   measured area.
                                 */}
-                                <path
-                                  d={areaPath(segment, baselineY)}
-                                  className={cn(seriesFill(seriesIndex), "opacity-10")}
-                                />
-                                <path
-                                  d={areaPath(segment, baselineY)}
-                                  fill={`url(#${projectionHatchId})`}
-                                />
-                              </React.Fragment>
-                            ))}
-                          </>
-                        ) : null}
-                        {solid.map((segment, i) => (
-                          <path
-                            key={`line-solid-${i}`}
-                            d={linePath(segment)}
-                            fill="none"
-                            strokeWidth={2}
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            className={seriesStroke(seriesIndex)}
-                          />
-                        ))}
-                        {dashed.map((segment, i) => (
-                          <path
-                            key={`line-dashed-${i}`}
-                            d={linePath(segment)}
-                            fill="none"
-                            strokeWidth={2}
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeDasharray="6 4"
-                            className={seriesStroke(seriesIndex)}
-                          />
-                        ))}
-                      </g>
-                    );
-                  })}
+                                  <path
+                                    d={areaPath(segment, baselineY)}
+                                    className={cn(seriesFill(seriesIndex), "opacity-10")}
+                                  />
+                                  <path
+                                    d={areaPath(segment, baselineY)}
+                                    fill={`url(#${projectionHatchId})`}
+                                  />
+                                </React.Fragment>
+                              ))}
+                            </>
+                          ) : null}
+                          {solid.map((segment, i) => (
+                            <path
+                              key={`line-solid-${i}`}
+                              d={linePath(segment)}
+                              fill="none"
+                              strokeWidth={2}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className={seriesStroke(seriesIndex)}
+                            />
+                          ))}
+                          {dashed.map((segment, i) => (
+                            <path
+                              key={`line-dashed-${i}`}
+                              d={linePath(segment)}
+                              fill="none"
+                              strokeWidth={2}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeDasharray="6 4"
+                              className={seriesStroke(seriesIndex)}
+                            />
+                          ))}
+                        </g>
+                      );
+                    })}
 
-                  {annotations.map((annotation, i) => {
-                    const tone = ANNOTATION_TONE_CLASSES[annotation.tone ?? "neutral"];
-                    if (annotation.value !== undefined) {
-                      const y = yAt(annotation.value);
+                    {annotations.map((annotation, i) => {
+                      const tone = ANNOTATION_TONE_CLASSES[annotation.tone ?? "neutral"];
+                      if (annotation.value !== undefined) {
+                        const y = yAt(annotation.value);
+                        return (
+                          <g key={i}>
+                            <line
+                              x1={PAD_LEFT}
+                              x2={PAD_LEFT + plotWidth}
+                              y1={y}
+                              y2={y}
+                              className={tone.stroke}
+                              strokeWidth={1.5}
+                              strokeDasharray="4 3"
+                            />
+                            <text
+                              x={PAD_LEFT + plotWidth}
+                              y={y - 4}
+                              textAnchor="end"
+                              className={cn(tone.text, "text-xs font-sans")}
+                            >
+                              {annotation.text}
+                            </text>
+                          </g>
+                        );
+                      }
+                      const index = annotation.label ? labels.indexOf(annotation.label) : -1;
+                      if (index === -1) return null;
+                      const x = xAt(index);
                       return (
                         <g key={i}>
                           <line
-                            x1={PAD_LEFT}
-                            x2={PAD_LEFT + plotWidth}
-                            y1={y}
-                            y2={y}
+                            x1={x}
+                            x2={x}
+                            y1={PAD_TOP}
+                            y2={baselineY}
                             className={tone.stroke}
                             strokeWidth={1.5}
                             strokeDasharray="4 3"
                           />
                           <text
-                            x={PAD_LEFT + plotWidth}
-                            y={y - 4}
-                            textAnchor="end"
+                            x={x + 4}
+                            y={PAD_TOP + 10}
                             className={cn(tone.text, "text-xs font-sans")}
                           >
                             {annotation.text}
                           </text>
                         </g>
                       );
-                    }
-                    const index = annotation.label ? labels.indexOf(annotation.label) : -1;
-                    if (index === -1) return null;
-                    const x = xAt(index);
-                    return (
-                      <g key={i}>
+                    })}
+
+                    {active === null ? null : (
+                      <g>
                         <line
-                          x1={x}
-                          x2={x}
+                          x1={xAt(active)}
+                          x2={xAt(active)}
                           y1={PAD_TOP}
                           y2={baselineY}
-                          className={tone.stroke}
-                          strokeWidth={1.5}
-                          strokeDasharray="4 3"
+                          className="stroke-fg-muted"
+                          strokeWidth={1}
+                          strokeDasharray="3 3"
                         />
-                        <text
-                          x={x + 4}
-                          y={PAD_TOP + 10}
-                          className={cn(tone.text, "text-xs font-sans")}
-                        >
-                          {annotation.text}
-                        </text>
+                        {series.map((s, seriesIndex) => {
+                          const value = s.values[active];
+                          if (value === null || value === undefined) return null;
+                          return (
+                            <circle
+                              key={s.name}
+                              cx={xAt(active)}
+                              cy={yAt(value)}
+                              r={4}
+                              strokeWidth={2}
+                              className={cn(seriesFill(seriesIndex), "stroke-ink-bg")}
+                            />
+                          );
+                        })}
                       </g>
-                    );
-                  })}
+                    )}
+                  </>
+                );
+              }}
+            </ChartFrame>
 
-                  {active === null ? null : (
-                    <g>
-                      <line
-                        x1={xAt(active)}
-                        x2={xAt(active)}
-                        y1={PAD_TOP}
-                        y2={baselineY}
-                        className="stroke-fg-muted"
-                        strokeWidth={1}
-                        strokeDasharray="3 3"
-                      />
-                      {series.map((s, seriesIndex) => {
-                        const value = s.values[active];
-                        if (value === null || value === undefined) return null;
-                        return (
-                          <circle
-                            key={s.name}
-                            cx={xAt(active)}
-                            cy={yAt(value)}
-                            r={4}
-                            strokeWidth={2}
-                            className={cn(seriesFill(seriesIndex), "stroke-ink-bg")}
-                          />
-                        );
-                      })}
-                    </g>
-                  )}
-                </>
-              );
-            }}
-          </ChartFrame>
+            {active === null ? null : (
+              // Parked on the side opposite the cursor so the readout never
+              // covers the point being read. Physical left/right, not logical
+              // start/end: the cursor's x position is a physical pixel (the
+              // plot never mirrors under RTL — see ChartFrame), so which side
+              // avoids it is a physical question too. A logical class would
+              // resolve to the same side as the point under `dir="rtl"`.
+              <div
+                className={cn(
+                  "absolute top-2 z-10",
+                  active > (labels.length - 1) / 2 ? "left-2" : "right-2"
+                )}
+              >
+                <ChartTooltip
+                  title={labels[active]}
+                  rows={series.map((s, seriesIndex) => ({
+                    label: s.name,
+                    seriesIndex,
+                    value:
+                      s.values[active] === null || s.values[active] === undefined
+                        ? noDataLabel
+                        : valueFormat(s.values[active] as number),
+                  }))}
+                />
+              </div>
+            )}
+          </div>
 
-          {active === null ? null : (
-            // Parked on the side opposite the cursor so the readout never
-            // covers the point being read. Physical left/right, not logical
-            // start/end: the cursor's x position is a physical pixel (the
-            // plot never mirrors under RTL — see ChartFrame), so which side
-            // avoids it is a physical question too. A logical class would
-            // resolve to the same side as the point under `dir="rtl"`.
-            <div
-              className={cn(
-                "absolute top-2 z-10",
-                active > (labels.length - 1) / 2 ? "left-2" : "right-2"
-              )}
-            >
-              <ChartTooltip
-                title={labels[active]}
-                rows={series.map((s, seriesIndex) => ({
-                  label: s.name,
-                  seriesIndex,
-                  value:
-                    s.values[active] === null || s.values[active] === undefined
-                      ? noDataLabel
-                      : valueFormat(s.values[active] as number),
-                }))}
-              />
-            </div>
-          )}
+          <div role="status" className="sr-only">
+            {activeReading}
+          </div>
+
+          {legendItems ? <ChartLegend items={legendItems} /> : null}
         </div>
-
-        <div role="status" className="sr-only">
-          {activeReading}
-        </div>
-
-        {legendItems ? <ChartLegend items={legendItems} /> : null}
-      </div>
-    );
-  }
+      );
+    }
+  )
 );
 LineChart.displayName = "LineChart";
 
