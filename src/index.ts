@@ -20,7 +20,12 @@ export {
 } from "./components/Card";
 export { Alert, type AlertProps } from "./components/Alert";
 export { Avatar, AvatarGroup, type AvatarProps, type AvatarGroupProps } from "./components/Avatar";
-export { Tabs } from "./components/Tabs";
+export {
+  Tabs,
+  type TabsRootProps,
+  type TabsTriggerProps,
+  type TabsPanelProps,
+} from "./components/Tabs";
 export { Heading, type HeadingProps } from "./components/Heading";
 export { Text, type TextProps } from "./components/Text";
 export { Checkbox, type CheckboxProps } from "./components/Checkbox";
@@ -51,6 +56,7 @@ export {
   DialogTitle,
   DialogDescription,
   DialogFooter,
+  type DialogContentProps,
 } from "./components/Dialog";
 export {
   AlertDialog,
@@ -62,6 +68,8 @@ export {
   AlertDialogFooter,
   AlertDialogAction,
   AlertDialogCancel,
+  type AlertDialogActionProps,
+  type AlertDialogCancelProps,
 } from "./components/AlertDialog";
 export {
   Drawer,
@@ -72,6 +80,7 @@ export {
   DrawerTitle,
   DrawerDescription,
   DrawerFooter,
+  type DrawerContentProps,
 } from "./components/Drawer";
 export {
   DropdownMenu,
@@ -97,7 +106,15 @@ export {
   type ToastRootProps,
 } from "./components/Toast";
 export { Spinner, type SpinnerProps } from "./components/Spinner";
-export { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "./components/Table";
+export {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+  type TableHeadProps,
+} from "./components/Table";
 export { Progress, type ProgressProps } from "./components/Progress";
 export { Popover, PopoverTrigger, PopoverAnchor, PopoverContent } from "./components/Popover";
 export { HoverCard, HoverCardTrigger, HoverCardContent } from "./components/HoverCard";
@@ -107,7 +124,7 @@ export {
   AccordionTrigger,
   AccordionContent,
 } from "./components/Accordion";
-export { Slider } from "./components/Slider";
+export { Slider, type SliderProps } from "./components/Slider";
 export { Skeleton } from "./components/Skeleton";
 export { CopyButton, type CopyButtonProps } from "./components/CopyButton";
 export { CodeBlock, type CodeBlockProps } from "./components/CodeBlock";
