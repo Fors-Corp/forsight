@@ -1,3 +1,4 @@
+import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -182,5 +183,57 @@ describe("Tabs", () => {
       "Tabs.* components must be rendered inside <Tabs.Root>"
     );
     spy.mockRestore();
+  });
+
+  describe("ref forwarding", () => {
+    it("forwards a ref to Tabs.Root's DOM node", () => {
+      const ref = React.createRef<HTMLDivElement>();
+      render(
+        <Tabs.Root ref={ref} defaultValue="a">
+          <Tabs.Panel value="a">A</Tabs.Panel>
+        </Tabs.Root>
+      );
+      expect(ref.current).toBeInstanceOf(HTMLDivElement);
+    });
+
+    it("forwards a ref to Tabs.List's DOM node", () => {
+      const ref = React.createRef<HTMLDivElement>();
+      render(
+        <Tabs.Root defaultValue="a">
+          <Tabs.List ref={ref}>
+            <Tabs.Trigger value="a">A</Tabs.Trigger>
+          </Tabs.List>
+          <Tabs.Panel value="a">A</Tabs.Panel>
+        </Tabs.Root>
+      );
+      expect(ref.current).toBe(screen.getByRole("tablist"));
+    });
+
+    it("forwards a ref to Tabs.Trigger's DOM node", () => {
+      const ref = React.createRef<HTMLButtonElement>();
+      render(
+        <Tabs.Root defaultValue="a">
+          <Tabs.List>
+            <Tabs.Trigger ref={ref} value="a">
+              A
+            </Tabs.Trigger>
+          </Tabs.List>
+          <Tabs.Panel value="a">A</Tabs.Panel>
+        </Tabs.Root>
+      );
+      expect(ref.current).toBe(screen.getByRole("tab", { name: "A" }));
+    });
+
+    it("forwards a ref to Tabs.Panel's DOM node", () => {
+      const ref = React.createRef<HTMLDivElement>();
+      render(
+        <Tabs.Root defaultValue="a">
+          <Tabs.Panel ref={ref} value="a">
+            A
+          </Tabs.Panel>
+        </Tabs.Root>
+      );
+      expect(ref.current).toBe(screen.getByRole("tabpanel"));
+    });
   });
 });
