@@ -26,8 +26,8 @@ type Sink interface {
 // Classifier gives a tailed line the severity this deployment would give it.
 //
 // A tailed file carries no level, so one has to be worked out from the text.
-// severityOf below is the rule that has always done it, and it is wrong
-// whenever the word and the meaning disagree ("no errors reported").
+// model.FallbackSeverity is the rule that has always done it, and it is
+// wrong whenever the word and the meaning disagree ("no errors reported").
 // Forseer's severity model, trained on the levels the OTLP half of the same
 // stream declares, does better once it has seen enough — and says so by
 // returning false until then, which is why this is an interface the agent
@@ -277,7 +277,7 @@ func classify(classifier Classifier, line string) (model.LogSeverity, bool) {
 			}
 		}
 	}
-	return severityOf(line), true
+	return model.FallbackSeverity(line), true
 }
 
 // knownSeverity maps a model's answer onto the agent's vocabulary, refusing
@@ -295,26 +295,5 @@ func knownSeverity(severity string) (model.LogSeverity, bool) {
 		return model.LogSeverityError, true
 	default:
 		return "", false
-	}
-}
-
-// FallbackSeverity is the substring rule: the answer this package gives when
-// no model is ready. It is exported because Forseer grades itself against it
-// on the same stream, and a benchmark nobody can name is not a benchmark.
-func FallbackSeverity(line string) model.LogSeverity {
-	return severityOf(line)
-}
-
-func severityOf(line string) model.LogSeverity {
-	lower := strings.ToLower(line)
-	switch {
-	case strings.Contains(lower, "fatal") || strings.Contains(lower, "error") || strings.Contains(lower, "fail"):
-		return model.LogSeverityError
-	case strings.Contains(lower, "warn"):
-		return model.LogSeverityWarn
-	case strings.Contains(lower, "debug"):
-		return model.LogSeverityDebug
-	default:
-		return model.LogSeverityInfo
 	}
 }

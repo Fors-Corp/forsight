@@ -151,6 +151,43 @@ func TestBearerAuth_LogsRequiresBearer(t *testing.T) {
 	}
 }
 
+// TestBearerAuth_WrongLengthTokenRejected pins the SHA-256-digest comparison
+// against a regression the refactor itself could introduce: hashing both
+// operands to a fixed 32-byte digest before ConstantTimeCompare must still
+// reject anything but the exact token — including a header shorter or
+// longer than "Bearer secret", which used to hit ConstantTimeCompare's own
+// length-mismatch shortcut. That shortcut was the timing leak (a raw
+// comparison returns early on a length mismatch, so a caller could time
+// which requests bail out early and learn the token's length), not a
+// correctness gap — a wrong-length header was always rejected, on the old
+// code and the new. This test cannot observe the timing side channel itself
+// (no black-box status-code assertion can); it only pins that closing it
+// did not also break the rejection.
+func TestBearerAuth_WrongLengthTokenRejected(t *testing.T) {
+	inner := NewServer(store.NewMemoryStore(time.Hour), nil, nil, nil).Handler()
+	handler := BearerAuth("secret", inner)
+
+	for _, tc := range []struct {
+		name string
+		auth string
+	}{
+		{"shorter than the real token", "Bearer sec"},
+		{"longer than the real token", "Bearer secretly-too-long"},
+		{"empty header", ""},
+		{"no Bearer prefix, same length as the real header", "Xearer secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
+			if tc.auth != "" {
+				req.Header.Set("Authorization", tc.auth)
+			}
+			handler.ServeHTTP(rec, req)
+			assertUnauthorized(t, rec)
+		})
+	}
+}
+
 func assertUnauthorized(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
 	if rec.Code != http.StatusUnauthorized {
