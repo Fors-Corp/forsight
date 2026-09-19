@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/marcfs31/forsight/forsight/cmd"
+	"github.com/Fors-Corp/forsight/forsight/cmd"
 )
 
 func main() {

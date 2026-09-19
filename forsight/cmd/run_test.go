@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcfs31/forsight/forseer"
-	"github.com/marcfs31/forsight/forsight/internal/model"
-	"github.com/marcfs31/forsight/forsight/internal/store"
+	"github.com/Fors-Corp/forsight/forseer"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/store"
 )
 
 func discardLogger() *slog.Logger {

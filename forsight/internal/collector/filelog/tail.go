@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // Sink is the write side of the store, declared here so this package does

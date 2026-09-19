@@ -27,7 +27,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // maxProbeBodyBytes bounds how much of a probed response body is read before

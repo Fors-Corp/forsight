@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcfs31/forsight/forsight/internal/model"
+	"github.com/Fors-Corp/forsight/forsight/internal/model"
 )
 
 // Collector gathers metrics from one source. Implementations must be safe to
