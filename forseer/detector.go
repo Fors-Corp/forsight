@@ -153,6 +153,25 @@ func (d *Detector) observeOneLocked(p Point, now time.Time) {
 		s = &rolling{}
 		d.series[key] = s
 	}
+	// The baseline this point is about to be scored against has to be the
+	// one that does NOT contain it, which means capturing it before the
+	// Welford update below folds it in.
+	//
+	// Scoring a point against statistics it is part of is not a small bias,
+	// it is a hard ceiling. Samuelson's inequality says every member of a
+	// sample lies within (n-1)/sqrt(n) sample standard deviations of that
+	// sample's own mean, so an in-sample z cannot exceed that number no
+	// matter what the value is: 3.18 at n=12, and 5 is out of reach until
+	// n=29. criticalSigma is 5. So for the first 28 points of every series
+	// the critical branch below was unreachable by construction — a spike to
+	// a billion on a baseline of ten scored 3.18 and was filed as a warning
+	// — and because seasonalKey starts a fresh baseline for each hour of the
+	// day, that window is not a one-off warm-up: it recurs on 24 keys a day,
+	// every day, for as long as the agent runs. Critical is also the label
+	// pagingModel learns from (paging.go, NoteInsights), so the cap did not
+	// merely mislabel alerts, it starved the paging model of positives.
+	prevN, prevMean, prevM2 := s.n, s.mean, s.m2
+
 	s.n++
 	delta := p.Value - s.mean
 	s.mean += delta / float64(s.n)
@@ -160,7 +179,21 @@ func (d *Detector) observeOneLocked(p Point, now time.Time) {
 	if s.n < minSamples {
 		return
 	}
-	variance := s.m2 / float64(s.n-1)
+	// The one case with no out-of-sample estimate to use: a series that has
+	// been perfectly flat has no spread for this point to be far from, and
+	// dividing by that zero would call any deviation at all — the second
+	// decimal of a disk percentage — infinitely many sigma. There the
+	// inclusive estimate is still the most that can honestly be said, and it
+	// is exactly what this code has always done, so a flat series behaves as
+	// it did: it can raise a warning (the Samuelson ceiling is above
+	// warningSigma from n=12 on) without being able to manufacture a page
+	// out of a value nothing yet justifies calling extreme.
+	mean, variance := s.mean, s.m2/float64(s.n-1)
+	if prevN > 1 {
+		if prevVar := prevM2 / float64(prevN-1); prevVar > 0 {
+			mean, variance = prevMean, prevVar
+		}
+	}
 	if variance <= 0 {
 		delete(d.open, key)
 		s.cusumHi, s.cusumLo = 0, 0
@@ -175,7 +208,7 @@ func (d *Detector) observeOneLocked(p Point, now time.Time) {
 	// Signed for the CUSUM below, absolute for the anomaly thresholds —
 	// "this sample is far from the mean" is direction-free, "this series has
 	// changed regime" is not.
-	zSigned := (p.Value - s.mean) / sigma
+	zSigned := (p.Value - mean) / sigma
 	z := math.Abs(zSigned)
 	warn, critical, _ := d.thresholds.Observe(key, z)
 	switch {
@@ -382,7 +415,9 @@ func (d *Detector) SeriesCount() (watching, evicted int) {
 
 // SeriesBaseline returns the rolling mean and standard deviation Observe has
 // built for one exact series (name plus labels) — the same Welford
-// statistics the anomaly check itself scores z against — and whether it has
+// statistics the anomaly check scores each arriving point against, over
+// every point observed so far rather than every point but that one — and
+// whether it has
 // minSamples of history to trust them. ready is false for a series that is
 // too new, or one whose variance is not yet positive, exactly as
 // observeOneLocked treats those cases: a caller ranking by "how far from

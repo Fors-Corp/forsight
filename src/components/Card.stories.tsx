@@ -52,3 +52,18 @@ export const Interactive: Story = {
     </Card>
   ),
 };
+
+export const AsPageHeading: Story = {
+  name: "CardTitle as a page heading",
+  render: () => (
+    // CardTitle defaults to h3, which fits a Card nested under a page's own
+    // h1/h2. On a page where this Card's title IS the top heading, pass
+    // `as="h1"` (or `"h2"`) instead of leaving the outline to skip a level.
+    <Card className="max-w-sm">
+      <CardHeader>
+        <CardTitle as="h1">Client portal</CardTitle>
+        <CardDescription>The only heading on this page.</CardDescription>
+      </CardHeader>
+    </Card>
+  ),
+};

@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/marcfs31/forsight/forsight/internal/collector/filelog"
 	"github.com/marcfs31/forsight/forsight/internal/mlaas"
+	"github.com/marcfs31/forsight/forsight/internal/model"
 )
 
 // mlaasMaxBodyBytes caps a predict request body the same way the OTLP
@@ -175,7 +175,7 @@ func (s *Server) handleForseerClassify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"severity": string(filelog.FallbackSeverity(message)),
+		"severity": string(model.FallbackSeverity(message)),
 		"source":   "rule",
 		"ready":    false,
 	})
