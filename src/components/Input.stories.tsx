@@ -34,6 +34,21 @@ export const Invalid: Story = {
   },
 };
 
+export const HintTurnsIntoErrorAfterSubmit: Story = {
+  name: "Hint turns into an error after submit",
+  // A field that starts with neutral helper text and only becomes `invalid`
+  // once the form is submitted (this story's static equivalent) needs its
+  // hint to switch from silent to `aria-live="polite"` at that same moment
+  // — otherwise a screen-reader user who already tabbed past the field
+  // never hears that it now has an error.
+  args: {
+    "aria-label": "Workspace name",
+    placeholder: "Workspace name",
+    invalid: true,
+    hint: "Workspace name is already taken.",
+  },
+};
+
 export const Disabled: Story = {
   args: { "aria-label": "Locked field", placeholder: "Locked field", disabled: true },
 };

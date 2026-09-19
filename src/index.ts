@@ -17,6 +17,7 @@ export {
   CardContent,
   CardFooter,
   type CardProps,
+  type CardTitleProps,
 } from "./components/Card";
 export { Alert, type AlertProps } from "./components/Alert";
 export { Avatar, AvatarGroup, type AvatarProps, type AvatarGroupProps } from "./components/Avatar";
