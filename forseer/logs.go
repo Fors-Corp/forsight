@@ -82,12 +82,22 @@ func (m *logMiner) observeOneLocked(line LogLine, now time.Time) {
 		c.ErrorCount++
 		m.errors++
 	}
-	c.LastSeen = line.Timestamp
-	if c.LastSeen.IsZero() {
-		c.LastSeen = now
+	ts := line.Timestamp
+	if ts.IsZero() {
+		ts = now
+	}
+	// LastSeen only ever advances. A line that arrives out of order (an
+	// older Timestamp than one already observed) still gets its own real
+	// time recorded in c.times below, but it must not rewind the anchor
+	// the burst window and the prune cutoff are measured from — that
+	// anchor is what evictOldestLocked also reads to find the least
+	// recently active cluster, and rewinding it on one late line made a
+	// cluster that is still live look like the oldest one in the map.
+	if ts.After(c.LastSeen) {
+		c.LastSeen = ts
 	}
 	c.Sample = line.Message
-	c.times = append(c.times, c.LastSeen)
+	c.times = append(c.times, ts)
 	cutoff := c.LastSeen.Add(-2 * burstWindow)
 	i := 0
 	for i < len(c.times) && c.times[i].Before(cutoff) {
