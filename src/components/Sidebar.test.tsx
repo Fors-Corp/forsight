@@ -103,6 +103,29 @@ describe("Sidebar", () => {
   });
 });
 
+describe("SidebarNavItem", () => {
+  function renderItem(href: string) {
+    return render(
+      <SidebarProvider>
+        <SidebarNav>
+          <SidebarNavItem href={href}>Overview</SidebarNavItem>
+        </SidebarNav>
+      </SidebarProvider>
+    );
+  }
+
+  it("renders a real link for a safe href", () => {
+    renderItem("/overview");
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("href", "/overview");
+  });
+
+  it("renders its non-link branch for a javascript: href", () => {
+    renderItem("javascript:alert(document.cookie)");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("Overview")).toBeInTheDocument();
+  });
+});
+
 describe("SidebarTrigger", () => {
   it("exposes exactly one accessible control per breakpoint, both operable", async () => {
     const onToggle = vi.fn();
