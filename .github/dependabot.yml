@@ -10,7 +10,7 @@ version: 2
 # migration to go green is picked up by the triage routine described in
 # CLAUDE.md.
 registries:
-  # @marcfs31/forsight (the design system this repo also publishes) lives on
+  # @fors-corp/forsight (the design system this repo also publishes) lives on
   # GitHub Packages, a private registry. Without credentials here Dependabot
   # can't resolve it at all and silently proposes nothing — forsight/web's
   # pin drifted a full major behind (^3.0.0 vs the published 4.0.1) before

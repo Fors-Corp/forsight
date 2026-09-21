@@ -12,7 +12,7 @@ description: >-
 # Versioning & releasing the Forsight design system
 
 Managed with [Changesets](https://github.com/changesets/changesets). Published to
-GitHub Packages (`@marcfs31/fors-design-system`). Consumers pin a version, so the
+GitHub Packages (`@fors-corp/forsight`). Consumers pin a version, so the
 version number and the tag history are a contract.
 
 ## 1. Does this change need a changeset?
@@ -123,7 +123,7 @@ git tag -a vX.Y.Z <release-commit-sha> -m "vX.Y.Z — see CHANGELOG.md"
 
 - `Settings → Actions → General → Workflow permissions` set to **read and
   write** — without it the auto `GITHUB_TOKEN` can't publish packages or open
-  the version PR. Check: `gh api repos/marcfs31/fors-design-system/actions/permissions/workflow`.
+  the version PR. Check: `gh api repos/Fors-Corp/forsight/actions/permissions/workflow`.
 - Branch protection on `main` blocks force-push/deletion but does **not**
   require PRs — the release PR is opened by the action and merged like any
   other, but nothing stops a direct push for anything else.
