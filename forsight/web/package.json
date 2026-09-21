@@ -11,7 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@marcfs31/forsight": "^4.1.0",
+    "@marcfs31/forsight": "^4.1.1",
     "react": "^19",
     "react-dom": "^19"
   },
