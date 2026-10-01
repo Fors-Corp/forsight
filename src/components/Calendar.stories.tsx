@@ -149,7 +149,7 @@ function DateRangePickerExample() {
   const [value, setValue] = React.useState<DateRangePickerProps["value"]>();
   return (
     <div className="flex max-w-xs flex-col gap-2 pt-12">
-      <DateRangePicker value={value} onValueChange={setValue} />
+      <DateRangePicker value={value} onValueChange={setValue} defaultMonth={REFERENCE_MONTH} />
     </div>
   );
 }
