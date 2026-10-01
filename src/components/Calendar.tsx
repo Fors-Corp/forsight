@@ -121,6 +121,12 @@ export interface DatePickerProps {
   className?: string;
   /** Forwarded to the trigger button, e.g. to pair it with a `<label htmlFor>`. */
   id?: string;
+  /**
+   * Month the grid opens on when nothing is selected. With a `value` the grid
+   * opens on that date's month, so this is only needed for the empty state
+   * (and to keep stories/screenshots independent of the current date).
+   */
+  defaultMonth?: Date;
 }
 
 const CALENDAR_ICON = (
@@ -155,6 +161,7 @@ export function DatePicker({
   disabled,
   className,
   id,
+  defaultMonth,
 }: DatePickerProps) {
   const [open, setOpen] = React.useState(false);
   const label = value
@@ -183,6 +190,9 @@ export function DatePicker({
         <Calendar
           mode="single"
           selected={value}
+          // Without this the grid opens on the current month even when a date
+          // from another month is selected, so the selection isn't on screen.
+          defaultMonth={value ?? defaultMonth}
           onSelect={(date) => {
             onValueChange?.(date);
             setOpen(false);
@@ -207,6 +217,12 @@ export interface DateRangePickerProps {
   className?: string;
   /** Forwarded to the trigger button, e.g. to pair it with a `<label htmlFor>`. */
   id?: string;
+  /**
+   * Month the grid opens on when no range has been started. With a `value` the
+   * grid opens on `value.from`'s month, so this is only needed for the empty
+   * state (and to keep stories/screenshots independent of the current date).
+   */
+  defaultMonth?: Date;
 }
 
 const rangeDateFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
@@ -232,6 +248,7 @@ export function DateRangePicker({
   disabled,
   className,
   id,
+  defaultMonth,
 }: DateRangePickerProps) {
   const [open, setOpen] = React.useState(false);
   const label =
@@ -264,6 +281,9 @@ export function DateRangePicker({
           mode="range"
           min={1}
           selected={value}
+          // As in DatePicker: open on the range's start, not on today, so an
+          // existing selection is visible when the popover opens.
+          defaultMonth={value?.from ?? defaultMonth}
           onSelect={(range) => {
             onValueChange?.(range);
             if (range?.from && range?.to) setOpen(false);
