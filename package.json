@@ -149,7 +149,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
-    "@changesets/cli": "^2.27.9",
+    "@changesets/cli": "^3.0.3",
     "@eslint/js": "^10.0.1",
     "@size-limit/preset-small-lib": "^13.0.3",
     "@storybook/addon-a11y": "^10.6.0",
@@ -197,6 +197,7 @@
     "uuid": "^11.1.1",
     "tsup": {
       "esbuild": "^0.28.1"
-    }
+    },
+    "brace-expansion": "^5.0.12"
   }
 }

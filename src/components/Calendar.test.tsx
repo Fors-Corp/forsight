@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "../test-utils/axe";
@@ -11,7 +11,34 @@ import { Calendar, DatePicker, DateRangePicker } from "./Calendar";
 // only its closed-state trigger is exercised in jsdom; open-state grid
 // navigation and selection are covered by Calendar.stories.tsx `play` tests.
 
+// Every test below renders September 2026 via an explicit `defaultMonth`, but
+// `CalendarDayButton`'s `modifiers.today` arm is only taken when the real
+// clock also sits in the rendered month. That made this file's branch coverage
+// depend on the wall calendar: it met the 87% threshold while CI ran in
+// September 2026 and fell to 82.05% the moment the month rolled over, with no
+// code change (the `verify` job started failing on every PR on 2026-10-01).
+// Pin the clock inside the rendered month so the branch is exercised on
+// purpose. Only `Date` is faked — userEvent needs real timers to resolve its
+// own delays.
+const TODAY = new Date(2026, 8, 15, 12);
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: TODAY });
+});
+afterAll(() => {
+  vi.useRealTimers();
+});
+
 describe("Calendar", () => {
+  it("marks the current date, which is what `modifiers.today` styles", () => {
+    render(<Calendar mode="single" defaultMonth={new Date(2026, 8, 1)} />);
+
+    // react-day-picker prefixes the day's accessible name with "Today, " and
+    // the component paints it with the accent colour unless it is also
+    // selected — the `modifiers.today` arm this test exists to exercise.
+    const today = screen.getByRole("button", { name: /^Today, .*September 15/i });
+    expect(today).toHaveClass("font-semibold", "text-accent");
+  });
+
   it("renders a labelled date grid whose day buttons carry a full accessible name", () => {
     render(
       <Calendar mode="single" selected={new Date(2026, 8, 8)} defaultMonth={new Date(2026, 8, 1)} />
