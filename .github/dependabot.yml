@@ -64,34 +64,19 @@ updates:
           - "size-limit"
           - "@size-limit/*"
     ignore:
-      # The ONE deliberate exception — a hard blocker, not a policy choice:
-      # typescript-eslint declares peer `typescript >=4.8.4 <6.1.0`, so
-      # TypeScript 7 cannot even install next to it (`npm ci` fails with
-      # ERESOLVE; that was PR #4 on 2026-09-09). Remove this entry the moment
-      # typescript-eslint publishes support for TypeScript 7 — the triage
-      # routine re-checks `npm view typescript-eslint peerDependencies` on
-      # every pass and is told to drop it then.
+      # The ONE remaining exception — a hard blocker, not a policy choice, and
+      # scoped to the versions actually blocked rather than to every major.
+      # typescript-eslint 8.71.0 declares peer `typescript >=4.8.4 <6.1.0`:
+      # TypeScript 7 violates it (that was PR #4 on 2026-09-09) while **6.x
+      # satisfies it**. This entry used to block all majors, so the
+      # installable 5 -> 6 bump was never offered — measured 2026-10-02, and
+      # TS 6 then landed on its own PR. Note that npm 12 only *warns* on this
+      # peer violation where npm 10 failed with ERESOLVE, so it is this entry,
+      # not the package manager, that keeps TS 7 out. Remove it the moment
+      # typescript-eslint widens the peer to accept 7 — the triage routine
+      # re-checks `npm view typescript-eslint peerDependencies` every pass.
       - dependency-name: "typescript"
-        update-types: ["version-update:semver-major"]
-      # Same shape, different blocker: @changesets/cli v3 declares engines
-      # `node ^22.11 || ^24 || >=26` and calls module.enableCompileCache(),
-      # so it cannot run on the Node 20 this repo still supports (.nvmrc and
-      # the CI matrix). Remove this entry together with Node 20 — which also
-      # unblocks size-limit 13 and jsdom 30, and lets changesets/action move
-      # to v2 (v2 requires CLI v3; see release.yml).
-      - dependency-name: "@changesets/cli"
-        update-types: ["version-update:semver-major"]
-      # A third peer blocker: @storybook/addon-vitest (10.6.0 and
-      # 11.0.0-alpha.0) peers `vitest` / `@vitest/browser` at `^3.0.0 ||
-      # ^4.0.0`, so the Vitest 5 group bump fails `npm ci` with ERESOLVE.
-      # Closing that group PR doesn't ignore it, and it was reopened four
-      # times (#45, #47, #68, #78). Vitest 4 minors and patches still flow.
-      # Only the root is affected; forsight/web has no Storybook. Remove
-      # when `npm view @storybook/addon-vitest peerDependencies` accepts ^5.
-      - dependency-name: "vitest"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@vitest/*"
-        update-types: ["version-update:semver-major"]
+        versions: [">=7"]
 
   # The agent's dashboard (private, embedded into the Go binary). A bump here
   # changes forsight/internal/api/webdist/ — `make build-web` must be re-run
@@ -154,14 +139,6 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-    ignore:
-      # changesets/action v2 requires Changesets CLI v3, which requires
-      # Node ^22.11 — so it is blocked by the same Node 20 floor as
-      # @changesets/cli, size-limit 13 and jsdom 30. It was auto-merged once
-      # (PR #21), silently stopped publishing, and had to be reverted in
-      # PR #34. Remove this together with Node 20.
-      - dependency-name: "changesets/action"
-        update-types: ["version-update:semver-major"]
     cooldown:
       # Only `default-days` here: Dependabot rejects `semver-major-days` for
       # the github-actions ecosystem ("not supported for the package
