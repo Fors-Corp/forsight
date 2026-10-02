@@ -51,20 +51,20 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       # Matches forsight-ci.yml's "go" job exactly, for the same Go version
       # everything else in this repo builds and tests against.
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: forsight/go.mod
 
       # Matches forsight-ci.yml's "web" job: same Node version, same
       # GitHub Packages registry/scope wiring for the @marcfs31 packages
       # forsight/web depends on.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           cache: npm
