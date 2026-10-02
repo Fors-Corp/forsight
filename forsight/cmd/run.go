@@ -36,6 +36,35 @@ import (
 	"github.com/Fors-Corp/forsight/forsight/internal/store"
 )
 
+// shutdownBudget is how long the HTTP server gets to drain in-flight requests
+// after a signal, for both `run` and `demo`. cmd/boot_test.go allows 7s before
+// it calls the same path a hang.
+const shutdownBudget = 5 * time.Second
+
+// gracefulShutdown drains srv's in-flight requests within budget.
+//
+// Reaching the budget is deliberately NOT an error. This runs because an
+// operator asked the process to stop, and `systemctl stop` / `docker stop`
+// read the exit status: returning the deadline would report a failed stop
+// because a client was slow — or merely because the box was loaded, which is
+// how CI surfaced this (TestBootRealBinary saw "exited with code 1 after
+// SIGINT" once in 40 runs, with "context deadline exceeded" and nothing else
+// wrong). So force the remaining connections closed, say so in the log, and
+// let the caller get on with the durable part of shutdown. Every other
+// Shutdown error is returned untouched.
+func gracefulShutdown(srv *http.Server, budget time.Duration, logger *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		logger.Warn("shutdown budget exceeded; closing remaining connections", "budget", budget)
+		_ = srv.Close()
+	}
+	return nil
+}
+
 type runOptions struct {
 	addr              string
 	authToken         string
@@ -320,9 +349,7 @@ func run(ctx context.Context, opts *runOptions, logger *slog.Logger) error {
 	select {
 	case <-ctx.Done():
 		logger.Info("shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		shutdownErr := httpServer.Shutdown(shutdownCtx)
+		shutdownErr := gracefulShutdown(httpServer, shutdownBudget, logger)
 		// ctx is already cancelled (that's why we're here), so every
 		// goroutine wg tracks is already unwinding on its own ctx.Done()
 		// check; this just waits for the last of them to actually return
