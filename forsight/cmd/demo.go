@@ -136,9 +136,7 @@ func runDemo(ctx context.Context, opts *demoOptions, logger *slog.Logger) error 
 	select {
 	case <-ctx.Done():
 		logger.Info("shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		err := httpServer.Shutdown(shutdownCtx)
+		err := gracefulShutdown(httpServer, shutdownBudget, logger)
 		<-liveDone
 		return err
 	case err := <-serveErr:
