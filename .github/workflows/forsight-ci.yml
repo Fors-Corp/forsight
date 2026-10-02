@@ -13,6 +13,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Same gap as ci.yml's schedule (see the comment there): an auto-merge
+    # squash is pushed with GITHUB_TOKEN and creates no runs, so `main` can sit
+    # untested. The `changes` job needs nothing extra for this — a scheduled
+    # run has no diff to compute, which its "fail open" branch already turns
+    # into go=true and web=true, so both the Go gate and the embed-drift check
+    # really do run. Offset from ci.yml's cron to spread the load.
+    - cron: "37 7 * * *"
   # Dispatched by dependabot-automerge.yml / release.yml on a head they moved
   # with GITHUB_TOKEN. Such pushes create no workflow runs of their own
   # (workflow_dispatch is the documented exception); a PR opened or updated by
