@@ -39,7 +39,7 @@ jobs:
       pull-requests: write # open/update the "Version Packages" PR
       packages: write # changeset publish -> GitHub Packages
     outputs:
-      versionPr: ${{ steps.changesets.outputs.pullRequestNumber }}
+      versionPr: ${{ steps.changesets.outputs.pr-number }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -63,31 +63,36 @@ jobs:
       # workflow's own GITHUB_TOKEN (same-repo publish needs no separate
       # PAT/secret; see NODE_AUTH_TOKEN below) — and tags + creates a
       # GitHub Release for what it published.
-      # Pinned to the commit of the real upstream v1.9.0 tag (verified with
-      # `gh api repos/changesets/action/tags`), not a mutable major tag —
-      # CodeQL's unpinned-tag check flags third-party Actions.
+      # Pinned to the commit of the real upstream v2.1.2 tag (verified with
+      # `gh api repos/changesets/action/tags`; the repo is not a fork and is
+      # not archived), not a mutable major tag — CodeQL's unpinned-tag check
+      # flags third-party Actions.
       #
-      # Pinned to v1.9.0 deliberately, NOT v2. v2's inputs were migrated
-      # correctly (version -> version-script, publish -> publish-script,
-      # commit -> commit-message, title -> pr-title, outputs
-      # .pullRequestNumber -> outputs.pr-number) and it still refused to run:
-      # "This version of the Changesets action is designed to work with
-      # Changesets CLI v3". And @changesets/cli v3 declares engines
-      # `node ^22.11 || ^24 || >=26` and calls module.enableCompileCache(),
-      # so it cannot run on the Node 20 this repo still supports in CI and in
-      # .nvmrc. The v2 migration therefore waits on dropping Node 20 — the
-      # same blocker as size-limit 13 and jsdom 30. Until then this stays on
-      # v1.9.0 with v1 input names, and dependabot-automerge.yml refuses to
-      # auto-merge Action majors so it cannot be re-broken unattended.
-      - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+      # v2 refuses to run against Changesets CLI v2 ("This version of the
+      # Changesets action is designed to work with Changesets CLI v3"), which
+      # is why the v1.9.0 pin outlived the input migration: CLI v3 needs
+      # `node ^22.11 || ^24 || >=26`, and this repo still supported Node 20.
+      # Node 20 went on 2026-09-10 and the CLI v3 bump landed separately, so
+      # v2 can run. Every input name is kebab-case in v2, and the outputs
+      # changed too — verified against the v2 action.yml at the pinned commit,
+      # not against a changelog:
+      #   version -> version-script       publish -> publish-script
+      #   commit  -> commit-message       title   -> pr-title
+      #   outputs.pullRequestNumber -> outputs.pr-number
+      # `github-token` is now a required input, and v2 warns when a
+      # GITHUB_TOKEN env var is set to a different value than the input, so
+      # the token is passed as the input and that env var is gone.
+      # NODE_AUTH_TOKEN stays: it is what `changeset publish` authenticates to
+      # GitHub Packages with, which is separate from the action's API calls.
+      - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         id: changesets
         with:
-          version: npm run version-packages
-          publish: npm run release
-          commit: "chore(release): version packages"
-          title: "chore(release): version packages"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version-script: npm run version-packages
+          publish-script: npm run release
+          commit-message: "chore(release): version packages"
+          pr-title: "chore(release): version packages"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Separate job, so the token that can dispatch workflows is never present in
