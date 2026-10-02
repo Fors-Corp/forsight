@@ -4,6 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # `push:` above is not the safety net it looks like. Native auto-merge
+    # completes its squash with GITHUB_TOKEN, and a push made with that token
+    # creates no workflow runs at all — so `main` can go days without CI while
+    # every PR merges green against a stale base. It did: the last `push` run
+    # on `main` was 2026-09-21, and by 2026-10-01 `main` was red three ways
+    # (a Calendar play test and a coverage threshold that both depended on the
+    # wall clock, plus a new high-severity advisory) with nothing to show it.
+    # A daily run on the default branch also catches exactly that class of
+    # time bomb, which no diff-triggered run ever will. Same reasoning as
+    # codeql.yml's weekly schedule; staggered off the hour.
+    - cron: "17 7 * * *"
   # Dispatched by dependabot-automerge.yml / release.yml on a head they moved
   # with GITHUB_TOKEN. Such pushes create no workflow runs of their own
   # (workflow_dispatch is the documented exception); a PR opened or updated by
