@@ -15,9 +15,18 @@
     "isolatedModules": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "baseUrl": ".",
+    // `baseUrl` is gone from this file (TS 6 deprecates it), but tsup's dts
+    // build re-adds it unconditionally — `baseUrl: compilerOptions.baseUrl ||
+    // "."` in tsup/dist/rollup.js, still present in 8.5.1, the latest
+    // release. So TS 6 raises TS5101 during `dts` for `build`,
+    // `test:package` and `test:consumer` whatever this file says, and this is
+    // the escape the compiler's own message prescribes for the 6.x window. It
+    // is scoped to deprecations, not to type errors. TypeScript 7 removes
+    // `baseUrl` outright, so tsup must drop that line before TS 7 is possible
+    // here — a second reason the TS 7 entry in .github/dependabot.yml stays.
+    "ignoreDeprecations": "6.0",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": [
