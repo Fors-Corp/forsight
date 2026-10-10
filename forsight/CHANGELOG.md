@@ -23,9 +23,9 @@ since 1.2.0.
   socket per `--collect-interval`. After 3.5 days on 2026-10-10 that was
   16,314 sockets to one target, every ephemeral port on a macOS host, and
   every other program on the machine failed to connect. Probes now share
-  one client that opens a fresh connection per probe and closes it, which
-  also means `probe.tls.*` always reports the certificate served now
-  rather than one a pooled connection negotiated before a renewal
+  one client that opens a fresh connection per probe and closes it, so
+  `probe.tls.*` still reports the certificate served now. A handshake that
+  fails outright no longer reports `probe.tls.*` for that tick
 - The mlaas client has a transport of its own with a per-host connection
   cap, instead of sharing `http.DefaultTransport`
 - `process.fd.count` always includes forsight's own process, which an idle
@@ -62,6 +62,8 @@ since 1.2.0.
 - The Go module path is `github.com/Fors-Corp/forsight/forsight`, following
   the repository's move to the Fors-Corp organisation (#181). Nothing
   imports it as a library
+- The dashboard builds against `@marcfs31/forsight` 4.2.0 (#189, #192), and
+  Go and dashboard dependencies are updated (#206 and others)
 
 ## [1.2.0] - 2026-09-17
 

@@ -60,10 +60,10 @@ type Collector struct {
 	timeout time.Duration
 	// client is shared by every probe. It never keeps a connection alive:
 	// each probe dials, handshakes and closes, so probe.http.duration_ms
-	// always includes the connect, and probe.tls.* always reflects the
-	// certificate served now, not the one a pooled connection negotiated
-	// before a renewal. A per-probe Transport (the pre-2026-10-10 shape)
-	// orphaned one idle keep-alive socket per tick.
+	// still includes the connect, and probe.tls.* still reflects the
+	// certificate served now, where a pooled connection would keep reporting
+	// the one it negotiated before a renewal. A per-probe Transport (the
+	// pre-2026-10-10 shape) orphaned one idle keep-alive socket per tick.
 	client *http.Client
 
 	// rootCAs overrides the trust store used to judge probe.tls.valid.

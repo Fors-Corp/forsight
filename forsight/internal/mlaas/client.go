@@ -73,9 +73,9 @@ var noRedirectClient = &http.Client{
 // maxConnsPerHost caps the sockets held to mlaas at once. The sync pass is
 // sequential and the dashboard's proxied calls are few, so a request that
 // finds the cap reached waits (under its own context deadline) rather than
-// dialing; a leak then shows up as slow calls instead of exhausting the
-// host's ephemeral ports, which is what an unbounded pool did to the machine
-// on 2026-10-10.
+// dialing; a future leak then shows up as slow calls instead of exhausting
+// the host's ephemeral ports, which is what the probe collector's orphaned
+// per-probe transports did to the machine on 2026-10-10.
 const maxConnsPerHost = 8
 
 // boundedTransport is http.DefaultTransport's settings (proxy from the
