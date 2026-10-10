@@ -294,7 +294,7 @@ type wireActual struct {
 // and reports mlaas's own verdict: a 503 names the part that failed. On
 // success it also returns the version mlaas reported
 // ({"ok":true,"version":"v1.8.0"}), so a caller can tell which build it is
-// talking to; empty when the response carries none. From mlaas 1.9.0 it
+// talking to; empty when the response carries none. From mlaas 2.0.0 it
 // only says the process is serving; Readyz says whether it can do its work.
 func (c *Client) Healthz(ctx context.Context) (string, error) {
 	return c.probe(ctx, "/healthz")
@@ -302,7 +302,7 @@ func (c *Client) Healthz(ctx context.Context) (string, error) {
 
 // Readyz asks whether mlaas can do its work - its database answers and its
 // retrain loop is alive - and returns the version it reports, like Healthz.
-// mlaas before 1.9.0 has no /readyz: it answers 404, or 401 because its
+// mlaas before 2.0.0 has no /readyz: it answers 404, or 401 because its
 // auth did not exempt the path. Its /healthz made the same checks, so then
 // Readyz asks that instead.
 func (c *Client) Readyz(ctx context.Context) (string, error) {
