@@ -1,5 +1,7 @@
 # Forsight — standing rules for Claude Code sessions
 
+@AGENTS.md — rules for every coding agent, each backed by the incident behind it.
+
 This repo ships **two independently versioned artifacts** from one tree:
 
 | Artifact                                                                         | Where           | Built by        | Versioned as               |
