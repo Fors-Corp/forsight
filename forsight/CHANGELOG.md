@@ -10,6 +10,12 @@ this file fits into cutting a release.
 
 ## [Unreleased]
 
+### Security
+
+- Built with Go 1.27.2, which carries security fixes to `crypto/tls`,
+  `net/http`, `net/textproto`, `html/template`, `os` and the `go` command;
+  the agent serves HTTP and makes HTTPS probes, so they apply to it
+
 ## [1.2.1] - 2026-10-10
 
 Fixes the probe collector's socket leak, and releases the fixes merged
