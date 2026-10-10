@@ -10,6 +10,14 @@ this file fits into cutting a release.
 
 ## [Unreleased]
 
+### Changed
+
+- The mlaas sync pass checks mlaas's `/readyz` before each pass instead of
+  `/healthz`. From mlaas 1.9.0 `/healthz` only says the process is serving,
+  and `/readyz` says whether its database and retrain loop work. Against an
+  older mlaas, which answers `/readyz` with 401 or 404 and made the same
+  checks on `/healthz`, it asks `/healthz` as before
+
 ## [1.2.1] - 2026-10-10
 
 Fixes the probe collector's socket leak, and releases the fixes merged
