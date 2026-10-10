@@ -10,6 +10,59 @@ this file fits into cutting a release.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-10
+
+Fixes the probe collector's socket leak, and releases the fixes merged
+since 1.2.0.
+
+### Fixed
+
+- The probe collector no longer leaks a socket per probe. It built a new
+  HTTP transport for every request, and each one kept its connection open
+  in an idle pool that never expired, so `--probe` held one ESTABLISHED
+  socket per `--collect-interval`. After 3.5 days on 2026-10-10 that was
+  16,314 sockets to one target, every ephemeral port on a macOS host, and
+  every other program on the machine failed to connect. Probes now share
+  one client that opens a fresh connection per probe and closes it, which
+  also means `probe.tls.*` always reports the certificate served now
+  rather than one a pooled connection negotiated before a renewal
+- The mlaas client has a transport of its own with a per-host connection
+  cap, instead of sharing `http.DefaultTransport`
+- `process.fd.count` always includes forsight's own process, which an idle
+  agent never ranked into the busiest 40, and forsight logs one warning
+  when its own descriptor count passes 4096 (again only after recovering)
+- A shutdown that runs out of its time budget is no longer reported as a
+  failed stop (#218)
+- The agent waits for its collectors before closing the store, and the
+  store's locks are split (#167)
+- Every remaining unbounded read on the ingest paths is bounded (#162);
+  non-finite values are rejected, and a 200 that carries no body is no
+  longer accepted (#149); the statsd accumulator is bounded and `Collect`
+  no longer receives its live map (#143)
+- `/readyz` tells an anonymous caller only what it is for (#163)
+- Log clustering: a token-length leak is closed, an old log line no longer
+  rewinds a cluster, and the severity fallback moved out of the file-log
+  collector (#166)
+- forseer detectors: CUSUM runs on a zero-mean statistic (#139); real
+  series are capped and dead ones evicted, instead of capping hour buckets
+  (#150); host-outlier variance is floored per input (#148); a p99 needs
+  more than twelve samples (#153); the burn projection is compared in
+  seconds before it can overflow (#151); points are scored against the
+  estimate that excludes them, and threshold readiness means converged
+  (#170); the trend interval is sized from Holt's actual errors (#168)
+- mlaas: only the first key is read from the API key file (#138), and the
+  version mlaas reports on `/healthz` is recorded and logged (#141)
+- Dashboard: it survives a render error and no longer blames the user for
+  an outage (#178); the heading outline is fixed, the mlaas status is
+  announced, and the dashboard runs under axe in its tests (#183);
+  hash-route navigation sets the page title and moves focus (#152)
+
+### Changed
+
+- The Go module path is `github.com/Fors-Corp/forsight/forsight`, following
+  the repository's move to the Fors-Corp organisation (#181). Nothing
+  imports it as a library
+
 ## [1.2.0] - 2026-09-17
 
 Probes, a lighter dashboard, and the last of the roadmap follow-ups.
