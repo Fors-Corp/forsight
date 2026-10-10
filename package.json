@@ -199,6 +199,8 @@
     "tsup": {
       "esbuild": "^0.28.1"
     },
-    "brace-expansion": "^5.0.12"
+    "brace-expansion": "^5.0.12",
+    "@parcel/watcher": "^2.6.0",
+    "source-map-js": "^1.2.2"
   }
 }
