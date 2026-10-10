@@ -275,7 +275,7 @@ func (s *Syncer) pass(ctx context.Context) {
 		s.mu.Unlock()
 	}
 
-	version, err := s.client.Healthz(ctx)
+	version, err := s.client.Readyz(ctx)
 	if err != nil {
 		s.logger.Warn("mlaas unreachable; skipping sync pass", "url", s.displayURL, "err", logsafe.Err(err))
 		note(err)
@@ -660,7 +660,7 @@ func (s *Syncer) feedback(ctx context.Context, m managedModel, classes []string,
 	return feedbackErr
 }
 
-// noteVersion records the version mlaas reported on a successful Healthz
+// noteVersion records the version mlaas reported on a successful Readyz
 // and logs it: once when a version is first seen, and again whenever it
 // differs from the last one recorded. A changed version between sync
 // passes means mlaas was upgraded underneath a running agent — the
@@ -755,7 +755,7 @@ func (s *Syncer) refresh(ctx context.Context, force bool) {
 		return
 	}
 
-	version, err := s.client.Healthz(ctx)
+	version, err := s.client.Readyz(ctx)
 	if err != nil {
 		s.markUnreachable(err)
 		return
