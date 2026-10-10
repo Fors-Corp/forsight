@@ -24,7 +24,7 @@ import (
 type Client struct {
 	// BaseURL is the server, without a trailing slash: http://127.0.0.1:8090.
 	BaseURL string
-	// APIKey goes out as X-API-Key on every call except Healthz.
+	// APIKey goes out as X-API-Key on every call except Healthz and Readyz.
 	APIKey string
 	// HTTP is the transport. Its own Timeout stays zero: each call sets a
 	// context deadline instead (callTimeout, uploadTimeout), so a large
@@ -294,11 +294,31 @@ type wireActual struct {
 // and reports mlaas's own verdict: a 503 names the part that failed. On
 // success it also returns the version mlaas reported
 // ({"ok":true,"version":"v1.8.0"}), so a caller can tell which build it is
-// talking to; empty when the response carries none.
+// talking to; empty when the response carries none. From mlaas 1.9.0 it
+// only says the process is serving; Readyz says whether it can do its work.
 func (c *Client) Healthz(ctx context.Context) (string, error) {
+	return c.probe(ctx, "/healthz")
+}
+
+// Readyz asks whether mlaas can do its work - its database answers and its
+// retrain loop is alive - and returns the version it reports, like Healthz.
+// mlaas before 1.9.0 has no /readyz: it answers 404, or 401 because its
+// auth did not exempt the path. Its /healthz made the same checks, so then
+// Readyz asks that instead.
+func (c *Client) Readyz(ctx context.Context) (string, error) {
+	version, err := c.probe(ctx, "/readyz")
+	if status := upstreamStatus(err); status == http.StatusNotFound || status == http.StatusUnauthorized {
+		return c.Healthz(ctx)
+	}
+	return version, err
+}
+
+// probe is one supervisor-style check: no key, mlaas's {"ok", "failed",
+// "version"} answer.
+func (c *Client) probe(ctx context.Context, path string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/healthz", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
 	if err != nil {
 		return "", err
 	}
@@ -467,7 +487,7 @@ func (c *Client) call(ctx context.Context, method, path string, body, out any) e
 // *UpstreamError carrying mlaas's own message, and decodes a 2xx body into
 // out when there is one to decode into.
 func (c *Client) do(req *http.Request, out any) error {
-	if c.APIKey != "" && req.URL.Path != "/healthz" {
+	if c.APIKey != "" && req.URL.Path != "/healthz" && req.URL.Path != "/readyz" {
 		req.Header.Set("X-API-Key", c.APIKey)
 	}
 	req.Header.Set("Accept", "application/json")
