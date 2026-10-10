@@ -5,6 +5,8 @@ package proc
 
 import (
 	"context"
+	"log/slog"
+	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -16,6 +18,13 @@ import (
 )
 
 const defaultLimit = 40
+
+// selfFDWarnThreshold is how many open descriptors forsight may hold before
+// it warns about itself. A healthy agent holds a few hundred (badger's
+// tables, listeners, the collectors' sockets); the 2026-10-10 probe leak
+// reached 16k and exhausted the host's ephemeral ports (16,384 on macOS).
+// Crossing this leaves most of that headroom still free.
+const selfFDWarnThreshold = 4096
 
 // sample is one process as of this tick.
 type sample struct {
@@ -30,20 +39,26 @@ type sample struct {
 type lister func(ctx context.Context) ([]sample, error)
 
 // Collector emits process.cpu.percent, process.memory.rss_bytes, and
-// process.fd.count for the busiest processes (by CPU, then RSS). The first
-// tick for a pid has no CPU percent — gopsutil needs two samples to diff,
-// the same shape as the Docker collector.
+// process.fd.count for the busiest processes (by CPU, then RSS), plus
+// forsight's own process whether or not it ranks. The first tick for a pid
+// has no CPU percent — gopsutil needs two samples to diff, the same shape as
+// the Docker collector.
 type Collector struct {
 	list  lister
 	limit int
+	// self is forsight's own pid, reported past the limit and watched for
+	// a descriptor leak; 0 means none (tests that do not exercise it).
+	self   int32
+	logger *slog.Logger
 
-	mu   sync.Mutex
-	seen map[int32]struct{}
+	mu       sync.Mutex
+	seen     map[int32]struct{}
+	fdWarned bool
 }
 
 // New watches the live process table.
 func New() *Collector {
-	return &Collector{list: listLive, limit: defaultLimit, seen: map[int32]struct{}{}}
+	return &Collector{list: listLive, limit: defaultLimit, self: int32(os.Getpid()), seen: map[int32]struct{}{}}
 }
 
 func (c *Collector) Name() string { return "proc" }
@@ -59,8 +74,16 @@ func (c *Collector) Collect(ctx context.Context) ([]model.Metric, error) {
 		}
 		return samples[i].RSS > samples[j].RSS
 	})
+	self, selfFound := c.findSelf(samples)
 	if c.limit > 0 && len(samples) > c.limit {
-		samples = samples[:c.limit]
+		kept := samples[:c.limit:c.limit]
+		if selfFound && !containsPID(kept, c.self) {
+			kept = append(kept, self)
+		}
+		samples = kept
+	}
+	if selfFound {
+		c.checkOwnFDs(self.FDCount)
 	}
 
 	now := time.Now()
@@ -93,6 +116,49 @@ func (c *Collector) Collect(ctx context.Context) ([]model.Metric, error) {
 	c.seen = next
 	c.mu.Unlock()
 	return metrics, nil
+}
+
+func (c *Collector) findSelf(samples []sample) (sample, bool) {
+	if c.self == 0 {
+		return sample{}, false
+	}
+	for _, s := range samples {
+		if s.PID == c.self {
+			return s, true
+		}
+	}
+	return sample{}, false
+}
+
+func containsPID(samples []sample, pid int32) bool {
+	for _, s := range samples {
+		if s.PID == pid {
+			return true
+		}
+	}
+	return false
+}
+
+// checkOwnFDs warns once when forsight's own descriptor count crosses
+// selfFDWarnThreshold, and again only after it has dropped back below — a
+// leak is one incident, not a line every tick.
+func (c *Collector) checkOwnFDs(fds int32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if fds <= selfFDWarnThreshold {
+		c.fdWarned = false
+		return
+	}
+	if c.fdWarned {
+		return
+	}
+	c.fdWarned = true
+	logger := c.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Warn("forsight holds an unusual number of open file descriptors; a connection or file leak is likely",
+		"open_fds", fds, "threshold", selfFDWarnThreshold)
 }
 
 func listLive(ctx context.Context) ([]sample, error) {
