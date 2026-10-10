@@ -450,7 +450,7 @@ func TestClient_CapsConnectionsPerHost(t *testing.T) {
 	wg.Wait()
 }
 
-// From mlaas 1.9.0 /healthz is liveness only and /readyz says whether mlaas
+// From mlaas 2.0.0 /healthz is liveness only and /readyz says whether mlaas
 // can do its work, so the sync pass asks /readyz: a 503 there is not ready
 // even while /healthz answers 200, and it must never fall back past it.
 func TestClient_ReadyzReportsNotReadyWithoutFallingBack(t *testing.T) {
@@ -462,10 +462,10 @@ func TestClient_ReadyzReportsNotReadyWithoutFallingBack(t *testing.T) {
 		switch r.URL.Path {
 		case "/readyz":
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"ok":false,"failed":"checker","version":"v1.9.0"}`))
+			_, _ = w.Write([]byte(`{"ok":false,"failed":"checker","version":"v2.0.0"}`))
 		case "/healthz":
 			healthzCalls.Add(1)
-			_, _ = w.Write([]byte(`{"ok":true,"version":"v1.9.0"}`))
+			_, _ = w.Write([]byte(`{"ok":true,"version":"v2.0.0"}`))
 		}
 	}))
 	defer srv.Close()
@@ -483,7 +483,7 @@ func TestClient_ReadyzReportsNotReadyWithoutFallingBack(t *testing.T) {
 	}
 }
 
-// mlaas before 1.9.0 has no /readyz: it answers 401 (its auth did not exempt
+// mlaas before 2.0.0 has no /readyz: it answers 401 (its auth did not exempt
 // the path - what the live 1.8.2 answered on 2026-10-10) or 404. Its /healthz
 // made the readiness checks, so Readyz asks that instead.
 func TestClient_ReadyzFallsBackToHealthzOnAnOlderMlaas(t *testing.T) {
