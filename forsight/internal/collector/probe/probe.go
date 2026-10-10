@@ -24,7 +24,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/Fors-Corp/forsight/forsight/internal/model"
@@ -46,10 +48,23 @@ type Target struct {
 	Name string
 }
 
+// maxConnsPerTarget caps the sockets the probe may hold to one host at once.
+// Probes run one at a time, so more than one is only ever a connection still
+// closing after a timeout; the cap makes a regression block instead of
+// leaking toward port exhaustion.
+const maxConnsPerTarget = 4
+
 // Collector probes a fixed set of HTTP(S) URLs.
 type Collector struct {
 	targets []Target
 	timeout time.Duration
+	// client is shared by every probe. It never keeps a connection alive:
+	// each probe dials, handshakes and closes, so probe.http.duration_ms
+	// always includes the connect, and probe.tls.* always reflects the
+	// certificate served now, not the one a pooled connection negotiated
+	// before a renewal. A per-probe Transport (the pre-2026-10-10 shape)
+	// orphaned one idle keep-alive socket per tick.
+	client *http.Client
 
 	// rootCAs overrides the trust store used to judge probe.tls.valid.
 	// nil (the production default) means the system pool; tests set this
@@ -71,7 +86,22 @@ func New(targets []Target, interval time.Duration) *Collector {
 	if timeout <= 0 || timeout > 10*time.Second {
 		timeout = 10 * time.Second
 	}
-	return &Collector{targets: targets, timeout: timeout, warned: make(map[string]bool)}
+	return &Collector{
+		targets: targets,
+		timeout: timeout,
+		client: &http.Client{
+			Timeout: timeout,
+			Transport: &http.Transport{
+				TLSClientConfig:     manualVerifyTLSConfig(),
+				TLSHandshakeTimeout: timeout,
+				DisableKeepAlives:   true,
+				MaxConnsPerHost:     maxConnsPerTarget,
+			},
+			// CheckRedirect left nil: default net/http behaviour (follow up to
+			// 10), per the spec's "no redirects beyond default client behaviour".
+		},
+		warned: make(map[string]bool),
+	}
 }
 
 func (c *Collector) Name() string { return "probe" }
@@ -101,21 +131,16 @@ func (c *Collector) probeOne(ctx context.Context, t Target) []model.Metric {
 	reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
+	var cert tlsCapture
+	reqCtx = httptrace.WithClientTrace(reqCtx, &httptrace.ClientTrace{TLSHandshakeDone: cert.record})
+
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, t.URL, nil)
 	if err != nil {
 		return []model.Metric{{Name: "probe.http.up", Value: 0, Timestamp: now, Labels: labels}}
 	}
 
-	var cert tlsCapture
-	client := &http.Client{
-		Timeout:   c.timeout,
-		Transport: &http.Transport{TLSClientConfig: c.manualVerifyTLSConfig(u.Hostname(), &cert)},
-		// CheckRedirect left nil: default net/http behaviour (follow up to
-		// 10), per the spec's "no redirects beyond default client behaviour".
-	}
-
 	start := time.Now()
-	resp, err := client.Do(req)
+	resp, err := c.client.Do(req)
 	duration := time.Since(start)
 
 	var metrics []model.Metric
@@ -137,12 +162,12 @@ func (c *Collector) probeOne(ctx context.Context, t Target) []model.Metric {
 		)
 	}
 
-	if u.Scheme == "https" && cert.leaf != nil {
+	if peerCerts := cert.chain(); u.Scheme == "https" && len(peerCerts) > 0 {
 		validValue := 0.0
-		if cert.valid {
+		if c.verifyChain(u.Hostname(), peerCerts) {
 			validValue = 1
 		}
-		daysRemaining := time.Until(cert.leaf.NotAfter).Hours() / 24
+		daysRemaining := time.Until(peerCerts[0].NotAfter).Hours() / 24
 		metrics = append(metrics,
 			model.Metric{Name: "probe.tls.days_remaining", Value: daysRemaining, Timestamp: now, Labels: labels},
 			model.Metric{Name: "probe.tls.valid", Value: validValue, Timestamp: now, Labels: labels},
@@ -152,41 +177,44 @@ func (c *Collector) probeOne(ctx context.Context, t Target) []model.Metric {
 	return metrics
 }
 
-// tlsCapture holds what the manual chain check below found, read back by
-// probeOne once the request has completed.
+// tlsCapture holds the peer chain from the last TLS handshake one probe
+// made (the last hop, when a redirect crossed hosts). It is filled by an
+// httptrace hook on the request's own context, so probes sharing the
+// client never see each other's certificates. The lock is there because
+// net/http may finish a dial on its own goroutine after Do has already
+// returned on a timeout.
 type tlsCapture struct {
-	leaf  *x509.Certificate
-	valid bool
+	mu        sync.Mutex
+	peerCerts []*x509.Certificate
 }
 
-// manualVerifyTLSConfig builds a per-request TLS config whose VerifyConnection
-// hook records the leaf certificate and a from-scratch chain verification,
-// without ever failing the handshake itself — see the package doc for why.
-// A fresh config (not a shared one) per request is what makes capturing the
-// result into cert race-free without a lock: each probe gets its own
-// closure over its own tlsCapture.
+func (tc *tlsCapture) record(state tls.ConnectionState, _ error) {
+	if len(state.PeerCertificates) == 0 {
+		return
+	}
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.peerCerts = state.PeerCertificates
+}
+
+func (tc *tlsCapture) chain() []*x509.Certificate {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	return tc.peerCerts
+}
+
+// manualVerifyTLSConfig builds the probe client's TLS config: Go's own
+// verification is skipped so an expired or untrusted certificate never
+// aborts the handshake — see the package doc for why — and verifyChain
+// runs the same check by hand afterward, purely to report probe.tls.valid.
 //
 // The name is load-bearing. CodeQL's go/disabled-certificate-check flags
 // every InsecureSkipVerify write except one made inside a function whose
 // name says verification is handled deliberately (it matches on "verif",
-// among others); it does not look at VerifyConnection. This is exactly that
-// case — verifyChain below does the work — so keep "Verify" in the name or
+// among others). This is exactly that case, so keep "Verify" in the name or
 // the alert comes back.
-func (c *Collector) manualVerifyTLSConfig(hostname string, cert *tlsCapture) *tls.Config {
-	return &tls.Config{
-		// Go's own verification is skipped so an expired or untrusted
-		// certificate never aborts the handshake; verifyChain below runs the
-		// same check by hand purely to report probe.tls.valid.
-		InsecureSkipVerify: true,
-		VerifyConnection: func(state tls.ConnectionState) error {
-			if len(state.PeerCertificates) == 0 {
-				return nil
-			}
-			cert.leaf = state.PeerCertificates[0]
-			cert.valid = c.verifyChain(hostname, state.PeerCertificates)
-			return nil
-		},
-	}
+func manualVerifyTLSConfig() *tls.Config {
+	return &tls.Config{InsecureSkipVerify: true}
 }
 
 // verifyChain runs the same check crypto/tls would have run had

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -182,6 +183,109 @@ func TestCollect_TLS_ExpiredCertificate(t *testing.T) {
 	days, ok := byName["probe.tls.days_remaining"]
 	if !ok || days.Value >= 0 {
 		t.Fatalf("probe.tls.days_remaining = %+v, want a negative value for an expired certificate", days)
+	}
+}
+
+// connCounter tracks how many of a test server's connections are open right
+// now, from its ConnState hook.
+type connCounter struct {
+	mu   sync.Mutex
+	open int
+	seen int
+}
+
+func (cc *connCounter) hook(_ net.Conn, state http.ConnState) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	switch state {
+	case http.StateNew:
+		cc.open++
+		cc.seen++
+	case http.StateClosed, http.StateHijacked:
+		cc.open--
+	}
+}
+
+func (cc *connCounter) snapshot() (open, seen int) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	return cc.open, cc.seen
+}
+
+// waitOpenAtMost polls until the server sees at most want open connections,
+// since a client-side close reaches the server's ConnState asynchronously.
+func (cc *connCounter) waitOpenAtMost(want int, within time.Duration) int {
+	deadline := time.Now().Add(within)
+	for {
+		open, _ := cc.snapshot()
+		if open <= want || time.Now().After(deadline) {
+			return open
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The 2026-10-10 port-exhaustion incident: probeOne built a fresh
+// http.Transport per probe, the drained connection went back into that
+// transport's idle pool (no IdleConnTimeout), and the transport was dropped
+// with the socket still ESTABLISHED. One socket per tick for 3.5 days used
+// up every ephemeral port on the host. A probe must leave nothing open.
+func TestCollect_RepeatedProbesLeaveNoConnectionsOpen(t *testing.T) {
+	var cc connCounter
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"ok":false,"failed":"a retrain check has been running for 8h"}`))
+	}))
+	srv.Config.ConnState = cc.hook
+	srv.Start()
+	defer srv.Close()
+
+	c := New([]Target{{URL: srv.URL, Name: "mlaas"}}, 5*time.Second)
+	const probes = 200
+	for i := 0; i < probes; i++ {
+		metrics, err := c.Collect(context.Background())
+		if err != nil {
+			t.Fatalf("probe %d: Collect: %v", i, err)
+		}
+		if status := metricsByName(metrics)["probe.http.status"]; status.Value != http.StatusServiceUnavailable {
+			t.Fatalf("probe %d: probe.http.status = %+v, want 503", i, status)
+		}
+	}
+
+	if open := cc.waitOpenAtMost(1, 2*time.Second); open > 1 {
+		_, seen := cc.snapshot()
+		t.Fatalf("after %d probes the server still holds %d open connections (of %d accepted); want at most 1", probes, open, seen)
+	}
+}
+
+func TestCollect_HungTargetTripsTheTimeoutAndReleasesTheSocket(t *testing.T) {
+	var cc connCounter
+	release := make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	srv.Config.ConnState = cc.hook
+	srv.Start()
+	defer srv.Close()
+	defer close(release) // runs before srv.Close, which waits on handlers
+
+	c := New([]Target{{URL: srv.URL, Name: "hung"}}, 200*time.Millisecond)
+	start := time.Now()
+	metrics, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Collect against a hung target took %v, want the 200ms probe timeout to trip", elapsed)
+	}
+	if up := metricsByName(metrics)["probe.http.up"]; up.Value != 0 {
+		t.Fatalf("probe.http.up = %+v, want 0 for a target that never answers", up)
+	}
+	if open := cc.waitOpenAtMost(0, 2*time.Second); open != 0 {
+		t.Fatalf("a timed-out probe left %d connections open, want 0", open)
 	}
 }
 
