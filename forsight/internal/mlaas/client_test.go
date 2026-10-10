@@ -399,3 +399,52 @@ func TestClient_RepeatedUpstreamErrorsReuseOneConnection(t *testing.T) {
 		t.Fatalf("200 calls answered 503 dialed %d connections (%d still open); want the pooled one reused", seen, open)
 	}
 }
+
+// The client's own transport caps its sockets to mlaas at maxConnsPerHost:
+// a burst of calls past the cap waits for a free connection instead of
+// dialing more.
+func TestClient_CapsConnectionsPerHost(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen int
+	)
+	release := make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			mu.Lock()
+			seen++
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	defer releaseAll() // before srv.Close, which waits on handlers
+
+	c := NewClient(srv.URL, "k")
+	var wg sync.WaitGroup
+	for i := 0; i < maxConnsPerHost+4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = c.Healthz(context.Background())
+		}()
+	}
+	// Give every call time to dial if nothing stopped it.
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	got := seen
+	mu.Unlock()
+	if got != maxConnsPerHost {
+		t.Fatalf("%d concurrent calls opened %d connections, want the cap of %d", maxConnsPerHost+4, got, maxConnsPerHost)
+	}
+	releaseAll()
+	wg.Wait()
+}

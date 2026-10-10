@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -241,6 +242,20 @@ func TestCollect_RepeatedProbesLeaveNoConnectionsOpen(t *testing.T) {
 	defer srv.Close()
 
 	c := New([]Target{{URL: srv.URL, Name: "mlaas"}}, 5*time.Second)
+	// Count closes on the client's own sockets too: the incident's sockets
+	// were the client's, and the server closing its end (it answers a
+	// keep-alive-free request with Connection: close) would hide a client
+	// that never closes.
+	var dialed, closed atomic.Int32
+	dialer := &net.Dialer{}
+	c.client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		dialed.Add(1)
+		return &closeCountingConn{Conn: conn, closed: &closed}, nil
+	}
 	const probes = 200
 	for i := 0; i < probes; i++ {
 		metrics, err := c.Collect(context.Background())
@@ -256,6 +271,25 @@ func TestCollect_RepeatedProbesLeaveNoConnectionsOpen(t *testing.T) {
 		_, seen := cc.snapshot()
 		t.Fatalf("after %d probes the server still holds %d open connections (of %d accepted); want at most 1", probes, open, seen)
 	}
+	deadline := time.Now().Add(2 * time.Second)
+	for closed.Load() < dialed.Load() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if d, cl := dialed.Load(), closed.Load(); cl != d {
+		t.Fatalf("the probe client dialed %d sockets and closed %d; want every one closed", d, cl)
+	}
+}
+
+// closeCountingConn counts the first Close of a client-side socket.
+type closeCountingConn struct {
+	net.Conn
+	once   sync.Once
+	closed *atomic.Int32
+}
+
+func (c *closeCountingConn) Close() error {
+	c.once.Do(func() { c.closed.Add(1) })
+	return c.Conn.Close()
 }
 
 func TestCollect_HungTargetTripsTheTimeoutAndReleasesTheSocket(t *testing.T) {
