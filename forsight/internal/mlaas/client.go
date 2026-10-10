@@ -66,7 +66,28 @@ const (
 // reason to answer with a redirect; treating one as the final response
 // turns a surprising credential leak into an ordinary *UpstreamError.
 var noRedirectClient = &http.Client{
+	Transport:     boundedTransport(),
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// maxConnsPerHost caps the sockets held to mlaas at once. The sync pass is
+// sequential and the dashboard's proxied calls are few, so a request that
+// finds the cap reached waits (under its own context deadline) rather than
+// dialing; a leak then shows up as slow calls instead of exhausting the
+// host's ephemeral ports, which is what an unbounded pool did to the machine
+// on 2026-10-10.
+const maxConnsPerHost = 8
+
+// boundedTransport is http.DefaultTransport's settings (proxy from the
+// environment, dial and TLS timeouts, a 90s idle timeout) on a transport of
+// the client's own, so nothing else in the process can change them, with
+// the per-host connection count capped.
+func boundedTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxConnsPerHost = maxConnsPerHost
+	t.MaxIdleConnsPerHost = 2
+	t.IdleConnTimeout = 90 * time.Second
+	return t
 }
 
 // NewClient builds a Client for a base URL and key. The URL is used as

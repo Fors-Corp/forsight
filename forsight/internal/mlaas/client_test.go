@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -352,5 +353,49 @@ func TestClient_TimeoutIsBounded(t *testing.T) {
 	cancel()
 	if _, err := c.Healthz(ctx); err == nil {
 		t.Error("a cancelled context still completed the call")
+	}
+}
+
+// The 2026-10-10 port-exhaustion incident put the 503 branch here under
+// suspicion: mlaas answered 503 for hours while a retrain check ran. That
+// branch reads the body and closes it, so the connection goes back to the
+// pool and is reused; this pins that, so a refactor of do() that skips the
+// read on a non-2xx cannot dial a new socket per call.
+func TestClient_RepeatedUpstreamErrorsReuseOneConnection(t *testing.T) {
+	var (
+		mu         sync.Mutex
+		open, seen int
+	)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"ok":false,"failed":"a retrain check has been running for 8h19m7s"}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch state {
+		case http.StateNew:
+			open++
+			seen++
+		case http.StateClosed, http.StateHijacked:
+			open--
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "k")
+	for i := 0; i < 200; i++ {
+		_, err := c.Healthz(context.Background())
+		var upstream *UpstreamError
+		if !errors.As(err, &upstream) || upstream.Status != http.StatusServiceUnavailable {
+			t.Fatalf("call %d: Healthz err = %v, want an *UpstreamError with status 503", i, err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if seen > 2 || open > 2 {
+		t.Fatalf("200 calls answered 503 dialed %d connections (%d still open); want the pooled one reused", seen, open)
 	}
 }
