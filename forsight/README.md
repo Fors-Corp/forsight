@@ -317,8 +317,8 @@ to 14 days of history; the default `--store memory --retention 1h` doesn't
 hold enough of a series for mlaas to learn a trend from. Run with
 `--store badger --retention 168h` (or more) when the forecasts matter.
 
-**When mlaas is down.** The sync pass probes `GET /healthz` first; if that
-fails, the pass records that mlaas is unreachable, along with the error,
+**When mlaas is down.** The sync pass probes `GET /readyz` first (`/healthz`
+on an mlaas older than 2.0.0, which has no `/readyz`); if that fails, the pass records that mlaas is unreachable, along with the error,
 and skips the rest of the pass — nothing else about the agent is affected.
 The Models page keeps showing the last known state for each model (or
 `waiting-for-data`/`missing` before the first successful contact) and marks

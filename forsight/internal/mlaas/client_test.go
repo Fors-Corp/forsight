@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -447,4 +448,58 @@ func TestClient_CapsConnectionsPerHost(t *testing.T) {
 	}
 	releaseAll()
 	wg.Wait()
+}
+
+// From mlaas 2.0.0 /healthz is liveness only and /readyz says whether mlaas
+// can do its work, so the sync pass asks /readyz: a 503 there is not ready
+// even while /healthz answers 200, and it must never fall back past it.
+func TestClient_ReadyzReportsNotReadyWithoutFallingBack(t *testing.T) {
+	var healthzCalls, sawKey atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-Key") != "" {
+			sawKey.Add(1)
+		}
+		switch r.URL.Path {
+		case "/readyz":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"ok":false,"failed":"checker","version":"v2.0.0"}`))
+		case "/healthz":
+			healthzCalls.Add(1)
+			_, _ = w.Write([]byte(`{"ok":true,"version":"v2.0.0"}`))
+		}
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL, "k").Readyz(context.Background())
+	var upstream *UpstreamError
+	if !errors.As(err, &upstream) || upstream.Status != http.StatusServiceUnavailable {
+		t.Fatalf("Readyz err = %v, want the 503 from /readyz", err)
+	}
+	if n := healthzCalls.Load(); n != 0 {
+		t.Errorf("a 503 from /readyz fell back to /healthz (%d calls); not ready must stay not ready", n)
+	}
+	if n := sawKey.Load(); n != 0 {
+		t.Errorf("Readyz sent X-API-Key on %d requests; a supervisor-style probe sends none", n)
+	}
+}
+
+// mlaas before 2.0.0 has no /readyz: it answers 401 (its auth did not exempt
+// the path - what the live 1.8.2 answered on 2026-10-10) or 404. Its /healthz
+// made the readiness checks, so Readyz asks that instead.
+func TestClient_ReadyzFallsBackToHealthzOnAnOlderMlaas(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusNotFound} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/healthz" {
+				_, _ = w.Write([]byte(`{"ok":true,"version":"v1.8.2"}`))
+				return
+			}
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"error":"missing or wrong X-API-Key"}`))
+		}))
+		version, err := NewClient(srv.URL, "k").Readyz(context.Background())
+		srv.Close()
+		if err != nil || version != "v1.8.2" {
+			t.Errorf("/readyz answering %d: version=%q err=%v, want v1.8.2 from /healthz", status, version, err)
+		}
+	}
 }
