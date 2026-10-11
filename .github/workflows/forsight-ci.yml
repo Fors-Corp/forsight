@@ -103,6 +103,12 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           working-directory: forsight
+          # Built from source with the job's Go: a prebuilt release cannot
+          # read the export data of a Go newer than the one it was built with,
+          # and v2.14.0 is built with go1.27.1 while go.mod asks for go1.27.2
+          # (a security release). Same fix as Fors-Corp/mlaas#74.
+          version: v2.14.0
+          install-mode: goinstall
       - run: go test ./...
         working-directory: forsight
       - run: go vet ./...
