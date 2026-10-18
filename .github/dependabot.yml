@@ -144,3 +144,11 @@ updates:
       # the github-actions ecosystem ("not supported for the package
       # ecosystem 'github-actions'"), which made the whole config invalid.
       default-days: 7
+    # Both `github/codeql-action/*` uses must move together: a bump of
+    # `init` or `analyze` alone leaves the pair on different versions and the
+    # CodeQL analyze job fails (PRs #261 and #258 did exactly that). Mirrors
+    # the `codeql-action` group in Fors-Corp/fors.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
