@@ -182,7 +182,7 @@
     "size-limit": "^14.1.0",
     "storybook": "^10.6.1",
     "tailwindcss": "^4.3.3",
-    "tsup": "^8.2.4",
+    "tsup": "^9.0.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.7.0",
     "vite": "^8.2.2",
